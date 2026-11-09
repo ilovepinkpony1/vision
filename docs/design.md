@@ -1,0 +1,695 @@
+# Vision: design
+
+This document is the specification of Vision. Code and tests follow it. If the code and this document disagree, fix one of them in the same change.
+
+## 1. What Vision does
+
+Vision takes a ticket from a tracker to a pull request that is ready to merge. Named agents do the work in Claude Code sessions. Each agent has a role, a model, and a memory. A person gives the ticket, approves the plan, and merges.
+
+Vision does four things that a plain agent loop does not do:
+
+- It asks questions as cards, and it keeps each answer with its reason.
+- It answers a later question from that memory, so that the person does not get the same question again.
+- It keeps the credentials out of the sessions. Only the executor changes the tracker and the forge.
+- It tests the end of each step itself. The word "done" from an agent proves nothing.
+
+The core knows no project. An adapter gives the steps, the scripts, and the names of one project.
+
+## 2. Terms
+
+- Adapter: the step list and the scripts that know one project.
+- Agent: a role with a role file, a model, and its own principles.
+- Card: one question of an agent, with its choices, its recommendation, and its evidence.
+- Clone: a full copy of the project repo that only Vision uses.
+- Curator: the agent that proposes changes to the memory.
+- Decision: one answered question with its reason and where it applies.
+- End fact: a fact that the runner tests to know that a step is complete.
+- Executor: the part of `vision` that holds the credentials and runs each operation.
+- Judge: the agent that answers a card, proposes an answer, or sends the card to the person.
+- Ledger: the SQLite store of the evidence.
+- Operation: one change outside the machine, with a durable id and a state.
+- Principle: one rule that the Curator distilled from decisions, or that the person wrote.
+- Supervisor: the process that owns one running session.
+- Turn: one Claude Code session that does one step, or continues one.
+- Verb: one kind of operation, such as `git.push`.
+
+## 3. Files on disk
+
+`VISION_HOME` names the state folder. The default is `~/.vision`. Each test sets it to a temporary folder.
+
+```
+$VISION_HOME/
+  config.toml            the configuration (section 4)
+  ledger.sqlite          the ledger (section 5)
+  state.json             the snapshot that `vision status` reads
+  heartbeat              the time of the last tick, RFC 3339 UTC
+  lock                   the lock file of the tick
+  off                    the kill switch. Its presence stops each action.
+  log/vision.log         one line for each tick action
+  claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
+  sandbox/               reader.json worker.json tester.json (Claude Code settings files)
+  skills/                copies of the skills that the role files name
+  memory/                a git repo (section 9)
+    decisions/D-0001.md
+    principles/P-001.md
+    ARCHIVE.md
+  adapters/<name>/       private adapters. They win over the adapters of the repo.
+  tickets/<KEY>/
+    refine.md plan.md approved-plan.md answers.md pr.md review.md notes.md
+    turns/<turn-id>/
+      facts.json         the input of the turn
+      stream.jsonl       each event line of the session
+      turn.json          the status that the supervisor writes
+      result.json        the result object of the turn
+      inbox/             messages that wait for the session
+      inbox/sent/        messages that the session got
+```
+
+A turn id has the form `<UTC time>-<step>-<n>`, for example `20261116T143000Z-build-1`. It is safe as a folder name.
+
+The repo has this layout:
+
+```
+Cargo.toml
+src/
+  main.rs lib.rs cli.rs          the entry and the command tree
+  paths.rs config.rs util/       folders, configuration, time, atomic writes, ids, processes
+  ledger/                        schema, migrations, typed queries
+  tick.rs lock.rs status.rs doctor.rs
+  turn/                          start line, supervisor, stream parser, contract, inbox, collect
+  models.rs                      the model of each agent
+  memory/                        files, repo, commands, lint, archive, import
+  questions/                     cards, the Judge, answers, decisions
+  curator/                       signals, proposals, replay, review
+  pipeline/                      steps, states, end facts
+  executor/                      verbs, modes, operations, gates
+agents/                          role files and result schemas
+adapters/demo/                   an adapter that needs no network
+adapters/jira-github/            an adapter for Jira and GitHub
+tests/                           integration tests, with a fake `claude`
+docs/design.md
+```
+
+## 4. The configuration
+
+`vision init` writes this file with the defaults. `vision config` prints the values in use.
+
+```toml
+project = "demo"              # the name of the adapter
+user = "user"                 # the writer name of the person in the memory
+clones = []                   # absolute paths of the clones that Vision owns
+plan_approval = "always"
+
+[claude]
+bin = "claude"
+config_dir = "~/.vision/claude"   # "" means: use the default login
+env_pass = []                     # more environment names that a session gets
+
+[budget]                      # dollars at list price, as Claude Code reports them
+reader = 3
+worker = 25
+tester = 25
+ticket = 100
+week = 300
+
+[time]                        # minutes before the supervisor kills a turn
+reader = 20
+worker = 120
+tester = 120
+
+[limits]                      # no new turn above these parts of the subscription windows
+five_hour = 0.60
+seven_day = 0.85
+
+[caps]
+review_rounds = 3
+ci_fix = 2
+qa_fix = 2
+merge = 3
+comments = 3
+judge_minutes = 15
+
+[judge]
+answer_when_sure = true       # the Judge also answers alone from its own inference
+always_ask = ["security", "money", "customer-data", "production", "deploy",
+              "delete", "irreversible", "credentials", "external-fact"]
+
+[curator]
+replay = 20
+
+[gates]
+max_diff_lines = 3000
+sensitive = [".github/", "db/migrate/"]
+
+[modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
+
+[secrets]                     # name -> how the executor gets it. A session never gets one.
+# TRACKER_TOKEN = { cmd = "security find-generic-password -s vision-tracker -w" }
+# FORGE_TOKEN   = { env = "GH_TOKEN" }
+
+[adapter]                     # a free table. The executor gives it to each adapter script.
+
+# One table for each agent that the person pinned. See section 10.
+# [agents.judge]
+# model = "claude-fable-5-2"
+# effort = "high"
+# pinned_at = "2026-11-16T14:30:00Z"
+```
+
+Rules:
+
+- A missing key takes its default. An unknown key is an error that names the key.
+- `vision` edits the file with `toml_edit`, so that comments and order stay.
+- `~` at the start of a path means the home folder.
+
+## 5. The ledger
+
+SQLite in WAL mode, with a busy timeout of 5 seconds. `PRAGMA user_version` holds the schema version. Each migration is one numbered SQL file that the binary embeds.
+
+```sql
+CREATE TABLE tickets    (key TEXT PRIMARY KEY, state TEXT, flags TEXT, clone TEXT, branch TEXT, pr INTEGER,
+                         head TEXT, taken TEXT, updated TEXT, counts TEXT);
+CREATE TABLE spans      (ticket TEXT, state TEXT, waits_on TEXT, reason TEXT, started TEXT, ended TEXT);
+CREATE TABLE turns      (id TEXT PRIMARY KEY, ticket TEXT, agent TEXT, step TEXT, kind TEXT, session TEXT,
+                         resumes TEXT, model TEXT, effort TEXT, started TEXT, ended TEXT, status TEXT,
+                         reason TEXT, cost_usd REAL, input INTEGER, cache_creation INTEGER, cache_read INTEGER,
+                         output INTEGER, denials INTEGER, five_hour REAL, seven_day REAL, role_hash TEXT,
+                         principles TEXT, end_fact TEXT);
+CREATE TABLE messages   (id INTEGER PRIMARY KEY, turn TEXT, at TEXT, source TEXT, text TEXT, delivered TEXT);
+CREATE TABLE questions  (id TEXT PRIMARY KEY, ticket TEXT, turn TEXT, card TEXT, state TEXT, outcome TEXT,
+                         basis TEXT, sure INTEGER, proposal TEXT, sources TEXT, answer TEXT,
+                         took_proposal INTEGER, flag TEXT, decision TEXT, judge_turn TEXT,
+                         created TEXT, shown TEXT, answered TEXT);
+CREATE TABLE checks     (ticket TEXT, head TEXT, kind TEXT, result TEXT, command TEXT, seconds INTEGER,
+                         cause TEXT, source TEXT, at TEXT);
+CREATE TABLE findings   (ticket TEXT, round INTEGER, fingerprint TEXT, priority TEXT, source TEXT,
+                         verdict TEXT, reason_code TEXT, fix_commit TEXT, came_back INTEGER);
+CREATE TABLE operations (id TEXT PRIMARY KEY, idem TEXT UNIQUE, source TEXT, turn TEXT, ticket TEXT, verb TEXT,
+                         args TEXT, mode TEXT, state TEXT, external_id TEXT, started TEXT, ended TEXT, result TEXT);
+CREATE TABLE outcomes   (op TEXT REFERENCES operations(id), kind TEXT, check_at TEXT, checked_at TEXT,
+                         state TEXT, detail TEXT);
+CREATE TABLE human      (id INTEGER PRIMARY KEY, at TEXT, ticket TEXT, kind TEXT, object TEXT, value TEXT,
+                         reason TEXT, seconds INTEGER);
+CREATE TABLE memory_use (turn TEXT, file TEXT, version TEXT, applied INTEGER, how TEXT);
+CREATE TABLE model_changes (id INTEGER PRIMARY KEY, at TEXT, agent TEXT, model TEXT, effort TEXT,
+                         old_model TEXT, old_effort TEXT, source TEXT);
+CREATE TABLE review_rows(round TEXT, comment_id INTEGER, reviewer TEXT, verdict TEXT, fix INTEGER,
+                         verdict_final TEXT, fix_final INTEGER, PRIMARY KEY (round, comment_id));
+CREATE TABLE events     (id INTEGER PRIMARY KEY, at TEXT, actor TEXT, ticket TEXT, kind TEXT, detail TEXT,
+                         external_id TEXT UNIQUE);
+CREATE TABLE audits     (id INTEGER PRIMARY KEY, week TEXT, target TEXT, mark TEXT, reason TEXT, at TEXT);
+CREATE TABLE health     (at TEXT, test TEXT, ok INTEGER, detail TEXT);
+```
+
+Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
+
+## 6. The tick
+
+`vision` is one binary with no daemon. A timer of the system runs `vision tick` each minute. One tick does these steps in order:
+
+1. Take the lock. If a different tick holds it, exit with code 0.
+2. Write the heartbeat. If the `off` file exists, write the snapshot and exit.
+3. Reconcile each operation in the state `executing` or `uncertain`.
+4. Collect each turn that ended. Write its row, its result file, and the limit reading.
+5. For each ticket, read the facts of its step and test the end fact.
+6. Select the next action of each ticket: start a turn, run a job, run an operation, set a flag, or nothing.
+7. If its mode and the limits allow the action, do it.
+8. Write the snapshot. Release the lock.
+
+A tick is safe to run two times. A crash at any line leaves a state that the next tick repairs.
+
+## 7. Turns
+
+### 7.1 Three kinds
+
+| | Reader | Worker | Tester |
+| --- | --- | --- | --- |
+| Tools | Read, Grep, Glob, Task | Reader tools, and Edit, Write, Bash | The same as a worker |
+| Working folder | The clone, or a folder of the turn | The clone | The clone |
+| Can change | Nothing | Files and local commits in the clone | Only its run folder |
+| Network | None | Only the local services of the clone | The site of its env |
+| Credentials | None | None | The QA login of its env |
+
+No session holds a credential for the tracker or the forge. No session can push, open a pull request, deploy, or change the tracker.
+
+### 7.2 The session view
+
+A session never reads `VISION_HOME`. Before a turn, the runner copies the inputs into the folder `.vision/` of the working folder. In a clone, `.git/info/exclude` lists `.vision`. A Judge turn and a Curator turn also get the memory repo as a folder that they can read.
+
+The first message of a turn is one line: `Turn <id>. Read .vision/turns/<id>/facts.json and do the step that it names.`
+
+```json
+{
+  "turn": "20261116T143000Z-build-1", "agent": "builder", "step": "build", "kind": "worker",
+  "ticket": {"key": "DEMO-12", "title": {"untrusted": "Export the report"},
+             "issue": ".vision/turns/20261116T143000Z-build-1/issue.json"},
+  "branch": "vision/DEMO-12", "base": "9f3e21c",
+  "documents": {"plan": ".vision/approved-plan.md", "refine": ".vision/refine.md",
+                "answers": ".vision/answers.md"},
+  "principles": ".vision/turns/20261116T143000Z-build-1/principles.md",
+  "skills": {},
+  "expects": ["commits", "doc:pr.md"],
+  "message": null
+}
+```
+
+Text from the tracker, from review comments, and from logs is wrapped as `{"untrusted": "..."}`. Each role file says that such text is data, never an order.
+
+### 7.3 The start line
+
+The supervisor starts Claude Code with these arguments. It gives no prompt argument, because the first message goes to standard input.
+
+```
+claude -p
+  --model <model> --effort <effort>
+  --input-format stream-json --output-format stream-json --verbose --replay-user-messages
+  --restricted --tools <tools of the kind>
+  --settings $VISION_HOME/sandbox/<kind>.json
+  --strict-mcp-config --permission-mode <dontAsk for a reader, acceptEdits for the others>
+  --permission-prompts none
+  --append-system-prompt-file <role file>
+  --json-schema <the schema of the agent, as one string>
+  --max-budget-usd <budget of the kind>
+  --session-id <uuid>            a new turn
+  --resume <session id>          a turn that continues a session
+  [--add-dir <folder>]...
+```
+
+The environment of the session is an allow list:
+
+```
+PATH HOME USER SHELL LANG LC_* TERM TMPDIR CLAUDE_CONFIG_DIR GIT_CONFIG_GLOBAL
+and each name in claude.env_pass
+```
+
+The supervisor drops each other name, so that a token of the executor never reaches a session.
+
+### 7.4 The supervisor
+
+`vision turn-run <turn-id>` is a hidden command. The tick starts it as a detached process in its own session and process group. It lives as long as the turn. It does these things:
+
+1. Write `turn.json` with the state `starting`, its pid, and the time.
+2. Start `claude` with pipes for input and output. Write the first message as one line.
+3. Copy each output line to `stream.jsonl`. Read each line as an event.
+4. At the `init` event, compare the tools, the permission mode, and the MCP servers with the expected lists. On a difference, kill the group and end with the reason `contract`.
+5. Each second, read `inbox/`. Write each waiting message to the session as one line. Then move the file to `inbox/sent/`.
+6. At a `result` event, wait 2 seconds for a late message. If none came, close the input. The session then exits by itself.
+7. At the time limit of the kind, kill the process group and end with the reason `timeout`.
+8. Write `result.json` and the final `turn.json`: the state `ended`, the exit code, and the reason.
+
+The reasons are `result`, `error`, `timeout`, `contract`, `killed`, and `crash`. A later tick reads `turn.json` and the stream. If `turn.json` says `running` and its pid is dead, the tick sets the reason `crash`.
+
+One input line has this form:
+
+```json
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"..."}]}}
+```
+
+The parser reads these events and ignores each other type:
+
+```
+{"type":"system","subtype":"init","session_id":"...","tools":["Read"],"permissionMode":"dontAsk","mcp_servers":[]}
+{"type":"rate_limit_event","rate_limit_info":{"rateLimitType":"seven_day","utilization":0.75,"resetsAt":1794412800,"status":"allowed_warning"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"..."},{"type":"tool_use","name":"Read","input":{}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"...","content":"..."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"...","structured_output":{},"session_id":"...",
+ "total_cost_usd":0.0014,"num_turns":11,"permission_denials":[],
+ "usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}
+```
+
+### 7.5 A message into a running turn
+
+The person can type into a running turn. A test on Claude Code 2.1.321 showed that the session takes a new input line at its next tool step.
+
+- `vision tell KEY "TEXT"` writes one message file to the inbox of the running turn. If no turn runs, it stores the text for the next turn of the ticket.
+- `vision open KEY` attaches to the running turn. It prints the events as readable lines, and it sends each line that the person types. Ctrl-C leaves the view, and the turn continues.
+- If no turn runs, `vision open KEY` pauses the ticket and starts `claude --resume <session id>` in the clone, in the terminal.
+
+A message file is JSON: `{"text": "...", "source": "user", "at": "..."}`. Write it to a temporary name first, and then rename it. The ledger keeps each message in `messages`.
+
+### 7.6 The result object
+
+Claude Code tests the output of a turn against a JSON schema. `agents/turn.schema.json` is the schema of each work turn:
+
+```json
+{"type": "object", "required": ["kind", "summary"], "additionalProperties": false, "properties": {
+  "kind": {"enum": ["result", "questions", "requests"]},
+  "summary": {"type": "string"},
+  "documents": {"type": "array", "items": {"type": "object", "required": ["name", "content"],
+    "properties": {"name": {"type": "string"}, "content": {"type": "string"}}}},
+  "questions": {"type": "array", "items": {"type": "object",
+    "required": ["text", "context", "options", "evidence", "kind"],
+    "properties": {
+      "text": {"type": "string"}, "context": {"type": "string"}, "example": {"type": "string"},
+      "options": {"type": "array", "minItems": 2, "items": {"type": "object", "required": ["label", "means"],
+        "properties": {"label": {"type": "string"}, "means": {"type": "string"}}}},
+      "recommended": {"type": ["integer", "null"]}, "why": {"type": "string"},
+      "evidence": {"type": "string"},
+      "kind": {"enum": ["product", "architecture", "scope", "code"]},
+      "topics": {"type": "array", "items": {"type": "string"}}}}},
+  "requests": {"type": "array", "items": {"type": "object", "required": ["verb", "args"],
+    "properties": {"verb": {"type": "string"}, "args": {"type": "object"}}}},
+  "applied": {"type": "array", "items": {"type": "object", "required": ["id", "how"],
+    "properties": {"id": {"type": "string"}, "how": {"type": "string"}}}},
+  "candidates": {"type": "array", "items": {"type": "object", "required": ["when", "make_sure", "because"],
+    "properties": {"when": {"type": "string"}, "make_sure": {"type": "string"}, "because": {"type": "string"}}}}}}
+```
+
+- `result`: the work of the step is done. The runner then tests the end fact itself.
+- `questions`: the turn needs answers. The cards go to the Judge (section 8). After the answers, a new turn resumes the same session.
+- `requests`: the turn needs more facts. The executor serves a closed list of read verbs, and a new turn resumes the session.
+- `documents`: the files that the step makes, such as `plan.md`. The runner writes each one to the ticket folder. A step accepts only the names that it expects.
+
+A turn that ends with no valid result object gets one resume with the message `continue`. A second failure sets the flag "needs you".
+
+## 8. Questions and the Judge
+
+### 8.1 The card
+
+An agent never asks in the text of its answer. It ends its turn with cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches.
+
+An agent asks only what the code, the files, the memory, and a command cannot answer.
+
+### 8.2 The Judge
+
+The Judge is a reader turn. It gets the cards, the ticket folder, and the memory. For each card it gives one outcome:
+
+| Outcome | Basis | What the person sees |
+| --- | --- | --- |
+| `answer` | `decision` or `principle`: a recorded file covers the question, with the same conditions | Nothing now |
+| `answer` | `inference`: the Judge is sure, from the code, the ticket, and the plan | Nothing now. The answer is in the list of `vision answers`. |
+| `propose` | The Judge has a likely answer, but it is not sure | The card with the proposal and its evidence. One key accepts it. |
+| `ask` | No answer, sources that disagree, or a topic of the always-ask list | The card with the recommendation of the agent |
+
+`agents/judge.schema.json` is the schema of its output:
+
+```json
+{"type": "object", "required": ["answers"], "additionalProperties": false, "properties": {
+  "answers": {"type": "array", "items": {"type": "object",
+    "required": ["card", "outcome", "basis", "sure", "reason"],
+    "properties": {
+      "card": {"type": "string"},
+      "outcome": {"enum": ["answer", "propose", "ask"]},
+      "choice": {"type": ["integer", "null"]},
+      "text": {"type": "string"},
+      "basis": {"enum": ["decision", "principle", "inference", "none"]},
+      "sources": {"type": "array", "items": {"type": "string"}},
+      "sure": {"type": "boolean"},
+      "topics": {"type": "array", "items": {"type": "string"}},
+      "reason": {"type": "string"}}}}}}
+```
+
+### 8.3 The rules in code
+
+The runner applies these rules to the output of the Judge. A rule in code always wins over the output.
+
+1. If a topic of the card or of the answer is in `judge.always_ask`, the outcome is `ask`.
+2. An `answer` with the basis `decision` or `principle` must name at least one source. Each source must exist and be active. If not, the outcome becomes `propose`.
+3. If `sure` is true and `judge.answer_when_sure` is true, an `answer` with the basis `inference` stays an answer. If not, the outcome becomes `propose`.
+4. An `answer` or a `propose` must name a choice or a text. If not, the outcome becomes `ask`.
+5. If the Judge gives no outcome in `caps.judge_minutes`, the card goes to the person.
+
+Each answer becomes one decision file. An answer of the Judge has the writer `judge`, its basis, its sources, and its reason. The asking session gets the answer with a note that names the writer and the sources.
+
+### 8.4 The person
+
+```
+vision needs                         the cards and the approvals that wait, one at a time
+vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]
+vision answer ID --needless code|ticket|memory|no-matter
+vision answers [--days N]            the answers that the Judge gave alone, newest first
+vision correct ID "RIGHT ANSWER" [--why "W"]
+```
+
+- `needs` shows one card, reads one key or one line, and then asks for two short lines: why, and where the decision applies. Both can stay empty.
+- `correct` writes a decision of the person that replaces the answer of the Judge. The old file gets the status `superseded`. If the ticket still runs, its next turn gets the correction as a message.
+- A decision with no reason is weaker. The Judge uses it only for a question with the same words and the same area.
+
+## 9. The memory
+
+### 9.1 Files
+
+The memory is a private git repo at `$VISION_HOME/memory`. Each change is one commit. The author of the commit is the writer: the person, `judge`, `curator`, or `import`.
+
+A decision file:
+
+```markdown
+---
+id: D-0142
+at: 2026-11-16T14:32:00Z
+by: user                 # user | judge | import
+basis: answer            # answer | decision | principle | inference
+ticket: DEMO-12
+step: plan
+asked_by: builder
+kind: product            # product | architecture | scope | code
+area: [reports, exports]
+status: active           # active | superseded | retired
+sources: []              # for an answer of the Judge: the ids that it applied
+supersedes: null
+---
+## Question
+Must the Export button make a CSV file or an XLSX file?
+Choices: CSV | XLSX
+
+## Answer
+CSV
+
+## Why
+The finance team imports CSV into their tool.
+
+## Applies when
+A report export for an internal user.
+```
+
+A principle file:
+
+```markdown
+---
+id: P-007
+agent: judge             # the agent that loads it, or "all"
+kind: product
+area: [exports]
+status: active           # candidate | active | retired
+by: user                 # the person who accepted or wrote it
+evidence: [D-0142, D-0167]
+uses: {used: 6, agreed: 5, corrected: 0}
+---
+## Rule
+When an internal user exports a report, make sure that the file is CSV.
+
+## Because
+The finance team imports CSV into their tool, and no export so far needed formulas.
+
+## Not when
+A customer asks for a formatted file.
+```
+
+The front matter is a small subset of YAML: one key on each line, with a string, a number, `null`, a flat list, or a flat map. The parser keeps unknown keys.
+
+### 9.2 Commands
+
+```
+vision memory [QUERY] [--kind K] [--area A] [--status S]   list and search
+vision memory show ID              one file, with its evidence and its uses
+vision memory edit ID              open it in $EDITOR, lint it, and commit
+vision memory teach AGENT "TEXT"   write a principle directly. It is active at once.
+vision memory retire ID "WHY"      retire it. The file stays, and no turn loads it.
+vision memory lint                 test the format of each file
+vision memory import FILE          read past answers from a JSONL file as decisions
+vision memory review               accept, edit, or reject each change of a proposal
+vision memory log                  the history
+vision memory revert COMMIT        make a commit that undoes one commit
+```
+
+The person can also edit the files with any tool. The next tick reads the change.
+
+### 9.3 The life of a principle
+
+1. Candidate. The Curator proposes it from at least 2 decisions of 2 different tickets.
+2. Active. The person accepts it in `vision memory review`. A principle that the person writes or teaches is active at once.
+3. Used. Each turn records the principles that it got. Each result lists the principles that it applied, and how.
+4. Retired. The person retires it, or the Curator proposes that after a correction.
+
+Only people teach the memory. A decision with the writer `judge` never counts as evidence for a principle. It never outranks a decision of the person.
+
+### 9.4 The Curator
+
+The Curator is a reader turn. It runs after each merged ticket and one time each week. `vision curate` starts it by hand. It reads these signals from the ledger and the memory:
+
+- The new decisions, and the decisions with no reason.
+- Each proposal of the Judge that the person changed, and each correction.
+- The difference between the plan that the agent wrote and the plan that the person approved.
+- The cards that the person marked as needless.
+- The review comments of people on the pull requests, and the verdict of each one.
+- Two active files that disagree.
+
+Its output is a list of changes: a new candidate, an edit, a merge of two files, a retirement, or a question for the person. `agents/curator.schema.json` is the schema. The runner writes the changes to a branch `proposal/<date>-<n>` of the memory repo. Three rules protect the memory:
+
+- No line is lost. Each line that a proposal removes or rewrites goes to `ARCHIVE.md` word for word, with the commit and the reason. The runner tests this in code, and it rejects a proposal that loses a line.
+- A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree.
+- A person decides. Only a change that the person accepts reaches the main branch.
+
+## 10. Models
+
+Each agent has a model and an effort level. The person sets them, and Vision never changes them by itself.
+
+```
+vision model                         each agent: model, effort, source, and the recommendation
+vision model set AGENT MODEL [--effort E]
+vision model reset AGENT             go back to the default of Vision
+vision model recommend [AGENT]       the evidence for each model that the agent used
+vision model eval AGENT --models A,B [--n N]    replay past work with each model
+```
+
+- `set` writes `[agents.<agent>]` with `pinned_at` to the configuration. The value stays until the person changes it. A new version of Vision never replaces a pinned value.
+- `MODEL` is a full model id or one of the short names `fable`, `opus`, `sonnet`, `haiku`. Effort is `low`, `medium`, `high`, `xhigh`, or `max`.
+- Each turn row records the model and the effort that it used. Each change is a row in `model_changes`.
+
+The defaults, with the reason for each one:
+
+| Agent | Model | Effort | Reason |
+| --- | --- | --- | --- |
+| scout | `claude-fable-5-2` | high | A wrong reading of the ticket costs the full build. Its turns are short. |
+| builder | `claude-opus-5-5` | xhigh | It writes the code and uses the most tokens. This model costs half as much as the top model. |
+| reviewer | `claude-opus-5-5` | max | The review is the last gate before a person reads the code. |
+| tester | `claude-opus-5-5` | high | A false pass sends a bug to a person. |
+| shepherd | `claude-opus-5-5` | high | It gives verdicts on review comments and fixes the valid ones. |
+| judge | `claude-fable-5-2` | high | It can answer alone, so a wrong answer costs the most. Its turns are short. |
+| curator | `claude-fable-5-2` | high | It runs seldom, and its proposals change each later answer. |
+
+`recommend` reads the ledger. For each agent and each model with at least 10 turns, it prints these numbers:
+
+- The number of turns, and the cost of one turn at list price.
+- The part of the turns whose end fact held at the first try.
+- For the Judge: the corrections of the person, and the proposals that the person changed.
+- For the Builder: the review findings, the red CI rounds, and the QA bugs for each ticket.
+
+The recommendation is the cheapest model whose quality numbers are not worse than the best model by more than 5 points. With fewer than 10 turns for a second model, the command says that the default stays. `eval` gives that evidence on request: it replays past work with each model and prints the same table. The Judge replay uses the questions that the person answered.
+
+## 11. The pipeline and the adapter
+
+The core knows four kinds of step: a turn, a job, a human action, and a wait. The steps of a project are data in `adapter.toml`. The core has no word that names a project, a tracker, or a forge.
+
+```
+adapters/<name>/
+  adapter.toml        the steps, the verbs, the envs
+  bin/observe         print the facts of the queue or of one ticket
+  bin/act             run one verb
+  bin/job             run one job, such as the proof
+  roles/              role files that replace agents/<role>.md
+```
+
+Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that a gate refused the call. Each other code means a failure. Only the executor calls a script. A script gets each secret as an environment name from `[secrets]`.
+
+```
+observe  {"what": "queue"}
+      -> {"tickets": [{"key": "DEMO-12", "title": "...", "status": "To Do", "eligible": true, "reason": ""}]}
+observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 7}
+      -> {"issue": {}, "tracker_status": "In Progress",
+          "pr": {"number": 7, "draft": true, "head": "abc", "merged": false, "conflict": false,
+                 "approved_by": [], "changes_requested": false, "comments_waiting": 0},
+          "ci": {"head": "abc", "state": "green"}, "envs": {"staging": {"head": "abc"}}}
+act      {"verb": "git.push", "op": "op-id", "key": "DEMO-12", "clone": "/path", "args": {}, "config": {}}
+      -> {"state": "confirmed", "external_id": "...", "detail": "..."}
+job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "base": "9f3e21c", "head": "abc", "args": {}}
+      -> {"ok": true, "detail": "...", "checks": [{"kind": "spec", "result": "pass", "command": "...", "seconds": 12, "cause": ""}]}
+```
+
+A step in `adapter.toml`:
+
+```toml
+name = "demo"
+branch = "vision/{key}"
+
+[[step]]
+id = "build"
+kind = "turn"                 # turn | job | human | wait | end
+agent = "builder"
+turn = "worker"               # reader | worker | tester
+expects = ["commits", "doc:pr.md", "job:proof"]
+after = ["git.push", "pr.open"]   # verbs that run when the end fact holds
+cap = "review_rounds"         # optional: a key of [caps]
+next = "review"
+
+[[step]]
+id = "ci"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"            # a key of the observe output
+pass = { value = "green", next = "qa" }
+fail = { value = "red", next = "fix-ci" }
+
+[verbs."git.push"]
+mode = "auto"                 # the mode at the start
+phase = 1
+```
+
+A step can expect these end facts:
+
+- `doc:<name>`: the result has that document.
+- `commits`: the branch has a new commit.
+- `clean`: the work tree is clean.
+- `job:<name>`: the job passes.
+- `human:<action>`: the person did that action.
+
+The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. A plan can declare the proof `green` for a change with no new behavior. Any new commit voids the proof.
+
+## 12. The executor
+
+No session can call the executor. It runs after a rule in code, after a typed command of the person, or after a turn whose end fact holds.
+
+- Each verb has a mode: `hold`, `shadow`, `ask`, or `auto`. `shadow` records what the verb intends and does nothing. `ask` waits for `vision approve`. Only `vision promote` and `vision demote` change a mode.
+- Each operation gets a row with the state `pending` and an idempotency key before it runs. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`. An `uncertain` operation never runs again by itself.
+- Before text or code leaves the machine, the gates test it. They refuse text that contains a secret of `[secrets]`. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name.
+- A human operation names its object with an id that cannot change: `approve-plan KEY HASH`, `answer ID`, `approve KEY VERB COMMIT`.
+
+## 13. Commands
+
+```
+vision init                        write the home folder and the configuration
+vision config                      print the configuration in use
+vision status [--json]             each ticket, its state, its marks, and the limits
+vision watch                       the same view, drawn again each 2 seconds
+vision prompt                      a short status for the shell prompt
+vision tick                        one pass
+vision on | off                    the kill switch
+vision doctor                      test the setup
+vision pick                        the eligible tickets, with the reason for each other one
+vision take KEY...                 start a ticket
+vision plan KEY                    show the plan
+vision approve-plan KEY HASH       approve the plan with that hash
+vision approve KEY VERB COMMIT     approve one operation in the mode ask
+vision log KEY                     the timeline of one ticket
+vision logs [KEY] [--follow]       the events of the running turn
+vision open KEY                    attach to the running turn and type, or take over the session
+vision tell KEY "TEXT"             send a message to the running turn, or to the next one
+vision diff KEY                    the commits of the ticket that are not on the forge
+vision stop KEY | retry KEY        stop a ticket, or start its step again
+vision needs | answer | answers | correct      section 8.4
+vision memory ...                  section 9.2
+vision curate                      run the Curator now
+vision model ...                   section 10
+vision promote VERB | demote VERB  move a verb on the trust ladder
+vision report [--week]             the measures
+vision install | uninstall         the timer of the system
+```
+
+A command that is not built yet prints `not built yet: <name>` and exits with code 3.
+
+## 14. Rules for the code
+
+- Rust, stable toolchain, one binary crate with a library. No async runtime. No daemon.
+- Use only the crates of the list below. Ask before a new crate.
+- Run `git` as a child process. Do not link a git library.
+- Write each state file to a temporary name and rename it.
+- Exit codes: 0 done, 1 error, 2 a gate refused, 3 not built yet.
+- Each command that prints a table also takes `--json`.
+- `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` must pass.
+- A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder.
+- No name of a company, a person, or a private project goes into the repo.
+
+```
+clap  serde  serde_json  toml  toml_edit  rusqlite (feature "bundled")
+anyhow  thiserror  time  uuid  sha2  libc  fs2
+```
