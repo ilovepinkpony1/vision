@@ -47,7 +47,7 @@ $VISION_HOME/
   off                    the kill switch. Its presence stops each action.
   log/vision.log         one line for each tick action
   claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
-  sandbox/               reader.json worker.json tester.json (Claude Code settings files)
+  sandbox/               optional: <kind>.json replaces the settings file that Vision renders
   skills/                copies of the skills that the role files name
   memory/                a git repo (section 9)
     decisions/D-0001.md
@@ -60,12 +60,13 @@ $VISION_HOME/
       facts.json         the input of the turn
       stream.jsonl       each event line of the session
       turn.json          the status that the supervisor writes
+      settings.json      the Claude Code settings of the session, with its sandbox
       result.json        the result object of the turn
       inbox/             messages that wait for the session
       inbox/sent/        messages that the session got
 ```
 
-A turn id has the form `<UTC time>-<step>-<n>`, for example `20261116T143000Z-build-1`. It is safe as a folder name.
+A turn id has the form `<UTC time>-<KEY>-<step>-<n>`, for example `20261116T143000Z-DEMO-12-build-1`. It is safe as a folder name, and it is unique in the ledger. A turn with no ticket uses one of the reserved keys `curator` and `eval`. `vision take` refuses a reserved key.
 
 The repo has this layout:
 
@@ -73,7 +74,9 @@ The repo has this layout:
 Cargo.toml
 src/
   main.rs lib.rs cli.rs          the entry and the command tree
-  paths.rs config.rs util/       folders, configuration, time, atomic writes, ids, processes
+  ctx.rs exit.rs                 the shared context and the exit codes
+  paths.rs config/ util/         folders, configuration, time, atomic writes, ids, processes
+  init.rs install.rs snapshot.rs the first setup, the system timer, and the format of state.json
   ledger/                        schema, migrations, typed queries
   tick.rs lock.rs status.rs doctor.rs
   turn/                          start line, supervisor, stream parser, contract, inbox, collect
@@ -102,7 +105,7 @@ plan_approval = "always"
 
 [claude]
 bin = "claude"
-config_dir = "~/.vision/claude"   # "" means: use the default login
+config_dir = "~/.vision/claude"   # a missing key means the folder claude/ of the home. "" means the default login.
 env_pass = []                     # more environment names that a session gets
 
 [budget]                      # dollars at list price, as Claude Code reports them
@@ -136,6 +139,11 @@ always_ask = ["security", "money", "customer-data", "production", "deploy",
 
 [curator]
 replay = 20
+
+[sandbox]                     # what a worker session can reach, next to its clone
+allow_read = []               # more folders that it can read, such as a toolchain folder
+allow_domains = ["localhost", "127.0.0.1"]
+allow_unix_sockets = []
 
 [gates]
 max_diff_lines = 3000
@@ -201,6 +209,8 @@ CREATE TABLE audits     (id INTEGER PRIMARY KEY, week TEXT, target TEXT, mark TE
 CREATE TABLE health     (at TEXT, test TEXT, ok INTEGER, detail TEXT);
 ```
 
+Migration 2 adds `five_hour_resets` and `seven_day_resets` to `turns`. They hold the reset time of each limit reading. The limit gate ignores a reading after its reset time, so that an old reading never blocks new turns.
+
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
 ## 6. The tick
@@ -264,7 +274,7 @@ claude -p
   --model <model> --effort <effort>
   --input-format stream-json --output-format stream-json --verbose --replay-user-messages
   --restricted --tools <tools of the kind>
-  --settings $VISION_HOME/sandbox/<kind>.json
+  --settings <turn folder>/settings.json
   --strict-mcp-config --permission-mode <dontAsk for a reader, acceptEdits for the others>
   --permission-prompts none
   --append-system-prompt-file <role file>
@@ -284,9 +294,11 @@ and each name in claude.env_pass
 
 The supervisor drops each other name, so that a token of the executor never reaches a session.
 
+The runner renders `settings.json` for each turn. For a worker and a tester, it turns the sandbox on. It denies reads of the home folder, and it allows the clone, the folders of `sandbox.allow_read`, and the domains and sockets of `[sandbox]`. A reader gets no Bash tool, so its file needs no sandbox.
+
 ### 7.4 The supervisor
 
-`vision turn-run <turn-id>` is a hidden command. The tick starts it as a detached process in its own session and process group. It lives as long as the turn. It does these things:
+`vision turn-run <turn-id>` is a hidden command. The tick writes the `turns` row first, and then it starts the supervisor as a detached process in its own session and process group. The supervisor finds the ticket of the turn in that row. It lives as long as the turn. It does these things:
 
 1. Write `turn.json` with the state `starting`, its pid, and the time.
 2. Start `claude` with pipes for input and output. Write the first message as one line.
@@ -422,6 +434,7 @@ vision correct ID "RIGHT ANSWER" [--why "W"]
 ```
 
 - `needs` shows one card, reads one key or one line, and then asks for two short lines: why, and where the decision applies. Both can stay empty.
+- `--choice N` counts from 1, as the card shows the choices to the person. The index in the output of the Judge counts from 0.
 - `correct` writes a decision of the person that replaces the answer of the Judge. The old file gets the status `superseded`. If the ticket still runs, its next turn gets the correction as a message.
 - A decision with no reason is weaker. The Judge uses it only for a question with the same words and the same area.
 
@@ -429,7 +442,7 @@ vision correct ID "RIGHT ANSWER" [--why "W"]
 
 ### 9.1 Files
 
-The memory is a private git repo at `$VISION_HOME/memory`. Each change is one commit. The author of the commit is the writer: the person, `judge`, `curator`, or `import`.
+The memory is a private git repo at `$VISION_HOME/memory`. Each change is one commit. The author of the commit is the writer: the person, `judge`, `curator`, or `import`. The first commit of `vision init` has the author `vision`.
 
 A decision file:
 
@@ -524,7 +537,15 @@ The Curator is a reader turn. It runs after each merged ticket and one time each
 - The review comments of people on the pull requests, and the verdict of each one.
 - Two active files that disagree.
 
-Its output is a list of changes: a new candidate, an edit, a merge of two files, a retirement, or a question for the person. `agents/curator.schema.json` is the schema. The runner writes the changes to a branch `proposal/<date>-<n>` of the memory repo. Three rules protect the memory:
+Its output is a list of changes: a new candidate, an edit, a merge of two files, a retirement, or a question for the person. `agents/curator.schema.json` is the schema. Each change has an `op` and a `reason`:
+
+- `add`: `path` is `principles/NEW-<n>.md`, and `content` is the full file. The runner gives the final id.
+- `edit`: `path` names an existing file, and `content` is its full new text.
+- `merge`: `path` and `content` give the file that stays, and `removes` lists the paths that it replaces.
+- `retire`: `target` is the id of the file. The runner sets its status to `retired`.
+- `question`: `question` is the text for the person.
+
+`evidence` lists the decision ids that support a change. The runner writes the changes to a branch `proposal/<date>-<n>` of the memory repo. Three rules protect the memory:
 
 - No line is lost. Each line that a proposal removes or rewrites goes to `ARCHIVE.md` word for word, with the commit and the reason. The runner tests this in code, and it rejects a proposal that loses a line.
 - A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree.

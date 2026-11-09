@@ -1,0 +1,59 @@
+project = "demo"              # the name of the adapter
+user = "user"                 # the writer name of the person in the memory
+clones = []                   # absolute paths of the clones that Vision owns
+plan_approval = "always"
+
+[claude]
+bin = "claude"
+config_dir = "~/.vision/claude"   # "" means: use the default login
+env_pass = []                     # more environment names that a session gets
+
+[budget]                      # dollars at list price, as Claude Code reports them
+reader = 3
+worker = 25
+tester = 25
+ticket = 100
+week = 300
+
+[time]                        # minutes before the supervisor kills a turn
+reader = 20
+worker = 120
+tester = 120
+
+[limits]                      # no new turn above these parts of the subscription windows
+five_hour = 0.60
+seven_day = 0.85
+
+[caps]
+review_rounds = 3
+ci_fix = 2
+qa_fix = 2
+merge = 3
+comments = 3
+judge_minutes = 15
+
+[judge]
+answer_when_sure = true       # the Judge also answers alone from its own inference
+always_ask = ["security", "money", "customer-data", "production", "deploy",
+              "delete", "irreversible", "credentials", "external-fact"]
+
+[curator]
+replay = 20
+
+[gates]
+max_diff_lines = 3000
+sensitive = [".github/", "db/migrate/"]
+
+[modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
+
+[secrets]                     # name -> how the executor gets it. A session never gets one.
+# TRACKER_TOKEN = { cmd = "security find-generic-password -s vision-tracker -w" }
+# FORGE_TOKEN   = { env = "GH_TOKEN" }
+
+[adapter]                     # a free table. The executor gives it to each adapter script.
+
+# One table for each agent that the person pinned. See section 10.
+# [agents.judge]
+# model = "claude-fable-5-2"
+# effort = "high"
+# pinned_at = "2026-11-16T14:30:00Z"

@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["summary", "changes"],
+  "additionalProperties": false,
+  "properties": {
+    "summary": {"type": "string"},
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["op", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "op": {"enum": ["add", "edit", "merge", "retire", "question"]},
+          "path": {"type": "string"},
+          "content": {"type": "string"},
+          "removes": {"type": "array", "items": {"type": "string"}},
+          "target": {"type": "string"},
+          "question": {"type": "string"},
+          "evidence": {"type": "array", "items": {"type": "string"}},
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}

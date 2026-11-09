@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "required": ["kind", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": {"enum": ["result", "questions", "requests"]},
+    "summary": {"type": "string"},
+    "documents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "content"],
+        "additionalProperties": false,
+        "properties": {"name": {"type": "string"}, "content": {"type": "string"}}
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "context", "options", "evidence", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "text": {"type": "string"},
+          "context": {"type": "string"},
+          "example": {"type": "string"},
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["label", "means"],
+              "additionalProperties": false,
+              "properties": {"label": {"type": "string"}, "means": {"type": "string"}}
+            }
+          },
+          "recommended": {"type": ["integer", "null"]},
+          "why": {"type": "string"},
+          "evidence": {"type": "string"},
+          "kind": {"enum": ["product", "architecture", "scope", "code"]},
+          "topics": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "requests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["verb", "args"],
+        "additionalProperties": false,
+        "properties": {"verb": {"type": "string"}, "args": {"type": "object"}}
+      }
+    },
+    "applied": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "how"],
+        "additionalProperties": false,
+        "properties": {"id": {"type": "string"}, "how": {"type": "string"}}
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["when", "make_sure", "because"],
+        "additionalProperties": false,
+        "properties": {
+          "when": {"type": "string"},
+          "make_sure": {"type": "string"},
+          "because": {"type": "string"}
+        }
+      }
+    }
+  }
+}

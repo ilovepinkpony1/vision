@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["answers"],
+  "additionalProperties": false,
+  "properties": {
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["card", "outcome", "basis", "sure", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "card": {"type": "string"},
+          "outcome": {"enum": ["answer", "propose", "ask"]},
+          "choice": {"type": ["integer", "null"]},
+          "text": {"type": "string"},
+          "basis": {"enum": ["decision", "principle", "inference", "none"]},
+          "sources": {"type": "array", "items": {"type": "string"}},
+          "sure": {"type": "boolean"},
+          "topics": {"type": "array", "items": {"type": "string"}},
+          "reason": {"type": "string"}
+        }
+      }
+    }
+  }
+}
