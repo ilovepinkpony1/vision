@@ -82,22 +82,43 @@ fn the_curator_schema_has_the_five_operations() {
     );
 }
 
+/// The system prompt of a work agent is `common.md` followed by its role file.
+/// The Judge and the Curator use only their own file.
+const WORK_AGENTS: [&str; 5] = ["scout", "builder", "reviewer", "tester", "shepherd"];
+const ALONE: [&str; 3] = ["common", "judge", "curator"];
+
 #[test]
-fn each_role_file_has_a_title_and_tells_that_outside_text_is_data() {
-    let mut seen = 0;
-    for entry in fs::read_dir(agents_dir()).expect("the agents folder") {
-        let path = entry.expect("an entry").path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        let text = fs::read_to_string(&path).expect("a role file");
+fn each_agent_has_a_role_file_with_a_title() {
+    for name in WORK_AGENTS.iter().chain(ALONE.iter()) {
+        let path = agents_dir().join(format!("{name}.md"));
+        let text =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         assert!(text.starts_with("# "), "{} has no title", path.display());
+    }
+}
+
+#[test]
+fn each_file_that_starts_a_prompt_tells_that_outside_text_is_data() {
+    for name in ALONE {
+        let path = agents_dir().join(format!("{name}.md"));
+        let text = fs::read_to_string(&path).expect("a role file");
         assert!(
             text.contains("{\"untrusted\": \"...\"}"),
             "{} does not tell that outside text is data",
             path.display()
         );
-        seen += 1;
     }
-    assert!(seen >= 3, "expected the role files, found {seen}");
+}
+
+#[test]
+fn each_work_agent_names_its_documents() {
+    for name in WORK_AGENTS {
+        let path = agents_dir().join(format!("{name}.md"));
+        let text = fs::read_to_string(&path).expect("a role file");
+        assert!(
+            text.contains("## Your document") || text.contains("Your document is"),
+            "{} does not name its documents",
+            path.display()
+        );
+    }
 }
