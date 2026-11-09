@@ -590,80 +590,153 @@ The recommendation is the cheapest model whose quality numbers are not worse tha
 
 ## 11. The pipeline and the adapter
 
-The core knows four kinds of step: a turn, a job, a human action, and a wait. The steps of a project are data in `adapter.toml`. The core has no word that names a project, a tracker, or a forge.
+The core knows five kinds of step: a turn, a job, a human action, a wait, and the end. The steps of a project are data in `adapter.toml`. The core has no word that names a project, a tracker, or a forge.
+
+### 11.1 The adapter folder
 
 ```
 adapters/<name>/
-  adapter.toml        the steps, the verbs, the envs
+  adapter.toml        the steps, the verbs, the jobs, the envs
   bin/observe         print the facts of the queue or of one ticket
   bin/act             run one verb
   bin/job             run one job, such as the proof
   roles/              role files that replace agents/<role>.md
 ```
 
-Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that a gate refused the call. Each other code means a failure. Only the executor calls a script. A script gets each secret as an environment name from `[secrets]`.
+Vision looks for the adapter of `project` first in `$VISION_HOME/adapters/`, and then in the folder `adapters/` next to the binary or in the repo. `adapter.dir` in the configuration names a different folder.
+
+Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that a gate refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration. A script gets each secret of `[secrets]` as an environment name.
 
 ```
-observe  {"what": "queue"}
+observe  {"what": "queue", "config": {}}
       -> {"tickets": [{"key": "DEMO-12", "title": "...", "status": "To Do", "eligible": true, "reason": ""}]}
-observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 7}
+observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 7, "clone": "/path", "config": {}}
       -> {"issue": {}, "tracker_status": "In Progress",
-          "pr": {"number": 7, "draft": true, "head": "abc", "merged": false, "conflict": false,
+          "pr": {"number": 7, "draft": true, "head": "abc", "merged": false, "closed": false, "conflict": false,
                  "approved_by": [], "changes_requested": false, "comments_waiting": 0},
           "ci": {"head": "abc", "state": "green"}, "envs": {"staging": {"head": "abc"}}}
-act      {"verb": "git.push", "op": "op-id", "key": "DEMO-12", "clone": "/path", "args": {}, "config": {}}
-      -> {"state": "confirmed", "external_id": "...", "detail": "..."}
-job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "base": "9f3e21c", "head": "abc", "args": {}}
-      -> {"ok": true, "detail": "...", "checks": [{"kind": "spec", "result": "pass", "command": "...", "seconds": 12, "cause": ""}]}
+act      {"verb": "git.push", "op": "op-id", "key": "DEMO-12", "clone": "/path", "branch": "vision/DEMO-12",
+          "head": "abc", "args": {}, "config": {}}
+      -> {"state": "confirmed", "external_id": "...", "detail": "...", "set": {"pr": 7}}
+act      {"verb": "git.push", "op": "op-id", "reconcile": true, ...}
+      -> the same object. The script only reads the outside state, and it never acts again.
+job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "base": "9f3e21c", "head": "abc", "args": {}, "config": {}}
+      -> {"ok": true, "detail": "...", "documents": [{"name": "ci-log.txt", "content": "..."}],
+          "checks": [{"kind": "spec", "result": "pass", "command": "...", "seconds": 12, "cause": ""}]}
 ```
 
-A step in `adapter.toml`:
+- `state` of an `act` answer is `confirmed`, `failed`, or `uncertain`.
+- `set` can give new values for the ticket row: `pr`, `head`.
+- `documents` of a job go to the ticket folder. A later turn can read them.
+- The `cause` of a check is `code`, `infra`, `flaky`, `env`, `not ours`, or `unknown`.
+
+### 11.2 The steps
 
 ```toml
 name = "demo"
-branch = "vision/{key}"
+branch = "vision/{key}"       # the branch of a ticket
+base = "origin/main"          # the ref that a new branch starts from
+
+[[step]]
+id = "refine"
+kind = "turn"                 # turn | job | human | wait | end
+agent = "scout"
+turn = "reader"               # reader | worker | tester
+reads = ["issue.json"]        # documents of the ticket folder that the session gets
+expects = ["doc:refine.md", "doc:description.md"]
+after = ["tracker.describe"]  # verbs that run when each end fact holds
+next = "plan"
+
+[[step]]
+id = "plan-ready"
+kind = "human"
+action = "approve-plan"
+next = "build"
 
 [[step]]
 id = "build"
-kind = "turn"                 # turn | job | human | wait | end
+kind = "turn"
 agent = "builder"
-turn = "worker"               # reader | worker | tester
-expects = ["commits", "doc:pr.md", "job:proof"]
-after = ["git.push", "pr.open"]   # verbs that run when the end fact holds
-cap = "review_rounds"         # optional: a key of [caps]
+turn = "worker"
+reads = ["approved-plan.md", "refine.md", "answers.md"]
+expects = ["commits", "clean", "doc:pr.md", "job:proof"]
+after = ["git.push", "pr.open"]
 next = "review"
+
+[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "worker"
+before = ["job:second-review"]    # jobs that run first. Their documents become inputs.
+reads = ["approved-plan.md", "second-review.md"]
+expects = ["clean", "doc:review.md", "job:proof"]
+after = ["git.push"]
+cap = "review_rounds"         # a key of [caps]. It counts each entry into the step.
+next = "ci"
 
 [[step]]
 id = "ci"
 kind = "wait"
-start = ["ci.run"]
-watch = "ci.state"            # a key of the observe output
-pass = { value = "green", next = "qa" }
-fail = { value = "red", next = "fix-ci" }
+start = ["ci.run"]            # verbs that run at the entry
+watch = "ci.state"            # a path into the observe answer
+on = { green = "ready", red = "fix-ci" }
+every = 60                    # seconds between two observe calls
+
+[[step]]
+id = "done"
+kind = "end"
 
 [verbs."git.push"]
-mode = "auto"                 # the mode at the start
-phase = 1
+mode = "auto"                 # the mode at the start. [modes] of the configuration wins.
+leaves = true                 # text or code leaves the machine, so the gates run first
+
+[jobs.proof]
+timeout = 1800
 ```
 
 A step can expect these end facts:
 
-- `doc:<name>`: the result has that document.
-- `commits`: the branch has a new commit.
-- `clean`: the work tree is clean.
-- `job:<name>`: the job passes.
+- `doc:<name>`: the result has that document, and it is not empty.
+- `commits`: the branch has a commit that it did not have at the start of the turn.
+- `clean`: the work tree of the clone is clean.
+- `job:<name>`: the job passes at the last commit.
 - `human:<action>`: the person did that action.
 
+### 11.3 How a ticket moves
+
+The ticket row holds the id of its step in `state`, its flags, and its counters. One tick moves a ticket at most one step.
+
+- Entry of a turn step. The runner runs each `before` job. It asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
+- A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
+- A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
+- A turn that ends with `result`. The runner writes each expected document to the ticket folder. Then it tests each end fact.
+- If an end fact does not hold, one new turn resumes the session with a message that names the fact. After a second failure, the ticket gets the flag `needs-you`.
+- If each end fact holds, the `after` verbs run in order. After each one has the state `confirmed`, the ticket moves to `next`.
+- A step with a `cap` counts each entry. One entry above the cap sets the flag `needs-you` with the open items.
+- A wait step runs `observe` each `every` seconds, and it moves on the value of `watch`.
+- A human step waits for its command. `vision needs` lists it.
+
+The flags are `needs-you`, `paused`, `waits-for-limit`, and `stopped`. A ticket with a flag starts no new turn. `vision retry KEY` clears `needs-you` and enters the step again. `vision stop KEY` kills the running turn, frees the clone, and keeps the branch.
+
+`vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time.
+
 The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. A plan can declare the proof `green` for a change with no new behavior. Any new commit voids the proof.
+
+### 11.4 The demo adapter
+
+`adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
 
 ## 12. The executor
 
 No session can call the executor. It runs after a rule in code, after a typed command of the person, or after a turn whose end fact holds.
 
-- Each verb has a mode: `hold`, `shadow`, `ask`, or `auto`. `shadow` records what the verb intends and does nothing. `ask` waits for `vision approve`. Only `vision promote` and `vision demote` change a mode.
-- Each operation gets a row with the state `pending` and an idempotency key before it runs. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`. An `uncertain` operation never runs again by itself.
-- Before text or code leaves the machine, the gates test it. They refuse text that contains a secret of `[secrets]`. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name.
-- A human operation names its object with an id that cannot change: `approve-plan KEY HASH`, `answer ID`, `approve KEY VERB COMMIT`.
+- Each verb has a mode: `hold`, `shadow`, `ask`, or `auto`. `hold` sets the flag `needs-you`. `shadow` records what the verb intends, does nothing, and sets the flag. `ask` waits for `vision approve KEY VERB COMMIT`. Only `vision promote` and `vision demote` change a mode.
+- Each operation gets a row with the state `pending` and an idempotency key before it runs. The key is a hash of the ticket, the verb, the last commit, and the arguments. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`.
+- At each tick, the executor reconciles each operation in the state `executing` or `uncertain`. It calls the script with `reconcile` set to true. An `uncertain` operation never runs again by itself.
+- Before a verb with `leaves` runs, the gates test what leaves the machine. They refuse text or a diff that contains a secret of `[secrets]`. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name.
+- A human operation names its object with an id that cannot change: `approve-plan KEY HASH`, `answer ID`, `approve KEY VERB COMMIT`. A stale id is an error.
+- One wrong operation moves its verb back to `ask`. The person marks an operation as wrong with `vision demote VERB`.
 
 ## 13. Commands
 
