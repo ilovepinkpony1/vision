@@ -636,7 +636,9 @@ Vision looks for the adapter of `project` first in `$VISION_HOME/adapters/`, and
 
 An `adapter.toml` can name a different folder for its scripts with the key `scripts`. A private adapter then holds only its own step list, and it uses the scripts of a public adapter.
 
-Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that a gate refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration. A script gets each secret of `[secrets]` as an environment name.
+Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that the script refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration.
+
+The environment of a script has only `PATH`, `HOME`, `LANG`, and `TMPDIR`. `bin/observe` and `bin/act` also get each secret of `[secrets]` as an environment name. `bin/job` gets no secret, because a job can run code that an agent wrote. A job that only reads the tracker or the forge sets `secrets = true`. The executor masks each secret value in an answer before it stores the answer.
 
 ```
 observe  {"what": "queue", "config": {}}
@@ -647,19 +649,25 @@ observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 
                  "approved_by": [], "changes_requested": false, "comments_waiting": 0},
           "ci": {"head": "abc", "state": "green"}, "envs": {"staging": {"head": "abc"}}}
 act      {"verb": "git.push", "op": "op-id", "key": "DEMO-12", "clone": "/path", "branch": "vision/DEMO-12",
-          "head": "abc", "args": {}, "config": {}}
+          "head": "abc", "pr": 7, "args": {}, "config": {}}
       -> {"state": "confirmed", "external_id": "...", "detail": "...", "set": {"pr": 7}}
 act      {"verb": "git.push", "op": "op-id", "reconcile": true, ...}
       -> the same object. The script only reads the outside state, and it never acts again.
-job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "base": "9f3e21c", "head": "abc", "args": {}, "config": {}}
+act      {"verb": "tracker.issue", "read": true, "key": "DEMO-12", "args": {}, ...}
+      -> {"detail": "...", "documents": [{"name": "links.json", "content": "..."}]}
+job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/DEMO-12", "base": "9f3e21c",
+          "head": "abc", "pr": 7, "args": {}, "config": {}}
       -> {"ok": true, "detail": "...", "documents": [{"name": "ci-log.txt", "content": "..."}],
           "checks": [{"kind": "spec", "result": "pass", "command": "...", "seconds": 12, "cause": ""}]}
 ```
 
 - `state` of an `act` answer is `confirmed`, `failed`, or `uncertain`.
 - `set` can give new values for the ticket row: `pr`, `head`.
-- `documents` of a job go to the ticket folder. A later turn can read them.
+- `documents` of a job go to the ticket folder. A later turn can read them. A script cannot write a document that the person or the pipeline owns, such as `plan.md` or `issue.json`.
+- A read verb changes nothing outside. A turn can ask for it, and the documents of its answer go to that turn.
+- If `act` ends with a different exit code, a signal, a time limit, or bad output, the operation becomes `uncertain`. The outside state is unknown then.
 - The `cause` of a check is `code`, `infra`, `flaky`, `env`, `not ours`, or `unknown`.
+- Each run of a job also writes one row in `checks` with the kind `job` and the source `job:<name>`. Its result is `pass`, `fail`, or `error`. The end fact `job:<name>` reads that row at the last commit.
 
 ### 11.2 The steps
 
@@ -720,11 +728,18 @@ id = "done"
 kind = "end"
 
 [verbs."git.push"]
-mode = "auto"                 # the mode at the start. [modes] of the configuration wins.
+mode = "auto"                 # the mode at the start. [modes] of the configuration wins. The default is ask.
 leaves = true                 # text or code leaves the machine, so the gates run first
+timeout = 120                 # seconds for one call. The default is 300.
+
+[verbs."tracker.issue"]
+read = true                   # it changes nothing outside, so it has no mode. A turn can ask for it.
 
 [jobs.proof]
 timeout = 1800
+
+[jobs.comments]
+secrets = true                # this job only reads the forge. Never set it for a job that runs project code.
 ```
 
 An entry of `after`, `before`, or `start` is a name, or a table with arguments:
@@ -779,9 +794,13 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - Each verb has a mode: `hold`, `shadow`, `ask`, or `auto`. `hold` sets the flag `needs-you`. `shadow` records what the verb intends, does nothing, and sets the flag. `ask` waits for `vision approve KEY VERB COMMIT`. Only `vision promote` and `vision demote` change a mode.
 - Each operation gets a row with the state `pending` and an idempotency key before it runs. The key is a hash of the ticket, the verb, the last commit, and the arguments. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`.
 - At each tick, the executor reconciles each operation in the state `executing` or `uncertain`. It calls the script with `reconcile` set to true. An `uncertain` operation never runs again by itself.
-- Before a verb with `leaves` runs, the gates test what leaves the machine. They refuse text or a diff that contains a secret of `[secrets]`. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name.
+- Before a verb with `leaves` runs, the gates test what leaves the machine. They refuse text or a diff that contains a secret of `[secrets]`, a private key, or a common form of a token. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name. `vision approve` lets a held diff go.
+- The secrets gate reads the diff from the base to the last commit. It also reads the patch of each commit between them, because a push sends each commit. It reads each file as text, so that an attribute of the repo cannot hide a file.
+- The executor refuses an operation with a secret value in its arguments, for each verb.
+- A new request of a verb at a newer commit ends the older operation of that verb that still waits. Its state becomes `failed`.
 - A human operation names its object with an id that cannot change: `approve-plan KEY HASH`, `answer ID`, `approve KEY VERB COMMIT`. A stale id is an error.
-- One wrong operation moves its verb back to `ask`. The person marks an operation as wrong with `vision demote VERB`.
+- After a wrong operation, the person moves its verb down the ladder with `vision demote VERB`. Vision never changes a mode by itself.
+- `vision approve` exits with code 2 after a gate refuses. It exits with code 1 after an operation fails or stays `uncertain`.
 
 ## 13. Commands
 
