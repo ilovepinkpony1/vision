@@ -10,6 +10,7 @@
 mod events;
 mod health;
 mod limits;
+pub mod memory_use;
 mod tickets;
 pub mod turns;
 

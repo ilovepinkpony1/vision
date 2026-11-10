@@ -1,0 +1,9 @@
+{"question": "Must the Export button make a CSV file or an XLSX file?", "options": ["CSV", "XLSX"], "answer": "CSV", "note": "The finance team imports CSV into their tool.", "at": "2026-10-01T10:00:00Z", "ticket": "DEMO-12", "kind": "product", "area": ["reports", "exports"]}
+{"question": "Which page size does the printed report use?", "options": [{"label": "A4", "means": "the size of most countries"}, {"label": "Letter"}], "answer": ["A4"], "at": "2026-10-02", "ticket": "DEMO-13", "kind": "scope", "area": ["reports"]}
+
+{"answer": "an answer with no question", "ticket": "DEMO-14"}
+{"question": "A question that nobody answered", "options": ["Yes", "No"], "ticket": "DEMO-14"}
+this line is not JSON
+{"question": "Do the logs keep the user name?", "answer": "No", "kind": "privacy", "source": "an old tracker", "ticket": "DEMO-15"}
+{ "ticket": "DEMO-12", "area": ["exports"], "answer": "CSV", "question": "Must the Export button make a CSV file or an XLSX file?", "at": "2026-10-01T10:00:00Z" }
+{"question": "Which date format does the export use?", "answer": "ISO 8601", "at": 1790000000, "ticket": 16, "kind": "code"}

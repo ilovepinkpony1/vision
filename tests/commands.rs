@@ -12,8 +12,6 @@ fn a_command_that_is_not_built_exits_with_code_3() {
         (&["approve", "DEMO-12", "git.push", "9f3e21c"], "approve"),
         (&["needs"], "needs"),
         (&["answer", "Q-1", "--choice", "1"], "answer"),
-        (&["memory"], "memory"),
-        (&["memory", "show", "D-0142"], "memory show"),
         (&["curate"], "curate"),
         (
             &["model", "eval", "judge", "--models", "opus"],

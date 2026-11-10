@@ -24,6 +24,30 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
     stdout_or_error(dir, args, output)
 }
 
+/// Runs `git -C <dir> <args>` with `author` as the author and the committer, such as a commit
+/// of only some paths, and gives its standard output without the last newline.
+pub fn run_as(dir: &Path, args: &[&str], author: Author<'_>) -> Result<String> {
+    let output = command(dir, Some(author))
+        .args(args)
+        .output()
+        .context("could not run git. Install git and make sure that it is in PATH")?;
+    stdout_or_error(dir, args, output)
+}
+
+/// Runs `git -C <dir> <args>` and gives its standard output as it is, such as the bytes of a
+/// file at a commit.
+pub fn run_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = command(dir, None)
+        .args(args)
+        .output()
+        .context("could not run git. Install git and make sure that it is in PATH")?;
+    if !output.status.success() {
+        stdout_or_error(dir, args, output)?;
+        bail!("`git {}` failed in {}", args.join(" "), dir.display());
+    }
+    Ok(output.stdout)
+}
+
 /// Stages each change in `dir` and makes one commit with `author` as the author and the committer.
 pub fn commit_all(dir: &Path, message: &str, author: Author<'_>) -> Result<()> {
     run(dir, &["add", "--all"])?;
