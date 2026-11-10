@@ -40,6 +40,11 @@ always_ask = ["security", "money", "customer-data", "production", "deploy",
 [curator]
 replay = 20
 
+[sandbox]                     # what a worker session can reach, next to its clone
+allow_read = []               # more folders that it can read, such as a toolchain folder
+allow_domains = ["localhost", "127.0.0.1"]
+allow_unix_sockets = []
+
 [gates]
 max_diff_lines = 3000
 sensitive = [".github/", "db/migrate/"]

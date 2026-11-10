@@ -10,7 +10,8 @@ use crate::ctx::Ctx;
 use crate::exit::not_built;
 use crate::ledger::Ledger;
 use crate::snapshot::Need;
-use crate::tick::{Action, FlagSet, Pass};
+use crate::tick::{Action, FlagSet, Pass, TurnStart};
+use crate::turn::LaunchRequest;
 
 /// `vision pick`, `take`, `plan`, `approve-plan`, `log`, `diff`, `stop`, `retry`, and `report`.
 pub fn run(_ctx: &Ctx, command: PipelineCommand) -> Result<()> {
@@ -30,6 +31,15 @@ pub fn select_actions(_pass: &mut Pass) -> Result<Vec<Action>> {
 /// Tick step 7 for [`Action::SetFlag`]: set the flag on the ticket.
 pub fn set_flag(_pass: &mut Pass, _flag: &FlagSet) -> Result<()> {
     Ok(())
+}
+
+/// The launch request of a turn step: the working folder, the facts of the step, the session
+/// view, and the expected documents of `start`, for [`crate::turn::launch`].
+pub fn launch_request(_pass: &mut Pass, start: &TurnStart) -> Result<LaunchRequest> {
+    Err(not_built(&format!(
+        "the launch request of the step {}",
+        start.step
+    )))
 }
 
 /// The plans that wait for `vision approve-plan`, and the tickets with the flag "needs you".

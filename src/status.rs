@@ -104,6 +104,7 @@ pub fn switch(ctx: &Ctx, off: bool) -> Result<()> {
     if path.exists() == off {
         if off {
             println!("Vision is already off. Run `vision on` to resume.");
+            kill_turns(ctx);
         } else {
             println!("Vision is already on.");
         }
@@ -130,10 +131,27 @@ pub fn switch(ctx: &Ctx, off: bool) -> Result<()> {
     }
     if off {
         println!("Vision is off: each tick now only writes the heartbeat and the snapshot. Run `vision on` to resume.");
+        kill_turns(ctx);
     } else {
         println!("Vision is on: the next tick acts again.");
     }
     Ok(())
+}
+
+/// `vision off` also kills each running turn.
+fn kill_turns(ctx: &Ctx) {
+    match crate::turn::kill_all(ctx) {
+        Ok(killed) if killed.is_empty() => {}
+        Ok(killed) => {
+            ctx.log(&format!("off: killed the turn(s) {}", killed.join(", ")));
+            println!(
+                "Killed {} running turn(s): {}",
+                killed.len(),
+                killed.join(", ")
+            );
+        }
+        Err(e) => eprintln!("warning: could not kill each running turn: {e:#}"),
+    }
 }
 
 impl StatusView {

@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""A stand-in for Claude Code in the tests of Vision. Standard library only.
+
+It reads the arguments of the start line (section 7.3 of docs/design.md), reads stream-json
+lines from standard input, and plays a scenario. The scenario file is named in the facts file
+of the turn: the first input line says "Read .vision/turns/<id>/facts.json", and the fake
+reads `fake.scenario` there. So the product code knows nothing of scenarios, and no variable
+of the environment is needed.
+
+A scenario file is JSON: {"turns": [[step, ...], [step, ...]]}. The first run takes the first
+list, the second run the second list, and so on; the last list repeats. Each step is an object
+with "do":
+
+  init         the init event, with the tools, the permission mode, and the session id of the
+               arguments. "tools", "permissionMode", and "mcp_servers" replace them.
+  text         an assistant text: "text".
+  tool         an assistant tool call and its result: "name", "input".
+  wait_input   wait up to "timeout" seconds for an input line, echo it, and answer "got: ...".
+  rate_limit   a rate_limit_event: "window", "utilization", "resetsAt", "status".
+  result       a result: "structured_output", "cost", "usage", "is_error", "subtype",
+               "denials" (a number).
+  sleep        sleep "seconds".
+  exit         exit with "code", after "stderr" text.
+  hang         never end.
+  spawn_child  start `sleep 1000` in the same process group, and report its pid.
+  env          report the names of the environment, and the values of the names in "show".
+  args         report the arguments and the working folder.
+  partial      write one event in two parts with a pause between, to test partial lines.
+
+After the last step it acts as Claude Code does: it echoes each new input line, answers it, and
+repeats the last result, until its input closes. Without -p it acts as the interactive program:
+it prints one line about the session that it resumes and exits.
+"""
+
+import json
+import os
+import re
+import select
+import subprocess
+import sys
+import time
+
+VALUE_FLAGS = {
+    "--model", "--effort", "--input-format", "--output-format", "--tools", "--settings",
+    "--permission-mode", "--permission-prompts", "--append-system-prompt-file",
+    "--json-schema", "--max-budget-usd", "--session-id", "--resume", "--add-dir",
+}
+
+
+def parse_args(argv):
+    opts = {"print": False, "--add-dir": []}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "-p":
+            opts["print"] = True
+        elif arg in VALUE_FLAGS and i + 1 < len(argv):
+            i += 1
+            if arg == "--add-dir":
+                opts[arg].append(argv[i])
+            else:
+                opts[arg] = argv[i]
+        i += 1
+    return opts
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+class Input:
+    """Reads lines from standard input with a timeout, without the buffer of sys.stdin."""
+
+    def __init__(self):
+        self.buf = b""
+        self.eof = False
+
+    def line(self, timeout=None):
+        """A line without its newline, "" at the end of input, or None after the timeout."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while b"\n" not in self.buf:
+            if self.eof:
+                rest, self.buf = self.buf, b""
+                return rest.decode("utf-8", "replace") if rest else ""
+            wait = None if deadline is None else max(0.0, deadline - time.monotonic())
+            ready, _, _ = select.select([0], [], [], wait)
+            if not ready:
+                return None
+            chunk = os.read(0, 65536)
+            if not chunk:
+                self.eof = True
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        return line.decode("utf-8", "replace")
+
+
+def message_text(line):
+    try:
+        value = json.loads(line)
+        return "".join(b.get("text", "") for b in value["message"]["content"] if b.get("type") == "text")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return line
+
+
+def echo(text):
+    emit({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}})
+
+
+def assistant_text(text):
+    emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+
+
+def load_steps(first_text):
+    default = [
+        {"do": "init"},
+        {"do": "text", "text": "Nothing to do."},
+        {"do": "result", "structured_output": {"kind": "result", "summary": "The fake did nothing."}},
+    ]
+    match = re.search(r"Read (\S+facts\.json)", first_text)
+    if not match:
+        return default
+    try:
+        with open(match.group(1)) as f:
+            facts = json.load(f)
+    except (OSError, ValueError):
+        return default
+    path = (facts.get("fake") or {}).get("scenario")
+    if not path:
+        return default
+    with open(path) as f:
+        turns = json.load(f)["turns"]
+    n = 0
+    while True:
+        try:
+            fd = os.open(f"{path}.run{n}", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            n += 1
+    return turns[min(n, len(turns) - 1)]
+
+
+def result_event(step, session):
+    usage = {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}
+    usage.update(step.get("usage", {}))
+    event = {
+        "type": "result",
+        "subtype": step.get("subtype", "success"),
+        "is_error": step.get("is_error", False),
+        "result": step.get("result", "done"),
+        "session_id": session,
+        "total_cost_usd": step.get("cost", 0.01),
+        "num_turns": 1,
+        "permission_denials": [{"tool_name": "Bash"}] * step.get("denials", 0),
+        "usage": usage,
+    }
+    if step.get("structured_output") is not None:
+        event["structured_output"] = step["structured_output"]
+    return event
+
+
+def main():
+    opts = parse_args(sys.argv[1:])
+    if not opts["print"]:
+        print(f"fake-claude interactive resume={opts.get('--resume')} cwd={os.getcwd()}")
+        return 0
+    session = opts.get("--resume") or opts.get("--session-id") or "fake-session"
+    tools = [t for t in opts.get("--tools", "").split(",") if t]
+    inp = Input()
+    first = inp.line(timeout=10)
+    if not first:
+        sys.stderr.write("fake-claude: no first message on standard input\n")
+        return 2
+    first_text = message_text(first)
+    echo(first_text)
+    last_result = None
+    for step in load_steps(first_text):
+        kind = step["do"]
+        if kind == "init":
+            emit({
+                "type": "system", "subtype": "init", "session_id": session,
+                "tools": step.get("tools", tools),
+                "permissionMode": step.get("permissionMode", opts.get("--permission-mode")),
+                "mcp_servers": step.get("mcp_servers", []),
+                "model": opts.get("--model"), "cwd": os.getcwd(), "fake_pid": os.getpid(),
+            })
+        elif kind == "text":
+            assistant_text(step["text"])
+        elif kind == "tool":
+            emit({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "tu1", "name": step["name"], "input": step.get("input", {})}]}})
+            emit({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu1", "content": "ok"}]}})
+        elif kind == "wait_input":
+            line = inp.line(timeout=step.get("timeout", 10))
+            if line is None:
+                assistant_text("no input came")
+            elif line == "" and inp.eof:
+                assistant_text("input closed")
+            else:
+                text = message_text(line)
+                echo(text)
+                assistant_text("got: " + text)
+        elif kind == "rate_limit":
+            emit({"type": "rate_limit_event", "rate_limit_info": {
+                "rateLimitType": step.get("window", "five_hour"),
+                "utilization": step.get("utilization"),
+                "resetsAt": step.get("resetsAt"),
+                "status": step.get("status", "allowed"),
+            }})
+        elif kind == "result":
+            last_result = result_event(step, session)
+            emit(last_result)
+        elif kind == "sleep":
+            time.sleep(step.get("seconds", 0.1))
+        elif kind == "exit":
+            sys.stderr.write(step.get("stderr", ""))
+            sys.stderr.flush()
+            return step.get("code", 1)
+        elif kind == "hang":
+            while True:
+                time.sleep(1)
+        elif kind == "spawn_child":
+            child = subprocess.Popen(["sleep", "1000"])
+            emit({"type": "system", "subtype": "fake_child", "pid": child.pid})
+        elif kind == "env":
+            emit({"type": "system", "subtype": "fake_env", "names": sorted(os.environ),
+                  "values": {k: os.environ.get(k) for k in step.get("show", [])}})
+        elif kind == "args":
+            emit({"type": "system", "subtype": "fake_args", "argv": sys.argv[1:], "cwd": os.getcwd()})
+        elif kind == "partial":
+            text = json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": step.get("text", "a line in two parts")}]}})
+            half = len(text) // 2
+            sys.stdout.write(text[:half])
+            sys.stdout.flush()
+            time.sleep(step.get("pause", 0.3))
+            sys.stdout.write(text[half:] + "\n")
+            sys.stdout.flush()
+        else:
+            sys.stderr.write(f"fake-claude: unknown step {kind}\n")
+            return 3
+    while True:
+        line = inp.line()
+        if line is None or (line == "" and inp.eof):
+            return 0
+        text = message_text(line)
+        echo(text)
+        assistant_text("got: " + text)
+        if last_result is not None:
+            emit(last_result)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -157,6 +157,8 @@ pub struct TurnPaths {
     pub status: PathBuf,
     /// `result.json`: the result object of the turn.
     pub result: PathBuf,
+    /// `settings.json`: the Claude Code settings of the session, with its sandbox.
+    pub settings: PathBuf,
     /// `inbox/`: messages that wait for the session.
     pub inbox: PathBuf,
     /// `inbox/sent/`: messages that the session got.
@@ -171,12 +173,17 @@ impl TurnPaths {
             stream: dir.join("stream.jsonl"),
             status: dir.join("turn.json"),
             result: dir.join("result.json"),
+            settings: dir.join("settings.json"),
             inbox_sent: inbox.join("sent"),
             inbox,
             dir,
         }
     }
 }
+
+/// The ticket keys of turns with no ticket: the Curator and the replays of `vision model eval`.
+/// `vision take` refuses them. The test ignores case, because a folder name on macOS does.
+pub const RESERVED_KEYS: [&str; 2] = ["curator", "eval"];
 
 /// A ticket key that is safe as a folder name, such as `DEMO-12`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -201,6 +208,13 @@ impl TicketKey {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// True for `curator` and `eval`, the keys of turns with no ticket.
+    pub fn is_reserved(&self) -> bool {
+        RESERVED_KEYS
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(&self.0))
+    }
 }
 
 impl fmt::Display for TicketKey {
@@ -217,51 +231,64 @@ impl FromStr for TicketKey {
     }
 }
 
-/// A turn id: `<UTC time>-<step>-<n>`, such as `20261116T143000Z-build-1`. It is safe as a folder name.
+/// A turn id: `<UTC time>-<KEY>-<step>-<n>`, such as `20261116T143000Z-DEMO-12-build-1`.
+/// It is safe as a folder name, and the ledger keeps it unique.
 ///
-/// The step may hold `-`, such as `fix-ci`; `n` is the last part and starts at 1.
+/// The key and the step may both hold `-`, so the text alone cannot split them: the `turns`
+/// row holds both. [`TurnId::name`] gives the part between the time and `n`. `n` starts at 1.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TurnId {
     at: OffsetDateTime,
-    step: String,
+    name: String,
     n: u32,
 }
 
 impl TurnId {
     /// A new id. `at` is cut to whole seconds in UTC.
-    pub fn new(at: OffsetDateTime, step: &str, n: u32) -> Result<TurnId> {
+    pub fn new(at: OffsetDateTime, key: &TicketKey, step: &str, n: u32) -> Result<TurnId> {
         check_step(step)?;
-        if n == 0 {
-            bail!("the number of a turn id starts at 1");
-        }
-        let at = parse_compact(&compact(at))?;
-        Ok(TurnId {
-            at,
-            step: step.to_string(),
-            n,
-        })
+        TurnId::from_parts(at, format!("{key}-{step}"), n)
     }
 
     pub fn parse(text: &str) -> Result<TurnId> {
-        let bad = || format!("`{text}` is not a turn id, such as 20261116T143000Z-build-1");
+        let bad = || format!("`{text}` is not a turn id, such as 20261116T143000Z-DEMO-12-build-1");
         let (time_part, rest) = text.split_at_checked(16).with_context(bad)?;
         let rest = rest.strip_prefix('-').with_context(bad)?;
-        let (step, n) = rest.rsplit_once('-').with_context(bad)?;
+        let (name, n) = rest.rsplit_once('-').with_context(bad)?;
         let valid_n = !n.is_empty() && !n.starts_with('0') && n.bytes().all(|b| b.is_ascii_digit());
         if !valid_n {
             bail!(bad());
         }
         let n: u32 = n.parse().with_context(bad)?;
         let at = parse_compact(time_part).with_context(bad)?;
-        TurnId::new(at, step, n).with_context(bad)
+        TurnId::from_parts(at, name.to_string(), n).with_context(bad)
+    }
+
+    fn from_parts(at: OffsetDateTime, name: String, n: u32) -> Result<TurnId> {
+        let valid = !name.is_empty()
+            && name.len() <= 130
+            && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && !name.ends_with(['-', '.'])
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        if !valid {
+            bail!("`{name}` cannot be the middle of a turn id");
+        }
+        if n == 0 {
+            bail!("the number of a turn id starts at 1");
+        }
+        let at = parse_compact(&compact(at))?;
+        Ok(TurnId { at, name, n })
     }
 
     pub fn at(&self) -> OffsetDateTime {
         self.at
     }
 
-    pub fn step(&self) -> &str {
-        &self.step
+    /// The part between the time and the number, such as `DEMO-12-build`.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn n(&self) -> u32 {
@@ -271,7 +298,7 @@ impl TurnId {
 
 impl fmt::Display for TurnId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}-{}", compact(self.at), self.step, self.n)
+        write!(f, "{}-{}-{}", compact(self.at), self.name, self.n)
     }
 }
 
@@ -348,17 +375,24 @@ mod tests {
 
     #[test]
     fn turn_id_has_the_form_of_section_3() {
-        let id = TurnId::new(datetime!(2026-11-16 14:30:00.9 UTC), "build", 1).unwrap();
-        assert_eq!(id.to_string(), "20261116T143000Z-build-1");
+        let key = TicketKey::parse("DEMO-12").unwrap();
+        let id = TurnId::new(datetime!(2026-11-16 14:30:00.9 UTC), &key, "build", 1).unwrap();
+        assert_eq!(id.to_string(), "20261116T143000Z-DEMO-12-build-1");
         assert_eq!(id.at(), datetime!(2026-11-16 14:30:00 UTC));
+        assert_eq!(id.name(), "DEMO-12-build");
     }
 
     #[test]
-    fn turn_id_round_trips_with_a_hyphen_in_the_step() {
-        let id = TurnId::parse("20261116T143000Z-fix-ci-12").unwrap();
-        assert_eq!(id.step(), "fix-ci");
+    fn turn_id_round_trips_with_a_hyphen_in_the_key_and_the_step() {
+        let id = TurnId::parse("20261116T143000Z-DEMO-12-fix-ci-12").unwrap();
+        assert_eq!(id.name(), "DEMO-12-fix-ci");
         assert_eq!(id.n(), 12);
-        assert_eq!(id.to_string(), "20261116T143000Z-fix-ci-12");
+        assert_eq!(id.to_string(), "20261116T143000Z-DEMO-12-fix-ci-12");
+        // The form without a key still parses, so that old ids stay readable.
+        assert_eq!(
+            TurnId::parse("20261116T143000Z-build-1").unwrap().name(),
+            "build"
+        );
     }
 
     #[test]
@@ -377,7 +411,16 @@ mod tests {
         ] {
             assert!(TurnId::parse(bad).is_err(), "{bad} must not parse");
         }
-        assert!(TurnId::new(datetime!(2026-11-16 14:30:00 UTC), "a/b", 1).is_err());
+        let key = TicketKey::parse("DEMO-12").unwrap();
+        assert!(TurnId::new(datetime!(2026-11-16 14:30:00 UTC), &key, "a/b", 1).is_err());
+    }
+
+    #[test]
+    fn reserved_keys_ignore_case() {
+        for key in ["curator", "eval", "CURATOR", "Eval"] {
+            assert!(TicketKey::parse(key).unwrap().is_reserved(), "{key}");
+        }
+        assert!(!TicketKey::parse("DEMO-12").unwrap().is_reserved());
     }
 
     #[test]
@@ -392,13 +435,14 @@ mod tests {
     fn turn_paths_follow_section_3() {
         let paths = Paths::new("/v");
         let key = TicketKey::parse("DEMO-12").unwrap();
-        let id = TurnId::parse("20261116T143000Z-build-1").unwrap();
+        let id = TurnId::parse("20261116T143000Z-DEMO-12-build-1").unwrap();
         let turn = paths.turn(&key, &id);
         assert_eq!(
             turn.dir,
-            Path::new("/v/tickets/DEMO-12/turns/20261116T143000Z-build-1")
+            Path::new("/v/tickets/DEMO-12/turns/20261116T143000Z-DEMO-12-build-1")
         );
         assert_eq!(turn.status, turn.dir.join("turn.json"));
+        assert_eq!(turn.settings, turn.dir.join("settings.json"));
         assert_eq!(turn.inbox_sent, turn.dir.join("inbox/sent"));
         assert_eq!(
             paths.sandbox_settings(TurnKind::Reader),

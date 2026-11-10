@@ -38,6 +38,7 @@ pub struct Config {
     pub caps: Caps,
     pub judge: Judge,
     pub curator: Curator,
+    pub sandbox: Sandbox,
     pub gates: Gates,
     /// Verb -> mode. Only `vision promote` and `vision demote` change them.
     pub modes: BTreeMap<String, Mode>,
@@ -63,6 +64,7 @@ impl Default for Config {
             caps: Caps::default(),
             judge: Judge::default(),
             curator: Curator::default(),
+            sandbox: Sandbox::default(),
             gates: Gates::default(),
             modes: BTreeMap::new(),
             secrets: BTreeMap::new(),
@@ -237,6 +239,26 @@ pub struct Curator {
 impl Default for Curator {
     fn default() -> Curator {
         Curator { replay: 20 }
+    }
+}
+
+/// What a worker session can reach, next to its clone (section 4).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sandbox {
+    /// More folders that it can read, such as a toolchain folder. `~` is allowed.
+    pub allow_read: Vec<String>,
+    pub allow_domains: Vec<String>,
+    pub allow_unix_sockets: Vec<String>,
+}
+
+impl Default for Sandbox {
+    fn default() -> Sandbox {
+        Sandbox {
+            allow_read: Vec::new(),
+            allow_domains: vec!["localhost".into(), "127.0.0.1".into()],
+            allow_unix_sockets: Vec::new(),
+        }
     }
 }
 
@@ -440,6 +462,8 @@ mod tests {
             .always_ask
             .contains(&"external-fact".to_string()));
         assert_eq!(config.gates.max_diff_lines, 3000);
+        assert_eq!(config.sandbox.allow_domains, ["localhost", "127.0.0.1"]);
+        assert!(config.sandbox.allow_read.is_empty());
     }
 
     #[test]
