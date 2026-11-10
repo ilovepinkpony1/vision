@@ -1,0 +1,363 @@
+# The adapter for Jira Cloud and GitHub (design sections 11 and 12).
+#
+# It reads tickets from Jira Cloud (REST v3), pushes the branch of a ticket and opens a draft pull
+# request on GitHub, starts and reads GitHub Actions runs, merges a commit into the branch of a
+# staging env, and reads and answers review comments. The scripts are Python 3.9+ with the
+# standard library only. Each HTTP call has a time limit; a token goes only over https.
+#
+# ---------------------------------------------------------------------------------------------
+# The [adapter] table of config.toml. A key with no default is needed by the calls that name it;
+# such a call fails with a text that names the key.
+#
+#   jira_url               The Jira site, such as "https://example.atlassian.net".
+#   jira_user              The email of the Jira account of JIRA_TOKEN.
+#   queue_jql              The JQL of the queue, such as
+#                          "project = DEMO AND status = \"To Do\" ORDER BY rank".
+#   queue_limit            The most issues that the queue reads. Default 100.
+#   github_repo            "owner/name", such as "acme/widgets".
+#   github_api             The REST address. Default "https://api.github.com".
+#   git_remote_url         The address that git.push pushes to. Default
+#                          "https://github.com/<github_repo>.git" when github_api is the default.
+#                          It must be https, or a local path (for tests).
+#   base_branch            The branch that pull requests go into. Default "main". Keep it equal
+#                          to the branch of `base` below.
+#   ci_workflow            The file name of the CI workflow, such as "ci.yml". It needs the
+#                          trigger workflow_dispatch, so that ci.run can start it.
+#   ci_find_seconds        How long ci.run looks for the new run before it answers uncertain.
+#                          Default 20. Keep it well below the timeout of ci.run.
+#   ci_poll_seconds        The pause between two looks. Default 3.
+#   approvers              The GitHub logins whose approval counts. Default []: each reviewer
+#                          who is not in own_logins counts.
+#   approvals_needed       The approvals that make review.state "approved". Default 1.
+#   own_logins             The logins of the person and of the bot. A thread whose last comment
+#                          is from one of them does not wait. review.reply needs this key.
+#   statuses               A table from a role to the status name of the project, such as
+#                          { in_progress = "In Progress", in_review = "In Review" }. tracker.move
+#                          takes the role. The steps below use in_progress and in_review.
+#   envs                   The staging envs: [{ name = "staging", branch = "staging" }]. observe
+#                          tells for each one whether its branch holds the head; deploy merges
+#                          into its branch. Default [].
+#   test_command           The command of the proof. It runs with one test file as its last
+#                          argument: `sh -c '<test_command> "$@"' sh <file>`, in a plain
+#                          environment with no secret, such as "python3 -m pytest -q".
+#   test_glob              The test files: a glob or a list of globs, such as
+#                          ["tests/**/test_*.py"]. `**/` is any number of folders.
+#   test_timeout           Seconds for one test run. Default 600.
+#   setup_command          Optional. A shell command that runs in the temporary worktree of the
+#                          base commit before its tests, such as a link to the dependencies of
+#                          the clone ($VISION_CLONE names the clone). Default: none.
+#   lint_command           Optional. Runs with the changed files as its arguments. Default: none.
+#   app_start_command      The shell command that starts the app of the clone for QA.
+#   app_health_url         The address that answers when the app is up, such as
+#                          "http://localhost:3000/health".
+#   app_url                The address that the tester opens. Default: the scheme, host, and
+#                          port of app_health_url.
+#   app_start_timeout      Seconds that app-start waits for app_health_url. Default 120.
+#   second_review_command  Optional. A command that reviews the diff. It gets the range
+#                          "<base>..<head>" as its last argument and prints its findings.
+#   second_review_timeout  Seconds for it. Default 1100.
+#   log_tail_kb            The kilobytes that ci-log keeps of the end of each failed job log.
+#                          Default 64.
+#   http_timeout           Seconds for one HTTP call. Default 30.
+#
+# The secrets of [secrets] in config.toml. The executor gives them to bin/observe and bin/act,
+# and to the jobs ci-log and comments. A child process that runs code of the project never gets
+# one. A token never goes into a file, a remote address, or the git configuration of a clone:
+# git.push gives FORGE_TOKEN to one git call as a header for git_remote_url only.
+#
+#   JIRA_TOKEN   An API token of the Jira account jira_user: read and edit the issues of the
+#                project, and move them.
+#   FORGE_TOKEN  A GitHub token for pushes, runs, merges, replies, and review requests.
+#   PR_TOKEN     Optional. A token of the person, used only to open the draft pull request, so
+#                that the person is its author. FORGE_TOKEN opens it when PR_TOKEN is missing.
+#
+# Such as:
+#   [secrets]
+#   JIRA_TOKEN  = { cmd = "security find-generic-password -s vision-jira -w" }
+#   FORGE_TOKEN = { cmd = "/path/to/adapters/jira-github/bin/app-token --app-id 123 --installation-id 456 --key-file ~/.keys/app.pem" }
+#
+# bin/app-token prints an installation token of a GitHub App (see `bin/app-token --help`).
+#
+# ---------------------------------------------------------------------------------------------
+# The path of a ticket. A turn step cannot branch on its result, so a wait step decides each
+# fork from a fact of observe:
+#
+#   refine -> plan -> plan-ready -> build -> review -> ci
+#   ci:        green -> qa, red -> ci-rerun (the failed jobs run once more)
+#   ci-rerun:  green -> qa, red -> fix-ci -> ci
+#   qa -> fix-qa -> qa-check
+#   qa-check:  the CI state of the head. green (fix-qa made no commit) -> ready;
+#              running or none (a new commit) -> ci, which leads to a new QA; red -> fix-ci
+#   ready:     the person marks the pull request ready -> in-review
+#   in-review: review.state approved -> ready-to-merge, changes or comments -> comments,
+#              merged -> done
+#   comments -> ci-review: a commit of the comments goes through CI again; green -> in-review,
+#              red -> fix-ci
+#   ready-to-merge: merged -> done, changes or comments -> comments
+#
+# Each turn step of a loop has a cap: fix-ci (ci_fix), qa and fix-qa (qa_fix), comments
+# (comments), review (review_rounds).
+#
+# ---------------------------------------------------------------------------------------------
+# A project with staging envs writes its own adapter.toml in $VISION_HOME/adapters/<name>/,
+# with `scripts = "<the path of this folder>"`, so that it uses these scripts. It copies the
+# steps below and adds two steps for each env, such as staging, with
+# envs = [{ name = "staging", branch = "staging" }] in the [adapter] table:
+#
+#   [[step]]                      # qa-check then moves on green to deploy-staging
+#   id = "deploy-staging"
+#   kind = "wait"
+#   start = [{ verb = "deploy", args = { env = "staging" } }]
+#   watch = "envs.staging.holds"
+#   on = { "true" = "qa-staging" }
+#
+#   [[step]]
+#   id = "qa-staging"
+#   kind = "turn"
+#   agent = "tester"
+#   turn = "tester"
+#   reads = ["approved-plan.md"]
+#   with = { env = "staging", url = "https://staging.example.com" }
+#   expects = ["doc:qa.md"]
+#   findings = "qa"
+#   cap = "qa_fix"
+#   next = "fix-qa"
+#
+# `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
+# merge happened, not that the env already runs the new code.
+
+name = "jira-github"
+branch = "vision/{key}"
+base = "origin/main"
+
+[[step]]
+id = "refine"
+kind = "turn"
+agent = "scout"
+turn = "reader"
+reads = ["issue.json"]
+expects = ["doc:refine.md", "doc:description.md"]
+after = [{ verb = "tracker.describe", args = { text = "{doc:description.md}", seen = "{doc:issue.json}" } }]
+next = "plan"
+
+[[step]]
+id = "plan"
+kind = "turn"
+agent = "builder"
+turn = "reader"
+reads = ["issue.json", "refine.md", "answers.md"]
+expects = ["doc:plan.md"]
+next = "plan-ready"
+
+[[step]]
+id = "plan-ready"
+kind = "human"
+action = "approve-plan"
+next = "build"
+
+[[step]]
+id = "build"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+before = [{ verb = "tracker.move", args = { status = "in_progress" } }]
+reads = ["approved-plan.md", "refine.md", "answers.md"]
+expects = ["commits", "clean", "doc:pr.md", "job:proof"]
+after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
+next = "review"
+
+[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "worker"
+before = ["job:second-review"]
+reads = ["approved-plan.md", "second-review.md"]
+expects = ["clean", "doc:review.md", "job:proof"]
+after = ["git.push"]
+findings = "review"
+cap = "review_rounds"
+next = "ci"
+
+[[step]]
+id = "ci"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "qa", red = "ci-rerun" }
+every = 60
+
+[[step]]
+id = "ci-rerun"
+kind = "wait"
+start = ["ci.rerun"]
+watch = "ci.state"
+on = { green = "qa", red = "fix-ci" }
+every = 60
+
+[[step]]
+id = "fix-ci"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+before = ["job:ci-log"]
+reads = ["ci-log.txt", "approved-plan.md"]
+expects = ["commits", "clean", "job:proof"]
+after = ["git.push"]
+cap = "ci_fix"
+next = "ci"
+
+[[step]]
+id = "qa"
+kind = "turn"
+agent = "tester"
+turn = "tester"
+before = [{ job = "app-start", args = { env = "local" } }]
+reads = ["approved-plan.md", "app-local.json"]
+with = { env = "local" }
+expects = ["doc:qa.md"]
+findings = "qa"
+cap = "qa_fix"
+next = "fix-qa"
+
+[[step]]
+id = "fix-qa"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+reads = ["qa.md", "approved-plan.md"]
+with = { env = "local" }
+expects = ["clean", "doc:fix-notes.md"]
+after = ["git.push"]
+cap = "qa_fix"
+next = "qa-check"
+
+[[step]]
+id = "qa-check"
+kind = "wait"
+watch = "ci.state"
+on = { green = "ready", running = "ci", none = "ci", red = "fix-ci" }
+every = 30
+
+[[step]]
+id = "ready"
+kind = "wait"
+start = [{ verb = "tracker.move", args = { status = "in_review" } }]
+watch = "pr.draft"
+on = { "false" = "in-review" }
+every = 120
+
+[[step]]
+id = "in-review"
+kind = "wait"
+watch = "review.state"
+on = { approved = "ready-to-merge", changes = "comments", comments = "comments", merged = "done" }
+every = 120
+
+[[step]]
+id = "comments"
+kind = "turn"
+agent = "shepherd"
+turn = "worker"
+before = ["job:comments"]
+reads = ["comments.json", "approved-plan.md"]
+expects = ["clean", "doc:verdicts.json"]
+after = [
+  "git.push",
+  { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } },
+  "review.rerequest",
+]
+cap = "comments"
+next = "ci-review"
+
+[[step]]
+id = "ci-review"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "in-review", red = "fix-ci" }
+every = 60
+
+[[step]]
+id = "ready-to-merge"
+kind = "wait"
+watch = "review.state"
+on = { merged = "done", changes = "comments", comments = "comments" }
+every = 120
+
+[[step]]
+id = "done"
+kind = "end"
+
+# The verbs. A verb with `leaves` sends text or code out, so the gates of the core run first.
+
+[verbs."tracker.describe"]
+mode = "auto"
+leaves = true
+
+[verbs."tracker.move"]
+mode = "ask"
+
+[verbs."git.push"]
+mode = "auto"
+leaves = true
+timeout = 600
+
+[verbs."pr.open"]
+mode = "auto"
+leaves = true
+
+[verbs."ci.run"]
+mode = "auto"
+timeout = 120
+
+[verbs."ci.rerun"]
+mode = "auto"
+timeout = 120
+
+[verbs.deploy]
+mode = "ask"
+leaves = true
+timeout = 120
+
+[verbs."review.reply"]
+mode = "ask"
+leaves = true
+
+[verbs."review.rerequest"]
+mode = "ask"
+
+# The read verbs that a turn can ask for. Each answer carries its result as a document.
+
+[verbs."jira.issue"]
+read = true
+
+[verbs."jira.search"]
+read = true
+
+[verbs."github.pr"]
+read = true
+
+[verbs."ci.log"]
+read = true
+timeout = 180
+
+# The jobs. A job gets no secret, because a job can run code that an agent wrote. Only ci-log
+# and comments set `secrets = true`: they only read GitHub, and they run no code of the project.
+
+[jobs.proof]
+timeout = 3600
+
+[jobs.app-start]
+timeout = 300
+
+[jobs.second-review]
+timeout = 1200
+
+[jobs.comments]
+timeout = 120
+secrets = true
+
+[jobs.ci-log]
+timeout = 300
+secrets = true
