@@ -114,6 +114,78 @@ fn evidence_key(doc: &Doc) -> Vec<String> {
     }
 }
 
+/// The change with each item of `evidence` cut down to the decision id that it starts with.
+/// A real Curator session wrote `D-0001 (DEMO-7): the report export is CSV` for an item,
+/// and the id is all that the check needs. An item that starts with no id stays as it is,
+/// so that the check names it.
+pub fn clean_evidence(change: &CuratorChange) -> CuratorChange {
+    let mut out = change.clone();
+    out.evidence = change
+        .evidence
+        .iter()
+        .map(|item| leading_decision_id(item).unwrap_or_else(|| item.trim().to_string()))
+        .collect();
+    out
+}
+
+/// The change as the check and the store must see it. A real Curator session gives a looser
+/// text than the format asks for, so this step repairs what has one safe repair: the last line
+/// end of the file text, the evidence items, and the keys of a new principle.
+pub fn tidy(change: &CuratorChange) -> CuratorChange {
+    complete_new_principle(&clean_evidence(&end_with_newline(change)))
+}
+
+/// The change with a line end after the last line of its file text.
+pub fn end_with_newline(change: &CuratorChange) -> CuratorChange {
+    let mut out = change.clone();
+    if let Some(content) = out.content.as_mut() {
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+    }
+    out
+}
+
+/// The change with the two front matter keys that a real Curator session left out of a new
+/// principle: `agent` gets the value `all`, and `kind` gets `null`. Each key that the Curator
+/// wrote stays. Each other change, and content that does not parse, stays as it is.
+pub fn complete_new_principle(change: &CuratorChange) -> CuratorChange {
+    let mut out = change.clone();
+    let new =
+        matches!(change.op, Op::Add | Op::Merge) && change.path.as_deref().is_some_and(is_new_path);
+    let Some(Ok(mut doc)) = change.content.as_deref().filter(|_| new).map(Doc::parse) else {
+        return out;
+    };
+    let mut changed = false;
+    if doc.get("agent").is_none() {
+        doc.set("agent", Value::str("all"));
+        changed = true;
+    }
+    if doc.get("kind").is_none() {
+        doc.set("kind", Value::null());
+        changed = true;
+    }
+    if changed {
+        out.content = Some(doc.to_text());
+    }
+    out
+}
+
+/// `D-0001` from `D-0001 (DEMO-7): ...`, or `None` if the text does not start with a decision id.
+fn leading_decision_id(item: &str) -> Option<String> {
+    let text = item.trim_start().trim_start_matches(['`', '[', '(']);
+    let rest = text.strip_prefix("D-")?;
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    // The id must end there: `D-0001x` is not an id with more text.
+    match rest[digits..].chars().next() {
+        Some(next) if next.is_alphanumeric() || next == '-' => None,
+        _ => Some(format!("D-{}", &rest[..digits])),
+    }
+}
+
 /// The change with each decision of its `evidence` also in the `evidence` key of the new
 /// principle that it writes (an add, or a merge into a new file), so that the file keeps its
 /// evidence. Each other change, and content that does not parse, stays as it is.
@@ -281,6 +353,67 @@ mod tests {
         format!(
             "---\nid: {id}\nat: 2026-11-16T14:32:00Z\nby: {by}\nbasis: {basis}\nticket: {ticket}\nkind: product\narea: [exports]\nstatus: {status}\nsources: []\nsupersedes: null\n---\n## Question\nMust the export be CSV?\n\n## Answer\nCSV\n\n## Why\nFinance.\n"
         )
+    }
+
+    #[test]
+    fn an_evidence_item_is_cut_down_to_its_decision_id() {
+        let change = CuratorChange {
+            evidence: vec![
+                "D-0001 (DEMO-7): the report export is CSV. Why: finance.".into(),
+                " `D-0021`".into(),
+                "D-0003".into(),
+                "the decision about dates".into(),
+                "D-12x".into(),
+            ],
+            ..add(&[])
+        };
+        assert_eq!(
+            clean_evidence(&change).evidence,
+            [
+                "D-0001",
+                "D-0021",
+                "D-0003",
+                "the decision about dates",
+                "D-12x"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_text_gets_its_last_line_end() {
+        let change = CuratorChange {
+            content: Some(principle("NEW-1", "D-0001").trim_end().to_string()),
+            ..add(&[])
+        };
+        assert!(!change.content.as_deref().unwrap().ends_with('\n'));
+        let text = tidy(&change).content.unwrap();
+        assert!(text.ends_with("## Not when\n"), "{text:?}");
+        // A text that ends with a line end stays the same.
+        let full = CuratorChange {
+            content: Some(principle("NEW-1", "D-0001")),
+            ..add(&[])
+        };
+        assert_eq!(end_with_newline(&full).content, full.content);
+        assert_eq!(tidy(&full).content, full.content);
+    }
+
+    #[test]
+    fn a_new_principle_gets_the_keys_that_the_curator_left_out() {
+        let bare =
+            "---\nid: NEW-1\nstatus: candidate\n---\n## Rule\nR\n\n## Because\nB\n\n## Not when\n";
+        let change = CuratorChange {
+            content: Some(bare.into()),
+            ..add(&[])
+        };
+        let text = complete_new_principle(&change).content.unwrap();
+        assert!(text.contains("agent: all\n"), "{text}");
+        assert!(text.contains("kind: null\n"), "{text}");
+        // A key that the Curator wrote stays.
+        let full = CuratorChange {
+            content: Some(principle("NEW-1", "D-0001")),
+            ..add(&[])
+        };
+        assert_eq!(complete_new_principle(&full).content, full.content);
     }
 
     fn principle(id: &str, evidence: &str) -> String {

@@ -538,7 +538,7 @@ Only people teach the memory. A decision with the writer `judge` never counts as
 
 ### 9.4 The Curator
 
-The Curator is a reader turn. It runs after each merged ticket and one time each week. `vision curate` starts it by hand. It reads these signals from the ledger and the memory:
+The Curator is a reader turn. It runs after each merged ticket and one time each week. `vision curate` starts it by hand. For a merged pull request, the pipeline records the event `ticket-merged`, and a later tick starts the turn. Two Curator turns never run at the same time. The Curator reads these signals from the ledger and the memory:
 
 - The new decisions, and the decisions with no reason.
 - Each proposal of the Judge that the person changed, and each correction.
@@ -546,6 +546,9 @@ The Curator is a reader turn. It runs after each merged ticket and one time each
 - The cards that the person marked as needless.
 - The review comments of people on the pull requests, and the verdict of each one.
 - Two active files that disagree.
+- Each change of an earlier proposal that the person accepted or rejected, with the reason of the person.
+
+The ledger keeps the last signal as `human` rows of the kinds `proposal-accept` and `proposal-reject`.
 
 Its output is a list of changes: a new candidate, an edit, a merge of two files, a retirement, or a question for the person. `agents/curator.schema.json` is the schema. Each change has an `op` and a `reason`:
 
@@ -555,10 +558,18 @@ Its output is a list of changes: a new candidate, an edit, a merge of two files,
 - `retire`: `target` is the id of the file. The runner sets its status to `retired`.
 - `question`: `question` is the text for the person.
 
+For a new principle, the runner sets `id`, `status` to `candidate`, and `by` to `curator`. A real session gives a looser text than the format asks for. The runner repairs three faults before it tests a change:
+
+- An evidence item with text after its id keeps only the id.
+- A new principle with no `agent` key gets `agent: all`. A new principle with no `kind` key gets `kind: null`.
+- A file text with no last line end gets one.
+
+The runner drops each change that fails the test, and `vision curate` prints the reason.
+
 `evidence` lists the decision ids that support a change. The runner writes the changes to a branch `proposal/<date>-<n>` of the memory repo. Three rules protect the memory:
 
 - No line is lost. Each line that a proposal removes or rewrites goes to `ARCHIVE.md` word for word, with the commit and the reason. The runner tests this in code, and it rejects a proposal that loses a line.
-- A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree. The replay hides the decision file of each answer that it replays, because the Judge has to find that answer again without it.
+- A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree. The replay hides the decision file of each answer that it replays, because the Judge has to find that answer again without it. In the proposed memory, each candidate of the proposal counts as active, so that the replay shows its effect.
 - A person decides. Only a change that the person accepts reaches the main branch.
 
 ## 10. Models

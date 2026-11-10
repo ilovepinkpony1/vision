@@ -681,6 +681,51 @@ fn a_curator_run_with_only_invalid_changes_makes_no_proposal() {
     );
 }
 
+/// The output of a real session is looser than the fixture. Its evidence items carry text after
+/// the id, and its new principle has no `agent` key, no `kind` key, and no last line end.
+#[test]
+fn a_loose_output_of_a_real_session_still_makes_a_valid_principle() {
+    let home = TestHome::new();
+    seed(&home);
+    let content = "---\nid: NEW-1\narea: [exports]\nstatus: candidate\nby: curator\n---\n\
+                   ## Rule\nWhen a report is exported, make sure that it is CSV.\n\n\
+                   ## Because\nThe finance team imports CSV.\n\n\
+                   ## Not when\nA customer asks for a formatted file.";
+    let output = json!({"summary": "One rule for exports.", "changes": [
+        {"op": "add", "path": "principles/NEW-1.md", "content": content,
+         "evidence": ["D-0001 (DEMO-12): the export is CSV. Why: finance.",
+                      "`D-0002` (DEMO-13): the summary export is CSV."],
+         "reason": "Two tickets of the person chose CSV."},
+    ]});
+    curator_scenario(&home, output, 0.0);
+    let run = home.run(&["curate"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout.contains("It proposes 1 change(s)"),
+        "the change was dropped: {run:?}"
+    );
+    assert_eq!(proposals(&home).len(), 1, "{run:?}");
+
+    let run = home.run(&["memory", "review", "--accept", "all"]);
+    run.expect_code(0);
+    // The seed has four principles, so the new one is the fifth.
+    let text = main_file(&home, "principles/P-005.md");
+    for line in [
+        "id: P-005\n",
+        "agent: all\n",
+        "kind: null\n",
+        "status: active\n",
+        "evidence: [D-0001, D-0002]\n",
+    ] {
+        assert!(text.contains(line), "no `{}` in:\n{text}", line.trim_end());
+    }
+    assert!(
+        text.ends_with("## Not when\nA customer asks for a formatted file.\n"),
+        "{text:?}"
+    );
+    home.run(&["memory", "lint"]).expect_code(0);
+}
+
 /// Changes one file of a branch by hand, as a person with git would.
 fn hand_edit_branch(home: &TestHome, branch: &str, path: &str, text: &str) {
     let dir = memory_dir(home);

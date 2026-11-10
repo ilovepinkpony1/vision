@@ -269,6 +269,7 @@ pub fn apply(
             for (i, (value, parsed)) in output.changes.iter().enumerate() {
                 let checked = parsed
                     .clone()
+                    .map(|c| check::tidy(&c))
                     .and_then(|c| check::check(&c, &base).map(|()| c));
                 match checked {
                     Ok(change) => {
