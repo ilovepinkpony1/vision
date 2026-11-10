@@ -38,6 +38,7 @@
           "why": {"type": "string"},
           "evidence": {"type": "string"},
           "kind": {"enum": ["product", "architecture", "scope", "code"]},
+          "area": {"type": "array", "items": {"type": "string"}},
           "topics": {"type": "array", "items": {"type": "string"}}
         }
       }

@@ -358,6 +358,7 @@ Claude Code tests the output of a turn against a JSON schema. `agents/turn.schem
       "recommended": {"type": ["integer", "null"]}, "why": {"type": "string"},
       "evidence": {"type": "string"},
       "kind": {"enum": ["product", "architecture", "scope", "code"]},
+      "area": {"type": "array", "items": {"type": "string"}},
       "topics": {"type": "array", "items": {"type": "string"}}}}},
   "requests": {"type": "array", "items": {"type": "object", "required": ["verb", "args"],
     "properties": {"verb": {"type": "string"}, "args": {"type": "object"}}}},
@@ -378,7 +379,7 @@ A turn that ends with no valid result object gets one resume with the message `c
 
 ### 8.1 The card
 
-An agent never asks in the text of its answer. It ends its turn with cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches.
+An agent never asks in the text of its answer. It ends its turn with cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches. `area` names the part of the product in one to three nouns, and the decision file keeps it.
 
 An agent asks only what the code, the files, the memory, and a command cannot answer.
 
