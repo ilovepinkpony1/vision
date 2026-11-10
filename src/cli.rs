@@ -385,7 +385,7 @@ impl MemoryArgs {
             Some(MemoryCommand::Retire { .. }) => "memory retire",
             Some(MemoryCommand::Lint { .. }) => "memory lint",
             Some(MemoryCommand::Import { .. }) => "memory import",
-            Some(MemoryCommand::Review) => "memory review",
+            Some(MemoryCommand::Review(_)) => "memory review",
             Some(MemoryCommand::Log { .. }) => "memory log",
             Some(MemoryCommand::Revert { .. }) => "memory revert",
         }
@@ -439,7 +439,7 @@ pub enum MemoryCommand {
     },
 
     /// Accept, edit, or reject each change of a proposal
-    Review,
+    Review(ReviewArgs),
 
     /// Show the history of the memory
     Log {
@@ -453,6 +453,48 @@ pub enum MemoryCommand {
         /// The commit to undo
         commit: String,
     },
+}
+
+/// `vision memory review [--json] [--proposal NAME] [--accept N|all | --reject N|all [--why TEXT]]`.
+/// Without `--accept` and `--reject`, a terminal gets the interactive review.
+#[derive(Debug, Args)]
+pub struct ReviewArgs {
+    /// Print the open proposals as JSON, and change nothing
+    #[arg(long)]
+    pub json: bool,
+    /// The proposal, such as proposal/2026-11-16-1. Without it: each open proposal
+    #[arg(long, value_name = "NAME")]
+    pub proposal: Option<String>,
+    /// Accept change N of the proposal, or each open change with `all`
+    #[arg(long, value_name = "N|all", value_parser = parse_pick, conflicts_with_all = ["reject", "json"])]
+    pub accept: Option<Pick>,
+    /// Reject change N of the proposal, or each open change with `all`
+    #[arg(long, value_name = "N|all", value_parser = parse_pick, conflicts_with = "json")]
+    pub reject: Option<Pick>,
+    /// Why you reject it. The next run of the Curator reads it
+    #[arg(long, value_name = "TEXT", requires = "reject")]
+    pub why: Option<String>,
+}
+
+/// One change of a proposal by its number, or each open change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pick {
+    All,
+    /// The number of the change, from 1.
+    Change(usize),
+}
+
+fn parse_pick(text: &str) -> Result<Pick, String> {
+    let text = text.trim();
+    if text.eq_ignore_ascii_case("all") {
+        return Ok(Pick::All);
+    }
+    match text.parse::<usize>() {
+        Ok(n) if n > 0 => Ok(Pick::Change(n)),
+        _ => Err(format!(
+            "`{text}` is not the number of a change (from 1) or `all`"
+        )),
+    }
 }
 
 /// The kind of a decision or a principle.
@@ -645,6 +687,18 @@ mod tests {
             &["memory", "lint"],
             &["memory", "import", "answers.jsonl"],
             &["memory", "review"],
+            &["memory", "review", "--json"],
+            &[
+                "memory",
+                "review",
+                "--proposal",
+                "proposal/2026-11-16-1",
+                "--accept",
+                "all",
+            ],
+            &["memory", "review", "--accept", "2"],
+            &["memory", "review", "--reject", "3", "--why", "too wide"],
+            &["memory", "review", "--reject", "all"],
             &["memory", "log"],
             &["memory", "revert", "abc123"],
             &["curate"],
@@ -688,6 +742,11 @@ mod tests {
             &["model", "eval", "judge"],
             &["turn-run", "build-1"],
             &["memory", "show", "D-1", "--kind", "code"],
+            &["memory", "review", "--accept", "0"],
+            &["memory", "review", "--accept", "some"],
+            &["memory", "review", "--why", "W"],
+            &["memory", "review", "--accept", "1", "--reject", "2"],
+            &["memory", "review", "--json", "--accept", "1"],
         ];
         for line in lines {
             assert!(
@@ -710,6 +769,38 @@ mod tests {
             panic!("not memory")
         };
         assert_eq!(args.query.as_deref(), Some("exports"));
+    }
+
+    #[test]
+    fn review_takes_a_number_or_all() {
+        let cli = parse(&[
+            "memory",
+            "review",
+            "--accept",
+            "ALL",
+            "--proposal",
+            "proposal/x",
+        ])
+        .unwrap();
+        let Command::Memory(MemoryArgs {
+            command: Some(MemoryCommand::Review(args)),
+            ..
+        }) = cli.command
+        else {
+            panic!("not memory review")
+        };
+        assert_eq!(args.accept, Some(Pick::All));
+        assert_eq!(args.proposal.as_deref(), Some("proposal/x"));
+        let cli = parse(&["memory", "review", "--reject", "3", "--why", "W"]).unwrap();
+        let Command::Memory(MemoryArgs {
+            command: Some(MemoryCommand::Review(args)),
+            ..
+        }) = cli.command
+        else {
+            panic!("not memory review")
+        };
+        assert_eq!(args.reject, Some(Pick::Change(3)));
+        assert_eq!(args.why.as_deref(), Some("W"));
     }
 
     #[test]

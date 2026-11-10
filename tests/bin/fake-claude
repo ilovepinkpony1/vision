@@ -30,6 +30,12 @@ with "do":
   facts        report the facts file of the turn, such as its `message`.
   partial      write one event in two parts with a pause between, to test partial lines.
 
+Any step can hold "when": a list of cases, each with "set" (keys that replace those of the
+step) and the conditions "model" (the --model of the start line) and "file" (a path in the
+folder of `memory` of the facts, which must exist, and hold "contains" when that is given).
+The first case whose conditions hold changes the step. So one scenario can answer one way
+for one model, or for a memory that holds a file, and another way for the rest.
+
 After the last step it acts as Claude Code does: it echoes each new input line, answers it, and
 repeats the last result, until its input closes. Without -p it acts as the interactive program:
 it prints one line about the session that it resumes and exits.
@@ -160,6 +166,28 @@ def load_steps(first_text):
     return turns[min(n, len(turns) - 1)]
 
 
+def resolve(step, opts, facts):
+    """The step with the "set" of its first "when" case whose conditions hold."""
+    for case in step.get("when", []):
+        if "model" in case and case["model"] != opts.get("--model"):
+            continue
+        if "file" in case:
+            base = (facts or {}).get("memory") or ""
+            path = os.path.join(base, case["file"])
+            try:
+                with open(path) as f:
+                    text = f.read()
+            except OSError:
+                continue
+            if "contains" in case and case["contains"] not in text:
+                continue
+        merged = dict(step)
+        merged.pop("when", None)
+        merged.update(case.get("set", {}))
+        return merged
+    return step
+
+
 def result_event(step, session):
     usage = {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0}
     usage.update(step.get("usage", {}))
@@ -197,7 +225,9 @@ def main():
     first_text = message_text(first)
     echo(first_text)
     last_result = None
+    facts = read_facts(first_text)
     for step in load_steps(first_text):
+        step = resolve(step, opts, facts)
         kind = step["do"]
         if kind == "init":
             emit({

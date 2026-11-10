@@ -17,6 +17,10 @@
 //! named in [`Built::skipped`]. Two changes of one file are refused, so that each change can be
 //! accepted alone.
 //!
+//! [`Memory::edit_change`] replaces the text of the file of one open change on its branch, after
+//! the lint and the rule "no line is lost", so that the person can edit a change and then
+//! accept it.
+//!
 //! [`Memory::accept_change`] brings one change to `main` as one commit of the person: an
 //! accepted candidate becomes `active`, and its `by` becomes the person. It refuses when the
 //! proposal loses a line ([`super::archive::lost_lines`]) or when `main` changed a file of the
@@ -38,7 +42,7 @@ use super::lint::lint;
 use super::model::{
     MemoryId, PrincipleId, Status, Writer, ARCHIVE, DECISIONS, PRINCIPLES, RETIRED_SECTION,
 };
-use super::store::{author_of, Change, Memory};
+use super::store::{author_of, Change, Invalid, Memory};
 use crate::util::fs::{atomic_write, ensure_dir};
 use crate::util::git::{self, Author};
 use crate::util::time;
@@ -486,6 +490,87 @@ impl Memory {
         Ok(accepted)
     }
 
+    /// Replaces the text of the file of one open change on its proposal branch, such as after
+    /// the person edited it in `vision memory review`, in one commit of the person. The text
+    /// must pass the lint (an [`Invalid`] error), and the rule "no line is lost" must still hold:
+    /// the archive entry of the change is written again, from the text at the start of the
+    /// proposal to the new text. `main` does not change. Gives false when the text is the same.
+    pub fn edit_change(&self, name: &str, n: usize, text: &str) -> Result<bool> {
+        let _lock = self.lock()?;
+        self.check_main()?;
+        let tip = self.branch_tip(name)?;
+        let mut file = self.read_proposal_file(&tip)?;
+        let index = change_index(&file, n)?;
+        let change = file.changes[index].clone();
+        let Some(path) = change.path.clone().filter(|p| change.files.contains(p)) else {
+            bail!("change {n} of {name} writes no file, so there is nothing to edit");
+        };
+        let base = self.merge_base(&tip)?;
+        let mut tree = Worktree::add(self, name, None)?;
+        let mut files = read_tree(&tree.dir)?;
+        if files.get(&path).map(String::as_str) == Some(text) {
+            return Ok(false);
+        }
+        files.insert(path.clone(), text.to_string());
+        let only: BTreeSet<String> = [path.clone()].into();
+        let problems = lint(&files, Some(&only));
+        if !problems.is_empty() {
+            return Err(Invalid { problems }.into());
+        }
+        let mut removed = Vec::new();
+        for p in &change.files {
+            let old = self.show(&base, p)?.unwrap_or_default();
+            let new = files.get(p).cloned().unwrap_or_default();
+            removed.push((p.clone(), removed_lines(&old, &new)));
+        }
+        let title = entry_title(name, n);
+        let entry = removed
+            .iter()
+            .any(|(_, lines)| !lines.is_empty())
+            .then(|| render_entry(&title, &change.describe(), &base, &change.reason, &removed));
+        let archive = files.get(ARCHIVE).cloned().unwrap_or_default();
+        files.insert(
+            ARCHIVE.to_string(),
+            replace_entry(&archive, &title, entry.as_deref()),
+        );
+        let changed = git::run(
+            self.dir(),
+            &["diff", "--name-only", "--no-renames", &base, &tip],
+        )?;
+        let mut paths: BTreeSet<String> = changed.lines().map(str::to_string).collect();
+        paths.insert(path.clone());
+        paths.insert(ARCHIVE.to_string());
+        paths.remove(PROPOSAL_FILE);
+        let mut before = BTreeMap::new();
+        let mut after = BTreeMap::new();
+        for p in &paths {
+            if let Some(old) = self.show(&base, p)? {
+                before.insert(p.clone(), old);
+            }
+            if let Some(new) = files.get(p) {
+                after.insert(p.clone(), new.clone());
+            }
+        }
+        let lost = lost_lines(&before, &after);
+        if !lost.is_empty() {
+            let lines: Vec<String> = lost.iter().map(|l| format!("  {l}")).collect();
+            bail!(
+                "the edited text of change {n} would lose lines, so nothing changed:\n{}",
+                lines.join("\n")
+            );
+        }
+        for p in [&path, &ARCHIVE.to_string()] {
+            if let Some(new) = files.get(p) {
+                atomic_write(&tree.dir.join(p), new.as_bytes())?;
+            }
+        }
+        file.changes[index].note = Some(format!("edited by {}", self.person().name()));
+        write_proposal_file(&tree.dir, &file)?;
+        let person = self.person().clone();
+        tree.commit(&format!("Edit change {n}"), &person)?;
+        Ok(true)
+    }
+
     /// Accepts each open change of a proposal, in order. Gives the result of each one: a change
     /// that fails does not stop the next.
     pub fn accept_all(&self, name: &str) -> Result<Vec<(usize, Result<Accepted, String>)>> {
@@ -586,12 +671,33 @@ impl Memory {
             date.day()
         );
         let prefix = format!("{PROPOSAL_PREFIX}{day}-");
-        let max = self
+        let number = |name: &str| name.trim().strip_prefix(&prefix)?.parse::<u32>().ok();
+        let mut max = self
             .proposal_branches()?
             .iter()
-            .filter_map(|b| b.strip_prefix(&prefix)?.parse::<u32>().ok())
+            .filter_map(|b| number(b))
             .max()
             .unwrap_or(0);
+        // A closed proposal leaves its name in `main`: in the last line of each accepted change
+        // and in the archive. A new proposal never takes such a name, so that its changes never
+        // match the commits and the archive entries of the old one.
+        let log = git::run(
+            self.dir(),
+            &[
+                "log",
+                "main",
+                "--format=%B",
+                &format!("--grep=^Proposal: {prefix}"),
+            ],
+        )?;
+        let archive = self.read_path(ARCHIVE)?.unwrap_or_default();
+        let named = log
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("Proposal: "))
+            .chain(archive.lines().filter_map(|l| l.strip_prefix("## ")))
+            .filter_map(|l| l.split(" change ").next())
+            .filter_map(number);
+        max = named.fold(max, u32::max);
         Ok(format!("{prefix}{}", max + 1))
     }
 
@@ -883,6 +989,40 @@ fn entry_title(name: &str, n: usize) -> String {
     format!("{name} change {n}")
 }
 
+/// The archive with the entry of this title replaced by `entry`, or removed when `entry` is
+/// `None`. An archive with no such entry gets `entry` at its end. Each other line stays as it is.
+fn replace_entry(archive: &str, title: &str, entry: Option<&str>) -> String {
+    let heading = format!("## {title}");
+    let bare = |line: &str| line.strip_suffix('\r').unwrap_or(line).to_string();
+    let lines: Vec<&str> = archive.split('\n').collect();
+    let Some(start) = lines.iter().position(|l| bare(l).trim_end() == heading) else {
+        return match entry {
+            Some(entry) => append_entry(archive, entry),
+            None => archive.to_string(),
+        };
+    };
+    let end = lines[start + 1..]
+        .iter()
+        .position(|l| bare(l).starts_with("## "))
+        .map_or(lines.len(), |i| start + 1 + i);
+    let mut parts: Vec<String> = Vec::new();
+    for part in [
+        lines[..start].join("\n"),
+        entry.unwrap_or("").to_string(),
+        lines[end..].join("\n"),
+    ] {
+        let part = part.trim_end_matches(['\n', '\r']);
+        if !part.trim().is_empty() {
+            parts.push(part.to_string());
+        }
+    }
+    let mut out = parts.join("\n\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
 /// The last line of the commit message of an accepted change.
 fn proposal_trailer(name: &str, n: usize) -> String {
     format!("Proposal: {name} change {n}")
@@ -1142,6 +1282,29 @@ mod tests {
             r#"{"op": "add", "reason": "r", "colour": 1}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn an_archive_entry_is_replaced_or_removed_and_the_rest_stays() {
+        let archive =
+            "## p change 1\n\n- Reason: a\n\n> one  \n\n## p change 2\n\n- Reason: b\n\n> two\n";
+        assert_eq!(
+            replace_entry(
+                archive,
+                "p change 1",
+                Some("## p change 1\n\n- Reason: c\n")
+            ),
+            "## p change 1\n\n- Reason: c\n\n## p change 2\n\n- Reason: b\n\n> two\n"
+        );
+        assert_eq!(
+            replace_entry(archive, "p change 2", None),
+            "## p change 1\n\n- Reason: a\n\n> one  \n"
+        );
+        assert_eq!(
+            replace_entry(archive, "p change 3", Some("## p change 3\n")),
+            format!("{}\n\n## p change 3\n", archive.trim_end())
+        );
+        assert_eq!(replace_entry("", "p change 1", None), "");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! The typed queries here are the few that the base needs. A later milestone keeps its own
 //! queries in its own module and uses [`Ledger::conn`].
 
+pub mod curator;
 mod events;
 mod health;
 mod limits;

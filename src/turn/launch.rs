@@ -99,6 +99,9 @@ pub struct LaunchRequest {
     /// The turn that this turn retries with `continue`. Only the collector sets it.
     #[serde(default)]
     pub retry_of: Option<String>,
+    /// True when a failed turn gets no automatic resume, such as a replay turn that nobody reads.
+    #[serde(default)]
+    pub no_retry: bool,
 }
 
 impl LaunchRequest {
@@ -127,6 +130,7 @@ impl LaunchRequest {
             effort: None,
             time_limit_secs: None,
             retry_of: None,
+            no_retry: false,
         }
     }
 }

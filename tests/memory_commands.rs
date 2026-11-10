@@ -500,11 +500,11 @@ fn log_shows_the_history_and_revert_undoes_one_commit() {
 }
 
 #[test]
-fn review_is_not_built_yet_and_a_home_needs_init() {
+fn review_with_no_proposal_says_so_and_a_home_needs_init() {
     let home = Home::init();
     let run = home.run(&["memory", "review"]);
-    run.expect_code(3);
-    assert_eq!(run.stderr, "not built yet: memory review\n");
+    run.expect_code(0);
+    assert_eq!(run.stdout, "Nothing waits for review.\n");
     let fresh = Home::new();
     let run = fresh.run(&["memory"]);
     run.expect_code(1);

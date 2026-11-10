@@ -1,0 +1,53 @@
+{
+  "summary": "Tidy the export rules, and ask about XLSX.",
+  "changes": [
+    {
+      "op": "add",
+      "path": "principles/NEW-1.md",
+      "content": "---\nid: NEW-1\nagent: judge\nkind: product\narea: [exports]\nstatus: candidate\nby: curator\nevidence: [D-0001, D-0002]\nuses: {used: 0, agreed: 0, corrected: 0}\n---\n## Rule\nWhen an export is for the finance team, make sure that it is CSV.\n\n## Because\nThe finance team imports CSV into their tool.\n\n## Not when\nA customer asks for a formatted file.\n",
+      "evidence": [
+        "D-0001",
+        "D-0002"
+      ],
+      "reason": "Two tickets of the person chose CSV for the finance team."
+    },
+    {
+      "op": "edit",
+      "path": "principles/P-001.md",
+      "content": "---\nid: P-001\nagent: judge\nkind: product\narea: [exports]\nstatus: active\nby: user\nevidence: []\nuses: {used: 0, agreed: 0, corrected: 0}\n---\n## Rule\nWhen an internal user exports a report, make sure that the file is CSV.\n\n## Because\nThe finance team imports CSV into their tool.\n\n## Not when\n\n",
+      "reason": "The rule was too wide: it named each user."
+    },
+    {
+      "op": "merge",
+      "path": "principles/P-002.md",
+      "content": "---\nid: P-002\nagent: all\nkind: code\narea: []\nstatus: active\nby: user\nevidence: []\nuses: {used: 0, agreed: 0, corrected: 0}\n---\n## Rule\nWhen a file or a text is written, make sure that it is UTF-8.\n\n## Because\nEach tool of the team reads UTF-8.\n\n## Not when\n\n",
+      "removes": [
+        "principles/P-003.md"
+      ],
+      "reason": "P-002 and P-003 say the same thing."
+    },
+    {
+      "op": "retire",
+      "target": "P-004",
+      "reason": "The person corrected it twice."
+    },
+    {
+      "op": "question",
+      "question": "Do internal users ever need XLSX?",
+      "evidence": [
+        "D-0004"
+      ],
+      "reason": "D-0004 chose CSV for logs but gave no reason."
+    },
+    {
+      "op": "add",
+      "path": "principles/NEW-2.md",
+      "content": "---\nid: NEW-2\nagent: judge\nkind: product\narea: [exports]\nstatus: candidate\nby: curator\nevidence: [D-0001, D-0004]\nuses: {used: 0, agreed: 0, corrected: 0}\n---\n## Rule\nWhen logs are exported, make sure that they are CSV.\n\n## Because\nTwo answers chose CSV.\n\n## Not when\n\n",
+      "evidence": [
+        "D-0001",
+        "D-0004"
+      ],
+      "reason": "Two answers chose CSV for exports."
+    }
+  ]
+}

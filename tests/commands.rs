@@ -10,11 +10,6 @@ fn a_command_that_is_not_built_exits_with_code_3() {
         (&["take", "DEMO-12"], "take"),
         (&["approve-plan", "DEMO-12", "ab12"], "approve-plan"),
         (&["approve", "DEMO-12", "git.push", "9f3e21c"], "approve"),
-        (&["curate"], "curate"),
-        (
-            &["model", "eval", "judge", "--models", "opus"],
-            "model eval",
-        ),
         (&["promote", "git.push"], "promote"),
         (&["report", "--week"], "report"),
     ];
@@ -24,6 +19,18 @@ fn a_command_that_is_not_built_exits_with_code_3() {
         assert_eq!(run.stderr, format!("not built yet: {name}\n"), "{args:?}");
         assert_eq!(run.stdout, "", "{args:?}");
     }
+}
+
+#[test]
+fn model_eval_of_an_agent_other_than_the_judge_is_not_built_yet() {
+    let home = Home::init();
+    let run = home.run(&["model", "eval", "builder", "--models", "opus"]);
+    run.expect_code(3);
+    assert!(
+        run.stderr.starts_with("not built yet: model eval builder"),
+        "{run:?}"
+    );
+    assert_eq!(run.stdout, "");
 }
 
 #[test]

@@ -158,6 +158,7 @@ pub fn replay(ctx: &Ctx, ledger: &Ledger, options: &ReplayOptions) -> Result<Rep
     let mut request = judge::request(config, &input)?;
     request.model = options.model.clone();
     request.effort = options.effort;
+    request.no_retry = true;
     let started = Instant::now();
     let launched = turn::launch(ctx, ledger, &request)?;
 

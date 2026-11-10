@@ -287,6 +287,9 @@ fn no_retry(
     let Some(file) = launch_file else {
         return Some("the turn folder has no launch.json".into());
     };
+    if file.request.no_retry {
+        return Some("the request of the turn asked for no automatic resume".into());
+    }
     if let Some(first) = &file.request.retry_of {
         return Some(format!(
             "the turn already was the automatic resume of {first}, so this is the second failure"

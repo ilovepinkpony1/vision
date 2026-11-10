@@ -11,7 +11,7 @@ use crate::config::Limits;
 use crate::ctx::Ctx;
 use crate::ledger::{Ledger, LimitReading, LimitReadings, TicketRow};
 use crate::util::fs::{atomic_write, read_optional};
-use crate::{executor, pipeline, questions};
+use crate::{curator, executor, pipeline, questions};
 
 /// The version of the snapshot format.
 pub const FORMAT: u32 = 1;
@@ -77,6 +77,8 @@ pub enum NeedKind {
     Operation,
     /// A ticket with the flag "needs you".
     Flag,
+    /// A proposal of the Curator that waits for `vision memory review`.
+    Proposal,
 }
 
 /// The limits of section 4 with the newest reading of each window.
@@ -152,6 +154,7 @@ pub fn collect_needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     let mut needs = questions::needs(ctx, ledger)?;
     needs.extend(pipeline::needs(ctx, ledger)?);
     needs.extend(executor::needs(ctx, ledger)?);
+    needs.extend(curator::needs(ctx, ledger)?);
     Ok(needs)
 }
 

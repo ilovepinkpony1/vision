@@ -1,5 +1,5 @@
 //! The commands of section 9.2: `vision memory [QUERY]`, `show`, `edit`, `teach`, `retire`,
-//! `lint`, `import`, `log`, and `revert`. `review` belongs to the curator milestone.
+//! `lint`, `import`, `log`, and `revert`. `review` is one call into [`crate::curator::review`].
 
 use std::fs;
 use std::path::Path;
@@ -13,7 +13,7 @@ use super::model::{MemoryFile, MemoryId, NewPrinciple, Problem, ALL_AGENTS};
 use super::store::{short, Filter, Invalid, Memory};
 use crate::cli::{MemoryArgs, MemoryCommand};
 use crate::ctx::Ctx;
-use crate::exit::{not_built, Stop};
+use crate::exit::Stop;
 use crate::ledger::memory_use::MemoryUse;
 use crate::models;
 use crate::util::fs::{atomic_write, ensure_dir};
@@ -45,7 +45,7 @@ pub fn run(ctx: &Ctx, args: MemoryArgs) -> Result<()> {
         Some(MemoryCommand::Retire { id, why }) => retire(ctx, &id, &why),
         Some(MemoryCommand::Lint { json }) => lint(ctx, json),
         Some(MemoryCommand::Import { file }) => import(ctx, &file),
-        Some(MemoryCommand::Review) => Err(not_built("memory review")),
+        Some(MemoryCommand::Review(args)) => crate::curator::review(ctx, args),
         Some(MemoryCommand::Log { json }) => log(ctx, json),
         Some(MemoryCommand::Revert { commit }) => revert(ctx, &commit),
     }

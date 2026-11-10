@@ -178,9 +178,12 @@ fn bad_agents_and_models_are_refused() {
     run.expect_code(1);
     assert!(run.stderr.contains("not a model id"), "{run:?}");
     home.run(&["model", "reset", "nobody"]).expect_code(1);
-    let eval = home.run(&["model", "eval", "judge", "--models", "opus,sonnet"]);
+    let eval = home.run(&["model", "eval", "scout", "--models", "opus,sonnet"]);
     eval.expect_code(3);
-    assert_eq!(eval.stderr, "not built yet: model eval\n");
+    assert!(
+        eval.stderr.starts_with("not built yet: model eval scout"),
+        "{eval:?}"
+    );
 }
 
 #[test]

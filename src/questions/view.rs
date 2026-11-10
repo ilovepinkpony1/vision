@@ -203,6 +203,7 @@ fn waiting_cards(ledger: &Ledger) -> Result<Vec<Question>> {
 fn others(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     let mut needs = pipeline::needs(ctx, ledger)?;
     needs.extend(executor::needs(ctx, ledger)?);
+    needs.extend(crate::curator::needs(ctx, ledger)?);
     Ok(needs)
 }
 
@@ -217,6 +218,7 @@ pub(crate) fn command_for(need: &Need) -> String {
         ),
         NeedKind::Operation => format!("vision approve {ticket} {}", need.id),
         NeedKind::Flag => format!("vision log {ticket}, then vision retry {ticket}"),
+        NeedKind::Proposal => format!("vision memory review --proposal {}", need.id),
     }
 }
 
@@ -226,6 +228,7 @@ fn kind_name(kind: NeedKind) -> &'static str {
         NeedKind::Plan => "plan",
         NeedKind::Operation => "operation",
         NeedKind::Flag => "flag",
+        NeedKind::Proposal => "proposal",
     }
 }
 

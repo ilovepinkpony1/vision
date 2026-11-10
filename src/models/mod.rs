@@ -15,7 +15,6 @@ use serde_json::json;
 use crate::cli::{ModelArgs, ModelCommand};
 use crate::config::{AgentPin, Config, ConfigEditor, Effort};
 use crate::ctx::Ctx;
-use crate::exit::not_built;
 use crate::ledger::turns::ModelChange;
 use crate::ledger::{Event, Ledger};
 use crate::util::time;
@@ -226,7 +225,12 @@ pub fn run(ctx: &Ctx, args: ModelArgs) -> Result<()> {
         Some(ModelCommand::Recommend { agent, json }) => {
             recommend_command(ctx, agent.as_deref(), json || args.json)
         }
-        Some(ModelCommand::Eval { .. }) => Err(not_built("model eval")),
+        Some(ModelCommand::Eval {
+            agent,
+            models,
+            n,
+            json,
+        }) => crate::curator::eval(ctx, &agent, &models, n, json || args.json),
     }
 }
 
@@ -287,13 +291,20 @@ fn show(ctx: &Ctx, json: bool) -> Result<()> {
     .map(String::from)
     .to_vec()];
     for row in &rows {
+        // A pinned agent shows the default that it left, so that the reason reads right.
+        let reason = match agent(&row.agent) {
+            Some(spec) if row.source != Source::Default.text() => {
+                format!("default: {} {}. {}", spec.model, spec.effort, row.reason)
+            }
+            _ => row.reason.clone(),
+        };
         table.push(vec![
             row.agent.clone(),
             row.model.clone(),
             row.effort.to_string(),
             row.source.clone(),
             row.recommendation.clone(),
-            row.reason.clone(),
+            reason,
         ]);
     }
     print!("{}", render_rows(&table));
@@ -438,7 +449,11 @@ fn recommend_command(ctx: &Ctx, agent: Option<&str>, json: bool) -> Result<()> {
         if !few.is_empty() {
             let _ = writeln!(out, "  fewer than {MIN_TURNS} turns: {}", few.join(", "));
         }
-        let _ = writeln!(out, "  recommendation: {}\n", advice.text);
+        let _ = writeln!(out, "  recommendation: {}", advice.text);
+        if let Some(line) = crate::curator::last_eval_line(&ledger, &advice.agent)? {
+            let _ = writeln!(out, "  {line}");
+        }
+        out.push('\n');
     }
     print!("{out}");
     Ok(())

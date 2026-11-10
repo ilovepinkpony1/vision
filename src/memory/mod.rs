@@ -10,8 +10,9 @@
 //!   principles of an agent ([`Memory::principles_for`], [`Memory::principles_file`]), and the
 //!   history ([`Memory::log`], [`Memory::revert`]).
 //! - The proposals of the Curator: [`Memory::build_proposal`], [`Memory::proposals`],
-//!   [`Memory::proposal`], [`Memory::accept_change`], [`Memory::accept_all`],
-//!   [`Memory::reject_change`], [`Memory::reject_all`], and [`Memory::delete_proposal`].
+//!   [`Memory::proposal`], [`Memory::edit_change`], [`Memory::accept_change`],
+//!   [`Memory::accept_all`], [`Memory::reject_change`], [`Memory::reject_all`], and
+//!   [`Memory::delete_proposal`].
 //! - The pure parts: [`doc::Doc`] (the file format), [`lint::lint`], and
 //!   [`archive::lost_lines`] (the rule "no line is lost").
 //!
