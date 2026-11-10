@@ -4,18 +4,17 @@ use common::Home;
 
 #[test]
 fn a_command_that_is_not_built_exits_with_code_3() {
+    // The commands of the pipeline are built now, so none of them says "not built yet".
     let home = Home::init();
-    let lines: &[(&[&str], &str)] = &[
-        (&["pick"], "pick"),
-        (&["take", "DEMO-12"], "take"),
-        (&["approve-plan", "DEMO-12", "ab12"], "approve-plan"),
-        (&["report", "--week"], "report"),
+    let lines: &[&[&str]] = &[
+        &["take", "DEMO-12"],
+        &["approve-plan", "DEMO-12", "ab12"],
+        &["report", "--week"],
     ];
-    for (args, name) in lines {
+    for args in lines {
         let run = home.run(args);
-        run.expect_code(3);
-        assert_eq!(run.stderr, format!("not built yet: {name}\n"), "{args:?}");
-        assert_eq!(run.stdout, "", "{args:?}");
+        assert_ne!(run.code, 3, "{args:?}: {run:?}");
+        assert!(!run.stderr.contains("not built yet"), "{args:?}: {run:?}");
     }
 }
 

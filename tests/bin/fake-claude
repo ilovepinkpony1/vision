@@ -6,8 +6,8 @@ lines from standard input, and plays a scenario. The scenario file is named in t
 of the turn: the first input line says "Read .vision/turns/<id>/facts.json", and the fake
 reads `fake.scenario` there. So the product code knows nothing of scenarios, and no variable
 of the environment is needed. A turn whose facts name no scenario, such as a Judge turn that
-the tick starts, plays `fake-scenarios/<agent>.json` of CLAUDE_CONFIG_DIR when that file
-exists, with the agent of its facts.
+the tick starts, plays `fake-scenarios/<agent>-<step>.json` of CLAUDE_CONFIG_DIR when that file
+exists, else `fake-scenarios/<agent>.json`, with the agent and the step of its facts.
 
 A scenario file is JSON: {"turns": [[step, ...], [step, ...]]}. The first run takes the first
 list, the second run the second list, and so on; the last list repeats. Each step is an object
@@ -29,6 +29,9 @@ with "do":
   args         report the arguments and the working folder.
   facts        report the facts file of the turn, such as its `message`.
   partial      write one event in two parts with a pause between, to test partial lines.
+  run          run the shell command "command" in the working folder, as a Bash tool call,
+               and report its exit code and output in the tool result. A failure stops the
+               fake with exit code 4, unless "check" is false.
 
 Any step can hold "when": a list of cases, each with "set" (keys that replace those of the
 step) and the conditions "model" (the --model of the start line) and "file" (a path in the
@@ -148,11 +151,14 @@ def load_steps(first_text):
     path = (facts.get("fake") or {}).get("scenario")
     if not path:
         agent = facts.get("agent") or ""
+        step = facts.get("step") or ""
         config = os.environ.get("CLAUDE_CONFIG_DIR") or ""
-        candidate = os.path.join(config, "fake-scenarios", f"{agent}.json")
-        if not (agent and config and os.path.isfile(candidate)):
+        folder = os.path.join(config, "fake-scenarios")
+        names = ([f"{agent}-{step}.json"] if step else []) + [f"{agent}.json"]
+        found = [os.path.join(folder, n) for n in names if os.path.isfile(os.path.join(folder, n))]
+        if not (agent and config and found):
             return default
-        path = candidate
+        path = found[0]
     with open(path) as f:
         turns = json.load(f)["turns"]
     n = 0
@@ -283,6 +289,18 @@ def main():
             emit({"type": "system", "subtype": "fake_args", "argv": sys.argv[1:], "cwd": os.getcwd()})
         elif kind == "facts":
             emit({"type": "system", "subtype": "fake_facts", "facts": read_facts(first_text)})
+        elif kind == "run":
+            proc = subprocess.run(step["command"], shell=True, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT)
+            output = proc.stdout.decode("utf-8", "replace")
+            emit({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "tu-run", "name": "Bash", "input": {"command": step["command"]}}]}})
+            emit({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu-run",
+                 "content": f"exit {proc.returncode}: {output[-2000:]}"}]}})
+            if proc.returncode != 0 and step.get("check", True):
+                sys.stderr.write(f"fake-claude: the command failed with {proc.returncode}: {output}\n")
+                return 4
         elif kind == "partial":
             text = json.dumps({"type": "assistant", "message": {"content": [
                 {"type": "text", "text": step.get("text", "a line in two parts")}]}})

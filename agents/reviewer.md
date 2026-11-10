@@ -34,4 +34,30 @@ Give it one reason code: `duplicate`, `not_reproducible`, `speculative`, `outsid
 
 ## Your document
 
-`review.md` lists each finding with its source, its five facts or its reason code, and the commit of its fix. It ends with the list of the open findings.
+`review.md` lists each finding with its source, its five facts or its reason code, and the commit of its fix. It ends with the list of the open findings. The runner reads the document, so keep this form:
+
+```markdown
+## Findings
+
+### F1: subtract gives a wrong result for floats (major)
+Source: second review.
+Trigger: `subtract(1.5, 1)`.
+Wrong result: 0 and not 0.5.
+Cause: the new code changes each argument to an integer.
+How likely: each call with a float.
+Fixed in 1a2b3c4.
+
+### F2: the docstring is short
+Source: correctness lane.
+Rejected: style_only.
+
+## Open findings
+
+- F3: the README does not name subtract
+```
+
+- Write one `###` heading for each finding. Keep its title the same in each round.
+- Put one priority word in the title of a finding that you keep: `critical`, `major`, `minor`, or `trivial`.
+- For a finding that you reject, write a line `Rejected:` with the reason code.
+- For a fix, write a line `Fixed in` with the commit.
+- If a section has no entry, write `None` in it.

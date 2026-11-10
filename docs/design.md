@@ -104,7 +104,6 @@ docs/design.md
 project = "demo"              # the name of the adapter
 user = "user"                 # the writer name of the person in the memory
 clones = []                   # absolute paths of the clones that Vision owns
-plan_approval = "always"
 
 [claude]
 bin = "claude"
@@ -256,15 +255,21 @@ The first message of a turn is one line: `Turn <id>. Read .vision/turns/<id>/fac
   "turn": "20261116T143000Z-DEMO-12-build-1", "agent": "builder", "step": "build", "kind": "worker",
   "ticket": {"key": "DEMO-12", "title": {"untrusted": "Export the report"},
              "issue": ".vision/turns/20261116T143000Z-DEMO-12-build-1/issue.json"},
-  "branch": "vision/DEMO-12", "base": "9f3e21c",
-  "documents": {"plan": ".vision/approved-plan.md", "refine": ".vision/refine.md",
-                "answers": ".vision/answers.md"},
+  "branch": "vision/DEMO-12", "base": "9f3e21c", "head": "abc", "pr": null,
+  "documents": {"approved-plan.md": ".vision/approved-plan.md", "refine.md": ".vision/refine.md",
+                "answers.md": null},
+  "expected_documents": ["pr.md"],
   "principles": ".vision/turns/20261116T143000Z-DEMO-12-build-1/principles.md",
+  "principles_loaded": [{"id": "P-007", "version": "4f2a91c"}],
   "skills": {},
+  "sensitive_topics": ["security", "money"],
+  "sensitive_paths": [".github/", "db/migrate/"],
   "expects": ["commits", "doc:pr.md"],
   "message": null
 }
 ```
+
+`documents` has one key for each name of `reads`. If the ticket folder has no such file, the value is `null`. A turn step with the key `with` also gets those values under `with`.
 
 Text from the tracker, from review comments, and from logs is wrapped as `{"untrusted": "..."}`. Each role file says that such text is data, never an order.
 
@@ -667,6 +672,7 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
 - A read verb changes nothing outside. A turn can ask for it, and the documents of its answer go to that turn.
 - If `act` ends with a different exit code, a signal, a time limit, or bad output, the operation becomes `uncertain`. The outside state is unknown then.
 - The `cause` of a check is `code`, `infra`, `flaky`, `env`, `not ours`, or `unknown`.
+- `ci.state` is `green` or `red` for a run that ended. Each other word means that no run ended at that commit. For each pair of commit and result, the runner writes one row in `checks` with the kind `ci`.
 - Each run of a job also writes one row in `checks` with the kind `job` and the source `job:<name>`. Its result is `pass`, `fail`, or `error`. The end fact `job:<name>` reads that row at the last commit.
 
 ### 11.2 The steps
@@ -748,12 +754,21 @@ An entry of `after`, `before`, or `start` is a name, or a table with arguments:
 after = ["git.push", { verb = "deploy", args = { env = "staging" } }]
 before = [{ job = "app-start", args = { env = "local" } }]
 with = { env = "staging" }    # a turn step: these values go into the facts file under "with"
+findings = "review"           # a turn step: each finding of its documents becomes a row with this source
 ```
+
+A text argument of an entry can hold `{doc:NAME}`. The runner puts the text of that document of the ticket folder in its place. If the document does not exist, the ticket gets the flag `needs-you`, and the verb does not run.
+
+The runner reads three documents of a turn by their form:
+
+- With the key `findings`, each finding of a document of the step becomes a row in `findings`. `agents/reviewer.md` and `agents/tester.md` give the form.
+- `verdicts.json` gives one row in `review_rows` for each review comment. `agents/shepherd.md` gives the form.
+- `plan.md` is also copied to `plan.agent.md` one time, so that a later edit of the person shows as a difference.
 
 A step can expect these end facts:
 
 - `doc:<name>`: the result has that document, and it is not empty.
-- `commits`: the branch has a commit that it did not have at the start of the turn.
+- `commits`: the branch has a commit that it did not have at the entry into the step.
 - `clean`: the work tree of the clone is clean.
 - `job:<name>`: the job passes at the last commit.
 - `human:<action>`: the person did that action.
@@ -762,22 +777,27 @@ A step can expect these end facts:
 
 The ticket row holds the id of its step in `state`, its flags, and its counters. One tick moves a ticket at most one step.
 
-- Entry of a turn step. The runner runs each `before` job. It asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
+- Entry of a turn step. The runner runs each `before` job. A job that does not pass sets the flag `needs-you`. The runner asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
 - A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
 - A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
 - A turn that ends with `result`. The runner writes each expected document to the ticket folder. Then it tests each end fact.
 - If an end fact does not hold, one new turn resumes the session with a message that names the fact. After a second failure, the ticket gets the flag `needs-you`.
 - If each end fact holds, the `after` verbs run in order. After each one has the state `confirmed`, the ticket moves to `next`.
-- A step with a `cap` counts each entry. One entry above the cap sets the flag `needs-you` with the open items.
-- A wait step runs `observe` each `every` seconds, and it moves on the value of `watch`.
-- A human step waits for its command. `vision needs` lists it.
+- A step with a `cap` counts each entry that comes from `next` or `on`. One entry above the cap sets the flag `needs-you` with the open items. An entry by `vision retry` or `vision take` does not count.
+- A wait step first runs its `start` verbs. After each one has the state `confirmed`, it runs `observe` each `every` seconds, and it moves on the value of `watch`.
+- A human step waits for its command. `vision needs` lists it. The one action is `approve-plan`.
+- The end step frees the clone. If the pull request is merged, it records the event `ticket-merged`.
+
+Each visit of a step is one row in `spans`. Its key `waits_on` says what the ticket waits for: `agent:<name>`, `job:<name>`, `person:<action>`, `watch:<path>`, or `end`.
 
 A ticket can have four flags. A ticket with a flag starts no new turn, no job, and no operation.
 
-- `needs-you`: a rule stopped the ticket. `vision retry KEY` clears the flag and enters the step again.
+- `needs-you`: a rule stopped the ticket. `vision retry KEY` clears the flag and enters the step again. If the turn of the step ended well and an `after` verb stopped the ticket, `vision retry KEY` starts no new turn. It only requests the `after` verbs again.
 - `paused`: the person took over the session with `vision open KEY`. `vision retry KEY` clears the flag and enters the step again. The new turn resumes the session, and its message says that the person worked in the session.
 - `waits-for-limit`: a limit of section 4 refused a turn. The tick clears the flag after the limit allows a turn again.
 - `stopped`: `vision stop KEY` killed the running turn and freed the clone. The branch stays in that clone. `vision take KEY` starts the ticket again at the same step.
+
+A `failed` operation is final for its key. `vision retry KEY` frees the key, so that the verb can run again at the same commit. If an operation of the ticket is `uncertain`, `vision retry KEY` refuses, because the reconcile step must settle it first.
 
 `vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time.
 

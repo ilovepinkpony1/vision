@@ -103,6 +103,9 @@ pub struct TurnStep {
     pub reads: Vec<String>,
     /// `with`: values that go into the facts file under `with`.
     pub with: Map<String, Value>,
+    /// `findings`: the source of the findings that the documents of the step list, such as
+    /// `review` or `qa`. The pipeline stores one `findings` row for each one. `None`: none.
+    pub findings: Option<String>,
 }
 
 /// A job step: the adapter runs one job.
@@ -622,6 +625,7 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
         "turn" => &[
             "agent", "turn", "reads", "expects", "with", "before", "after", "start", "next", "cap",
+            "findings",
         ],
         "job" => &[
             "job", "args", "expects", "before", "after", "start", "next", "cap",
@@ -818,11 +822,21 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems) -> TurnStep {
         }
     }
     let with = object(table.remove("with"), &format!("{at} with"), problems);
+    let findings = string(table.remove("findings"), at, problems);
+    if let Some(source) = &findings {
+        if !valid_name(source, false) {
+            problems.add(
+                at,
+                format!("findings names the source `{source}`, which is not a plain name such as review or qa"),
+            );
+        }
+    }
     TurnStep {
         agent,
         turn,
         reads,
         with,
+        findings,
     }
 }
 

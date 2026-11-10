@@ -464,6 +464,9 @@ def pr_open(world, request, reconcile):
     if head is None:
         return failed("the branch %s is not on the remote: push it first" % branch)
     ticket = world.ticket(world.tracker(), key) or {}
+    # args.text is the whole pr.md: its first line is the title, and the rest is the body.
+    text = args.get("text") if isinstance(args.get("text"), str) else ""
+    first, _, rest = text.strip().partition("\n")
     number = prs.get("next", 1)
     prs["next"] = number + 1
     prs["prs"].append(
@@ -472,8 +475,8 @@ def pr_open(world, request, reconcile):
             "key": key,
             "branch": branch,
             "head": head,
-            "title": args.get("title") or ticket.get("title") or branch,
-            "body": args.get("body") or "",
+            "title": args.get("title") or first.strip().lstrip("#").strip() or ticket.get("title") or branch,
+            "body": args.get("body") or rest.strip(),
             "draft": args.get("draft", True) is not False,
             "merged": False,
             "closed": False,
@@ -515,6 +518,8 @@ def ci_run(world, request, reconcile):
 
 def review_reply(world, request, reconcile):
     args = request.get("args") or {}
+    if "verdicts" in args:
+        return review_replies(world, request, reconcile)
     comment_id = args.get("comment")
     body = args.get("body")
     if not isinstance(comment_id, int) or not isinstance(body, str) or not body.strip():
@@ -536,6 +541,51 @@ def review_reply(world, request, reconcile):
     replies.append({"op": op, "body": body, "at": now()})
     world.save("prs.json", prs)
     return confirmed("the reply to comment %d is posted" % comment_id, external_id)
+
+
+def review_replies(world, request, reconcile):
+    """args.verdicts is verdicts.json of the step: one reply for each row that has one."""
+    args = request.get("args") or {}
+    try:
+        rows = json.loads(args.get("verdicts") or "")
+    except (TypeError, ValueError):
+        raise Failure("review.reply needs args.verdicts, the JSON list of verdicts.json")
+    if isinstance(rows, dict):
+        rows = rows.get("verdicts")
+    if not isinstance(rows, list):
+        raise Failure("args.verdicts of review.reply must be a JSON list of rows")
+    prs = world.prs()
+    pr = world.find_pr(prs, number=request.get("pr"), branch=request.get("branch"))
+    if pr is None:
+        return failed("no pull request for %s" % request.get("branch"))
+    op = request.get("op")
+    posted, missing = [], []
+    for row in rows:
+        try:
+            comment_id = int(row.get("comment_id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        body = row.get("reply") if isinstance(row, dict) else None
+        if not isinstance(body, str) or not body.strip():
+            continue
+        comment = next((c for c in pr.get("comments", []) if c.get("id") == comment_id), None)
+        if comment is None:
+            missing.append(comment_id)
+            continue
+        replies = comment.setdefault("replies", [])
+        if not any(r.get("op") == op for r in replies):
+            if reconcile:
+                missing.append(comment_id)
+                continue
+            replies.append({"op": op, "body": body, "at": now()})
+        posted.append(comment_id)
+    if missing:
+        if not reconcile:
+            world.save("prs.json", prs)
+        return failed("pull request #%d has no comment or no reply of this operation for %s" % (pr["number"], missing))
+    if not reconcile:
+        world.save("prs.json", prs)
+    return confirmed("the replies to the comments %s are posted" % posted, "replies-%s" % (op or ""))
 
 
 def tracker_issue(world, request):

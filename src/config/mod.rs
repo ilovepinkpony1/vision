@@ -30,7 +30,6 @@ pub struct Config {
     pub user: String,
     /// Absolute paths of the clones that Vision owns. `~` is allowed.
     pub clones: Vec<String>,
-    pub plan_approval: String,
     pub claude: Claude,
     pub budget: Budget,
     pub time: TimeLimits,
@@ -56,7 +55,6 @@ impl Default for Config {
             project: "demo".into(),
             user: "user".into(),
             clones: Vec::new(),
-            plan_approval: "always".into(),
             claude: Claude::default(),
             budget: Budget::default(),
             time: TimeLimits::default(),

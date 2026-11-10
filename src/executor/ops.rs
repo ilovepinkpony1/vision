@@ -485,6 +485,12 @@ pub fn approve(
     let mut results = Vec::new();
     for row in matching {
         let at = time::now_rfc3339();
+        // The time from the request of the operation to the approval of the person.
+        let seconds = stored_of(row)
+            .asked
+            .as_deref()
+            .and_then(|asked| time::parse_rfc3339(asked).ok())
+            .map(|asked| time::seconds_between(asked, time::now()).max(0));
         ledger.add_human(&HumanRow {
             at: at.clone(),
             ticket: Some(key.to_string()),
@@ -492,7 +498,7 @@ pub fn approve(
             object: row.id.clone(),
             value: Some(format!("{verb_name} {}", commit_arg(&asked_head))),
             reason: None,
-            seconds: None,
+            seconds,
         })?;
         let call = call_of(row);
         let mut stored = stored_of(row);
@@ -634,6 +640,18 @@ pub fn change_mode(ctx: &Ctx, ledger: &Ledger, verb: &str, up: bool) -> Result<(
         if up { "promote" } else { "demote" }
     ));
     Ok((old, new))
+}
+
+/// Frees the idempotency key of each `failed` operation of a ticket, so that the same verb at
+/// the same commit with the same arguments can run again after `vision retry`. The row stays
+/// as the record: its `idem` gets the suffix `:<id>`, so that the column stays unique. A row in
+/// any other state is never touched. Gives the number of freed rows.
+pub fn release_failed(ledger: &Ledger, key: &TicketKey) -> Result<usize> {
+    Ok(ledger.conn().execute(
+        "UPDATE operations SET idem = idem || ':' || id
+         WHERE ticket = ?1 AND state = ?2 AND idem IS NOT NULL AND idem NOT LIKE '%:' || id",
+        rusqlite::params![key.as_str(), STATE_FAILED],
+    )?)
 }
 
 /// The operations that wait for `vision approve`: the mode ask, and the diffs held for a

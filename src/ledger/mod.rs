@@ -13,6 +13,7 @@ mod health;
 mod limits;
 pub mod memory_use;
 pub mod operations;
+pub mod pipeline;
 pub mod questions;
 mod tickets;
 pub mod turns;

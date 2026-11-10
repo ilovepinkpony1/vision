@@ -9,8 +9,10 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use crate::ctx::Ctx;
-use crate::ledger::{Event, TicketRow};
+use crate::ledger::Event;
 use crate::paths::Paths;
+use crate::pipeline::view::marks_text;
+use crate::pipeline::TicketView;
 use crate::snapshot::{collect_needs, LimitView, LimitsView, Need, NeedKind, Outcome, Snapshot};
 use crate::util::fs::{atomic_write, read_optional};
 use crate::util::time;
@@ -24,7 +26,8 @@ pub struct StatusView {
     pub tick: TickView,
     pub limits: LimitsView,
     pub needs: Vec<Need>,
-    pub tickets: Vec<TicketRow>,
+    /// One row for each ticket: its step, what works or waits, its marks, and its cost.
+    pub tickets: Vec<TicketView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,13 +178,15 @@ impl StatusView {
             outcome: snapshot.as_ref().map(|s| s.tick.outcome),
             error: snapshot.and_then(|s| s.tick.error),
         };
+        let needs = collect_needs(ctx, &ledger)?;
+        let tickets = crate::pipeline::status_rows(ctx, &ledger, &needs)?;
         Ok(StatusView {
             home: ctx.paths.home().display().to_string(),
             off: ctx.paths.off().exists(),
             tick,
             limits: LimitsView::new(&config.limits, ledger.latest_limits()?),
-            needs: collect_needs(ctx, &ledger)?,
-            tickets: ledger.tickets()?,
+            needs,
+            tickets,
         })
     }
 
@@ -291,22 +296,23 @@ fn need_word(kind: NeedKind) -> &'static str {
     }
 }
 
-fn ticket_table(tickets: &[TicketRow]) -> String {
+fn ticket_table(tickets: &[TicketView]) -> String {
     let dash = |value: Option<&str>| value.unwrap_or("-").to_string();
-    let mut rows = vec![["KEY", "STATE", "FLAGS", "PR", "UPDATED"].map(String::from)];
+    let mut rows = vec![["KEY", "STEP", "NOW", "MARKS", "PR", "COST"].map(String::from)];
     for ticket in tickets {
         rows.push([
             ticket.key.clone(),
-            dash(ticket.state.as_deref()),
-            flags_text(ticket.flags.as_deref()),
+            dash(ticket.step.as_deref()),
+            ticket.now.clone(),
+            marks_text(&ticket.marks),
             ticket
                 .pr
                 .map_or_else(|| "-".to_string(), |pr| pr.to_string()),
-            dash(ticket.updated.as_deref()),
+            format!("${:.2}", ticket.cost_usd),
         ]);
     }
-    let widths: Vec<usize> = (0..5)
-        .map(|i| rows.iter().map(|r| r[i].len()).max().unwrap_or(0))
+    let widths: Vec<usize> = (0..6)
+        .map(|i| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0))
         .collect();
     let mut out = String::new();
     for row in rows {
@@ -317,19 +323,16 @@ fn ticket_table(tickets: &[TicketRow]) -> String {
             .collect();
         let _ = writeln!(out, "{}", cells.join("  ").trim_end());
     }
-    out
-}
-
-/// Flags are a JSON list in the ledger. Shows them joined with commas.
-fn flags_text(flags: Option<&str>) -> String {
-    let Some(text) = flags.filter(|t| !t.is_empty()) else {
-        return "-".to_string();
-    };
-    match serde_json::from_str::<Vec<String>>(text) {
-        Ok(list) if list.is_empty() => "-".to_string(),
-        Ok(list) => list.join(","),
-        Err(_) => text.to_string(),
+    for ticket in tickets {
+        for flag in &ticket.flags {
+            let _ = writeln!(
+                out,
+                "         {} {}: {}. Clears it: {}",
+                ticket.key, flag.flag, flag.reason, flag.command
+            );
+        }
     }
+    out
 }
 
 #[cfg(test)]
@@ -337,26 +340,59 @@ mod tests {
     use super::*;
     use crate::ledger::LimitReading;
 
+    fn view(key: &str, step: Option<&str>, now: &str) -> TicketView {
+        TicketView {
+            key: key.into(),
+            step: step.map(str::to_string),
+            kind: None,
+            now: now.into(),
+            works: None,
+            flags: Vec::new(),
+            needs: Default::default(),
+            marks: Default::default(),
+            cost_usd: 0.0,
+            pr: None,
+            branch: None,
+            clone: None,
+            updated: None,
+        }
+    }
+
     #[test]
     fn the_table_aligns_its_columns() {
-        let tickets = vec![
-            TicketRow {
-                key: "DEMO-12".into(),
-                state: Some("build".into()),
-                flags: Some(r#"["needs-you","paused"]"#.into()),
-                pr: Some(7),
-                ..TicketRow::default()
-            },
-            TicketRow {
-                key: "DEMO-1".into(),
-                ..TicketRow::default()
-            },
-        ];
+        let mut first = view("DEMO-12", Some("build"), "builder works (3 min)");
+        first.pr = Some(7);
+        first.cost_usd = 1.5;
+        first.marks.jobs.push(crate::pipeline::view::Mark {
+            name: "proof".into(),
+            result: "pass".into(),
+            commit: "1a2b3c4d5e6f".into(),
+        });
+        first.flags.push(crate::pipeline::view::FlagView {
+            flag: "paused".into(),
+            reason: "you took over the session".into(),
+            since: None,
+            command: "vision retry DEMO-12".into(),
+        });
+        let tickets = vec![first, view("DEMO-1", None, "-")];
         let table = ticket_table(&tickets);
         let lines: Vec<_> = table.lines().collect();
-        assert_eq!(lines[0], "KEY      STATE  FLAGS             PR  UPDATED");
-        assert_eq!(lines[1], "DEMO-12  build  needs-you,paused  7   -");
-        assert_eq!(lines[2], "DEMO-1   -      -                 -   -");
+        assert_eq!(
+            lines[0],
+            "KEY      STEP   NOW                    MARKS                    PR  COST"
+        );
+        assert_eq!(
+            lines[1],
+            "DEMO-12  build  builder works (3 min)  proof pass@1a2b3c4d5e6f  7   $1.50"
+        );
+        assert_eq!(
+            lines[2],
+            "DEMO-1   -      -                      -                        -   $0.00"
+        );
+        assert_eq!(
+            lines[3],
+            "         DEMO-12 paused: you took over the session. Clears it: vision retry DEMO-12"
+        );
     }
 
     #[test]

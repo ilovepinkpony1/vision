@@ -1,7 +1,6 @@
 project = "demo"              # the name of the adapter
 user = "user"                 # the writer name of the person in the memory
 clones = []                   # absolute paths of the clones that Vision owns
-plan_approval = "always"
 
 [claude]
 bin = "claude"

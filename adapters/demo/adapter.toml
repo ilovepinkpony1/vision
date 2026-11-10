@@ -5,6 +5,9 @@
 # config.toml: [adapter] root names the world, and test_command is the command of the proof.
 # `bin/world` also plays the part of the team: it marks a pull request as ready, comments,
 # approves, and merges.
+#
+# A string argument `{doc:NAME}` of an entry takes the text of the document NAME of the ticket
+# folder when the pipeline requests the verb, so the gates read the text that leaves.
 
 name = "demo"
 branch = "vision/{key}"
@@ -17,7 +20,7 @@ agent = "scout"
 turn = "reader"
 reads = ["issue.json"]
 expects = ["doc:refine.md", "doc:description.md"]
-after = ["tracker.describe"]
+after = [{ verb = "tracker.describe", args = { text = "{doc:description.md}" } }]
 next = "plan"
 
 [[step]]
@@ -42,7 +45,7 @@ agent = "builder"
 turn = "worker"
 reads = ["approved-plan.md", "refine.md", "answers.md"]
 expects = ["commits", "clean", "doc:pr.md", "job:proof"]
-after = ["git.push", "pr.open"]
+after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "review"
 
 [[step]]
@@ -54,6 +57,7 @@ before = ["job:second-review"]
 reads = ["approved-plan.md", "second-review.md"]
 expects = ["clean", "doc:review.md", "job:proof"]
 after = ["git.push"]
+findings = "review"
 cap = "review_rounds"
 next = "ci"
 
@@ -91,8 +95,8 @@ agent = "shepherd"
 turn = "worker"
 before = ["job:comments"]
 reads = ["comments.json", "approved-plan.md"]
-expects = ["clean"]
-after = ["git.push", "review.reply"]
+expects = ["clean", "doc:verdicts.json"]
+after = ["git.push", { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } }]
 cap = "comments"
 next = "ready-to-merge"
 

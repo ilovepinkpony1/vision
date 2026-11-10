@@ -47,8 +47,8 @@ pub use jobs::{
 pub use observe::{observe_queue, observe_ticket, CiFacts, PrFacts, QueueTicket, TicketFacts};
 pub use ops::{
     approve, approve_command, change_mode, commit_arg, demoted, idempotency_key, lookup, mode_of,
-    operation, operations_of, promoted, reconcile, request, OpState, OperationResult, Outcome,
-    SetValues, APPROVED_PLAN, LADDER,
+    operation, operations_of, promoted, reconcile, release_failed, request, OpState,
+    OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
 };
 pub use scripts::{Answer, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT, PASSED_ENV};
 
