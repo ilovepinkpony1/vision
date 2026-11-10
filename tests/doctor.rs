@@ -53,6 +53,7 @@ fn doctor_writes_each_result_to_the_health_table() {
     assert_eq!(
         tests,
         [
+            "adapter",
             "claude",
             "config",
             "git",

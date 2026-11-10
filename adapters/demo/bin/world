@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""bin/world of the demo adapter: makes a demo world and plays the part of the team.
+
+    world new ROOT                       a new world with one toy project and two tickets
+    world clone ROOT DEST                a clone of the toy project, for `clones` of config.toml
+    world ready ROOT PR                  mark the pull request as ready for review
+    world comment ROOT PR TEXT [--author A] [--path P] [--line N]
+                                         add a review comment
+    world approve ROOT PR [--author A]   approve the pull request
+    world request-changes ROOT PR [--author A]
+    world merge ROOT PR                  merge the pull request into main
+    world status ROOT KEY STATUS         set the status of a ticket
+    world show ROOT                      print the world as JSON
+
+Only a person or a test runs it; the executor never does.
+"""
+
+import argparse
+import json
+import os
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+
+import demo_world as w  # noqa: E402
+
+
+def world_at(root):
+    return w.World.of({"root": root})
+
+
+def find_pr(world, prs, number):
+    pr = world.find_pr(prs, number=number)
+    if pr is None:
+        raise w.Failure("the world has no pull request #%d" % number)
+    return pr
+
+
+def cmd_new(args):
+    root = os.path.abspath(os.path.expanduser(args.root))
+    if os.path.exists(root) and os.listdir(root):
+        raise w.Failure("%s exists and is not empty. Name a new folder" % root)
+    os.makedirs(root, exist_ok=True)
+    world = w.World(root)
+    w.git(["init", "--quiet", "--bare", world.remote])
+    with tempfile.TemporaryDirectory() as work:
+        w.git(["init", "--quiet", work])
+        for name, text in w.TOY_FILES.items():
+            path = os.path.join(work, name)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            if name.endswith(".sh"):
+                os.chmod(path, 0o755)
+        w.git(["add", "--all"], cwd=work)
+        w.git(["commit", "--quiet", "-m", "Start the toy calculator"], cwd=work)
+        w.git(["push", "--quiet", world.remote, "HEAD:refs/heads/main"], cwd=work)
+    w.git(["symbolic-ref", "HEAD", "refs/heads/main"], cwd=world.remote)
+    world.save("tracker.json", {"tickets": w.TOY_TICKETS})
+    world.save("prs.json", {"next": 1, "prs": []})
+    world.save("ci.json", {})
+    print("A new demo world is in %s. Add these lines to config.toml:\n" % root)
+    print('project = "demo"')
+    print("[adapter]")
+    print("root = %s" % json.dumps(root))
+    print("test_command = %s" % json.dumps(w.TEST_COMMAND))
+    print("\nMake a clone with `world clone %s DEST`, and name it in `clones`." % root)
+
+
+def cmd_clone(args):
+    world = world_at(args.root)
+    dest = os.path.abspath(os.path.expanduser(args.dest))
+    w.git(["clone", "--quiet", world.remote, dest])
+    w.git(["config", "user.name", "demo"], cwd=dest)
+    w.git(["config", "user.email", "demo@example.invalid"], cwd=dest)
+    print(dest)
+
+
+def change_pr(args, change):
+    world = world_at(args.root)
+    with world.lock():
+        prs = world.prs()
+        pr = find_pr(world, prs, args.pr)
+        message = change(world, pr)
+        world.save("prs.json", prs)
+    print(message)
+
+
+def cmd_ready(args):
+    def change(world, pr):
+        pr["draft"] = False
+        return "pull request #%d is ready for review" % pr["number"]
+
+    change_pr(args, change)
+
+
+def cmd_comment(args):
+    def change(world, pr):
+        comments = pr.setdefault("comments", [])
+        number = max([c.get("id", 0) for c in comments] + [0]) + 1
+        comments.append(
+            {"id": number, "author": args.author, "path": args.path, "line": args.line, "text": args.text, "replies": [], "at": w.now()}
+        )
+        return "comment %d added to pull request #%d" % (number, pr["number"])
+
+    change_pr(args, change)
+
+
+def cmd_approve(args):
+    def change(world, pr):
+        if args.author not in pr.setdefault("approvals", []):
+            pr["approvals"].append(args.author)
+        pr["changes_requested"] = False
+        return "%s approved pull request #%d" % (args.author, pr["number"])
+
+    change_pr(args, change)
+
+
+def cmd_request_changes(args):
+    def change(world, pr):
+        pr["changes_requested"] = True
+        return "%s requested changes on pull request #%d" % (args.author, pr["number"])
+
+    change_pr(args, change)
+
+
+def cmd_merge(args):
+    def change(world, pr):
+        if pr.get("merged"):
+            return "pull request #%d is already merged" % pr["number"]
+        head = world.branch_head(pr["branch"])
+        if head is None:
+            raise w.Failure("the branch %s of pull request #%d is gone" % (pr["branch"], pr["number"]))
+        with tempfile.TemporaryDirectory() as work:
+            w.git(["clone", "--quiet", world.remote, work])
+            w.git(["fetch", "--quiet", "origin", "refs/heads/%s:refs/remotes/origin/%s" % (pr["branch"], pr["branch"])], cwd=work)
+            message = "Merge pull request #%d from %s" % (pr["number"], pr["branch"])
+            w.git(["merge", "--quiet", "--no-ff", "-m", message, "origin/" + pr["branch"]], cwd=work)
+            w.git(["push", "--quiet", "origin", "HEAD:refs/heads/main"], cwd=work)
+        pr["merged"] = True
+        pr["head"] = head
+        tracker = world.tracker()
+        ticket = world.ticket(tracker, pr.get("key"))
+        if ticket is not None:
+            ticket["status"] = "Done"
+            world.save("tracker.json", tracker)
+        return "pull request #%d is merged into main" % pr["number"]
+
+    change_pr(args, change)
+
+
+def cmd_status(args):
+    world = world_at(args.root)
+    with world.lock():
+        tracker = world.tracker()
+        ticket = world.ticket(tracker, args.key)
+        if ticket is None:
+            raise w.Failure("the tracker has no ticket %s" % args.key)
+        ticket["status"] = args.status
+        world.save("tracker.json", tracker)
+    print("%s is %s" % (args.key, args.status))
+
+
+def cmd_show(args):
+    world = world_at(args.root)
+    print(json.dumps({"tracker": world.tracker(), "prs": world.prs(), "ci": world.ci()}, indent=2, sort_keys=True))
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="world", description="Make a demo world, and play the part of the team.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("new", help="a new world with one toy project and two tickets")
+    p.add_argument("root")
+    p.set_defaults(run=cmd_new)
+    p = sub.add_parser("clone", help="a clone of the toy project")
+    p.add_argument("root")
+    p.add_argument("dest")
+    p.set_defaults(run=cmd_clone)
+    for name, run, help_text in [
+        ("ready", cmd_ready, "mark a pull request as ready for review"),
+        ("merge", cmd_merge, "merge a pull request into main"),
+    ]:
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("root")
+        p.add_argument("pr", type=int)
+        p.set_defaults(run=run)
+    p = sub.add_parser("comment", help="add a review comment")
+    p.add_argument("root")
+    p.add_argument("pr", type=int)
+    p.add_argument("text")
+    p.add_argument("--author", default="reviewer")
+    p.add_argument("--path", default=None)
+    p.add_argument("--line", type=int, default=None)
+    p.set_defaults(run=cmd_comment)
+    for name, run, help_text in [
+        ("approve", cmd_approve, "approve a pull request"),
+        ("request-changes", cmd_request_changes, "request changes on a pull request"),
+    ]:
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("root")
+        p.add_argument("pr", type=int)
+        p.add_argument("--author", default="reviewer")
+        p.set_defaults(run=run)
+    p = sub.add_parser("status", help="set the status of a ticket")
+    p.add_argument("root")
+    p.add_argument("key")
+    p.add_argument("status")
+    p.set_defaults(run=cmd_status)
+    p = sub.add_parser("show", help="print the world as JSON")
+    p.add_argument("root")
+    p.set_defaults(run=cmd_show)
+    args = parser.parse_args()
+    try:
+        args.run(args)
+    except w.Failure as e:
+        print("world: %s" % e, file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

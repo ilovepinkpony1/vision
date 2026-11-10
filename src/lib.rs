@@ -3,6 +3,7 @@
 //! The specification is `docs/design.md`. This crate is one binary with a library: `main.rs`
 //! parses the command line and calls [`run`].
 
+pub mod adapter;
 pub mod cli;
 pub mod config;
 pub mod ctx;

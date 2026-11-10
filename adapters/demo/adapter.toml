@@ -1,0 +1,147 @@
+# The demo adapter (design section 11.4). It needs no network: its tracker is tracker.json, its
+# forge is the bare repo remote.git with prs.json, and its CI is the script ci.sh of the project.
+#
+# `bin/world new DIR` makes a world with a toy project and two tickets, and prints the lines for
+# config.toml: [adapter] root names the world, and test_command is the command of the proof.
+# `bin/world` also plays the part of the team: it marks a pull request as ready, comments,
+# approves, and merges.
+
+name = "demo"
+branch = "vision/{key}"
+base = "origin/main"
+
+[[step]]
+id = "refine"
+kind = "turn"
+agent = "scout"
+turn = "reader"
+reads = ["issue.json"]
+expects = ["doc:refine.md", "doc:description.md"]
+after = ["tracker.describe"]
+next = "plan"
+
+[[step]]
+id = "plan"
+kind = "turn"
+agent = "builder"
+turn = "reader"
+reads = ["issue.json", "refine.md", "answers.md"]
+expects = ["doc:plan.md"]
+next = "plan-ready"
+
+[[step]]
+id = "plan-ready"
+kind = "human"
+action = "approve-plan"
+next = "build"
+
+[[step]]
+id = "build"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+reads = ["approved-plan.md", "refine.md", "answers.md"]
+expects = ["commits", "clean", "doc:pr.md", "job:proof"]
+after = ["git.push", "pr.open"]
+next = "review"
+
+[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "worker"
+before = ["job:second-review"]
+reads = ["approved-plan.md", "second-review.md"]
+expects = ["clean", "doc:review.md", "job:proof"]
+after = ["git.push"]
+cap = "review_rounds"
+next = "ci"
+
+[[step]]
+id = "ci"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "ready", red = "fix-ci" }
+every = 60
+
+[[step]]
+id = "fix-ci"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+before = ["job:ci-log"]
+reads = ["ci-log.txt", "approved-plan.md"]
+expects = ["commits", "clean", "job:proof"]
+after = ["git.push"]
+cap = "ci_fix"
+next = "ci"
+
+[[step]]
+id = "ready"
+kind = "wait"
+watch = "pr.draft"
+on = { "false" = "comments" }
+every = 60
+
+[[step]]
+id = "comments"
+kind = "turn"
+agent = "shepherd"
+turn = "worker"
+before = ["job:comments"]
+reads = ["comments.json", "approved-plan.md"]
+expects = ["clean"]
+after = ["git.push", "review.reply"]
+cap = "comments"
+next = "ready-to-merge"
+
+[[step]]
+id = "ready-to-merge"
+kind = "wait"
+watch = "pr.merged"
+on = { "true" = "done" }
+every = 60
+
+[[step]]
+id = "done"
+kind = "end"
+
+[verbs."tracker.describe"]
+mode = "auto"
+leaves = true
+
+[verbs."git.push"]
+mode = "auto"
+leaves = true
+
+[verbs."pr.open"]
+mode = "auto"
+leaves = true
+
+[verbs."ci.run"]
+mode = "auto"
+
+[verbs."review.reply"]
+mode = "ask"
+leaves = true
+
+[verbs."tracker.issue"]
+read = true
+
+# A job gets no secret, because a job can run code that an agent wrote. A job that only reads
+# the tracker or the forge sets `secrets = true`. Never set it for a job that runs code of the
+# project, such as the proof.
+[jobs.proof]
+timeout = 900
+
+[jobs.second-review]
+timeout = 120
+
+[jobs.comments]
+timeout = 60
+secrets = true
+
+[jobs.ci-log]
+timeout = 60
+secrets = true

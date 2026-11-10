@@ -95,8 +95,45 @@ pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
         check_git(),
         check_claude(ctx),
         check_memory(ctx),
+        check_adapter(ctx),
     ];
     (checks, ledger)
+}
+
+/// The adapter of the key `project` loads, and its scripts are executable.
+fn check_adapter(ctx: &Ctx) -> Check {
+    let adapter = match Config::load(&ctx.paths)
+        .and_then(|config| crate::adapter::load_with(&config, &ctx.paths))
+    {
+        Ok(adapter) => adapter,
+        Err(e) => return Check::new("adapter", Level::Fail, format!("{e:#}")),
+    };
+    let missing: Vec<String> = ["observe", "act", "job"]
+        .iter()
+        .map(|name| adapter.script_path(name))
+        .filter(|path| find_program(&path.display().to_string()).is_none())
+        .map(|path| path.display().to_string())
+        .collect();
+    let summary = format!(
+        "{} from {}: {} steps, {} verbs, {} jobs",
+        adapter.name,
+        adapter.dir.display(),
+        adapter.steps.len(),
+        adapter.verbs.len(),
+        adapter.jobs.len()
+    );
+    if missing.is_empty() {
+        Check::new("adapter", Level::Ok, summary)
+    } else {
+        Check::new(
+            "adapter",
+            Level::Warn,
+            format!(
+                "{summary}, but {} is missing or not executable",
+                missing.join(", ")
+            ),
+        )
+    }
 }
 
 fn check_home(ctx: &Ctx) -> Check {

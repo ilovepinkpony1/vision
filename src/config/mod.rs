@@ -404,6 +404,23 @@ impl Config {
         self.clones.iter().map(|c| expand_tilde(c)).collect()
     }
 
+    /// The folder that `adapter.dir` of the free `[adapter]` table names, or `None` when the key
+    /// is missing. `~` is allowed, and a relative path is relative to the home of Vision.
+    pub fn adapter_dir(&self, paths: &Paths) -> Result<Option<PathBuf>> {
+        let Some(value) = self.adapter.get("dir") else {
+            return Ok(None);
+        };
+        let Some(dir) = value.as_str().filter(|d| !d.trim().is_empty()) else {
+            bail!("adapter.dir must be the path of an adapter folder, such as \"~/adapters/demo\"");
+        };
+        let dir = expand_tilde(dir)?;
+        Ok(Some(if dir.is_absolute() {
+            dir
+        } else {
+            paths.home().join(dir)
+        }))
+    }
+
     fn check(&self) -> Result<()> {
         for (key, value) in [
             ("limits.five_hour", self.limits.five_hour),
@@ -526,6 +543,24 @@ pinned_at = "2026-11-16T14:30:00Z"
         assert!(Config::parse("[modes]\n\"git.push\" = \"sometimes\"\n").is_err());
         assert!(Config::parse("[limits]\nfive_hour = 60\n").is_err());
         assert!(Config::parse("[secrets]\nX = { file = \"/tmp/x\" }\n").is_err());
+    }
+
+    #[test]
+    fn adapter_dir_reads_the_free_table() {
+        let paths = Paths::new("/v");
+        assert_eq!(Config::default().adapter_dir(&paths).unwrap(), None);
+        let config = Config::parse("[adapter]\ndir = \"/elsewhere/demo\"\n").unwrap();
+        assert_eq!(
+            config.adapter_dir(&paths).unwrap(),
+            Some(PathBuf::from("/elsewhere/demo"))
+        );
+        let config = Config::parse("[adapter]\ndir = \"adapters/mine\"\n").unwrap();
+        assert_eq!(
+            config.adapter_dir(&paths).unwrap(),
+            Some(PathBuf::from("/v/adapters/mine"))
+        );
+        let config = Config::parse("[adapter]\ndir = 3\n").unwrap();
+        assert!(config.adapter_dir(&paths).is_err());
     }
 
     #[test]

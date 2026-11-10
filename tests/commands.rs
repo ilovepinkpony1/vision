@@ -9,8 +9,6 @@ fn a_command_that_is_not_built_exits_with_code_3() {
         (&["pick"], "pick"),
         (&["take", "DEMO-12"], "take"),
         (&["approve-plan", "DEMO-12", "ab12"], "approve-plan"),
-        (&["approve", "DEMO-12", "git.push", "9f3e21c"], "approve"),
-        (&["promote", "git.push"], "promote"),
         (&["report", "--week"], "report"),
     ];
     for (args, name) in lines {
