@@ -5,7 +5,8 @@ import json
 import os
 import unittest
 
-from fixtures import HEAD, OTHER, REPO_PATH, GitHubWorld, adf_doc, comment, jira_issue, pull, review, run
+from fixtures import (HEAD, OTHER, REPO_PATH, GitHubWorld, adf_doc, comment, issue_comment, jira_issue, pull, review,
+                      review_with, run)
 from support import BRANCH, KEY, SECRETS, AdapterTest, Repos, header_hash, read_calls, secret_forms
 
 from jgadapter import adf
@@ -405,6 +406,80 @@ class ReviewReply(AdapterTest):
         self.assertIn("comment_id", result.json["detail"])
 
 
+class ReviewReplyKinds(AdapterTest):
+    """A reply to a review or a conversation comment is a new conversation comment that quotes
+    the first line and ends with the mark of the comment."""
+
+    ISSUE_COMMENTS = REPO_PATH + "/issues/7/comments"
+
+    def setUp(self):
+        super().setUp()
+        self.world = GitHubWorld(self.server, pr=pull(draft=False))
+        self.world.comments = [comment(10, "lead", "Rename this")]
+        self.world.reviews = [review_with(40, "lead", "CHANGES_REQUESTED", "Please rename the export.\nAnd keep CSV.")]
+        self.world.issue_comments = [issue_comment(60, "other", "Add a note <!-- vision-reply review 40 --> to the README.")]
+        self.world.add_reply_route()
+        self.verdicts = json.dumps([
+            {"comment_id": 10, "kind": "inline", "verdict": "valid", "reply": "Renamed."},
+            {"comment_id": 40, "kind": "review", "verdict": "valid", "reply": "Renamed, and CSV stays."},
+            {"comment_id": 60, "verdict": "out-of-scope", "reply": "That belongs to a later ticket."},
+        ])
+
+    def posts(self):
+        return [c for c in self.server.calls("POST") if c["path"].endswith(("/replies", "/issues/7/comments"))]
+
+    def test_each_kind_gets_its_reply_once(self):
+        result = self.act("review.reply", {"verdicts": self.verdicts}, pr=7)
+        self.assertEqual(result.json["state"], "confirmed", result)
+        posts = self.posts()
+        self.assertEqual([p["path"] for p in posts], [
+            REPO_PATH + "/pulls/7/comments/10/replies", self.ISSUE_COMMENTS, self.ISSUE_COMMENTS])
+        self.assertEqual(posts[0]["body"], {"body": "Renamed."})
+        self.assertEqual(posts[1]["body"]["body"],
+                         "> Please rename the export.\n\nRenamed, and CSV stays.\n\n<!-- vision-reply review 40 -->")
+        self.assertEqual(posts[2]["body"]["body"],
+                         "> Add a note  vision-reply review 40  to the README.\n\nThat belongs to a later ticket.\n\n"
+                         "<!-- vision-reply conversation 60 -->",
+                         "a quote never carries the mark of a different comment")
+        again = self.act("review.reply", {"verdicts": self.verdicts}, pr=7)
+        self.assertEqual(again.json["state"], "confirmed", again)
+        self.assertIn("skipped [10, 40, 60]", again.json["detail"])
+        self.assertEqual(len(self.posts()), 3)
+        # The rows of the job comments agree: nothing waits now.
+        result = self.job("comments", pr=7, secrets=SECRETS)
+        self.assertEqual(json.loads(result.json["documents"][0]["content"]), [])
+
+    def test_a_quote_calls_nobody(self):
+        self.world.issue_comments = [issue_comment(61, "other", "@lead and @acme/team: is a@b.c right?")]
+        verdicts = json.dumps([{"comment_id": 61, "kind": "conversation", "verdict": "question", "reply": "Yes."}])
+        result = self.act("review.reply", {"verdicts": verdicts}, pr=7)
+        self.assertEqual(result.json["state"], "confirmed", result)
+        body = self.posts()[0]["body"]["body"]
+        self.assertTrue(body.startswith("> @\u200blead and @\u200bacme/team: is a@\u200bb.c right?\n\nYes."), body)
+        self.assertNotIn("@lead", body, "a mention in a quote would notify the person a second time")
+
+    def test_the_reconcile_only_reads(self):
+        result = self.act("review.reply", {"verdicts": self.verdicts}, pr=7, reconcile=True)
+        self.assertEqual(result.json["state"], "failed")
+        self.assertIn("[10, 40, 60]", result.json["detail"])
+        self.act("review.reply", {"verdicts": self.verdicts}, pr=7)
+        result = self.act("review.reply", {"verdicts": self.verdicts}, pr=7, reconcile=True)
+        self.assertEqual(result.json["state"], "confirmed", result)
+        self.assertEqual(len(self.posts()), 3)
+
+    def test_an_id_of_two_kinds_needs_its_kind(self):
+        self.world.issue_comments.append(issue_comment(10, "other", "The same id, in the conversation."))
+        verdicts = json.dumps([{"comment_id": 10, "verdict": "valid", "reply": "Renamed."}])
+        result = self.act("review.reply", {"verdicts": verdicts}, pr=7)
+        self.assertEqual(result.json["state"], "failed", result)
+        self.assertIn("name comments of more than one kind", result.json["detail"])
+        self.assertEqual(self.posts(), [])
+        verdicts = json.dumps([{"comment_id": 10, "kind": "conversation", "verdict": "valid", "reply": "Done."}])
+        result = self.act("review.reply", {"verdicts": verdicts}, pr=7)
+        self.assertEqual(result.json["state"], "confirmed", result)
+        self.assertEqual([p["path"] for p in self.posts()], [self.ISSUE_COMMENTS])
+
+
 class CiRerun(AdapterTest):
     RERUN = REPO_PATH + "/actions/runs/41/rerun-failed-jobs"
 
@@ -449,6 +524,73 @@ class CiRerun(AdapterTest):
         self.world.runs = [run(41, conclusion="failure", attempt=2)]
         self.assertEqual(self.act("ci.rerun", head=HEAD, reconcile=True).json["state"], "confirmed")
         self.assertEqual(self.server.calls("POST", self.RERUN), [])
+
+    def test_an_uncertain_answer_names_the_attempt_and_the_reconcile_reads_it(self):
+        self.starts = False
+        first = self.act("ci.rerun", head=HEAD, config=self.config(ci_find_seconds=0.5))
+        self.assertEqual(first.json["state"], "uncertain", first)
+        self.assertEqual(first.json["external_id"], "run-41-attempt-1")
+        # The reconcile reads the run of the external id, and a new attempt is the rerun.
+        self.world.runs[0] = run(41, conclusion="failure", attempt=2)
+        reads = len(self.server.calls("GET", REPO_PATH + "/actions/runs/41"))
+        result = self.act("ci.rerun", head=HEAD, reconcile=True, external_id="run-41-attempt-1",
+                          started="2026-11-02T11:00:00Z")
+        self.assertEqual(result.json["state"], "confirmed", result)
+        self.assertIn("attempt 2, and the call found attempt 1", result.json["detail"])
+        result = self.act("ci.rerun", head=HEAD, reconcile=True, external_id="run-41-attempt-2")
+        self.assertEqual(result.json["state"], "failed", result)
+        self.assertEqual(len(self.server.calls("GET", REPO_PATH + "/actions/runs/41")), reads + 2)
+        self.assertEqual(self.server.calls("GET", REPO_PATH + "/actions/runs")[1:], [],
+                         "the reconcile needs no search for the run")
+        self.assertEqual(len(self.server.calls("POST", self.RERUN)), 1)
+
+    def test_a_rerun_that_a_person_started_by_hand_before_the_call_is_not_this_operation(self):
+        # The first call ended with no answer, so the reconcile has only the time of the call.
+        self.world.runs = [run(41, conclusion="failure", attempt=2, started_at="2026-11-02T10:30:00Z")]
+        result = self.act("ci.rerun", head=HEAD, reconcile=True, external_id=None, started="2026-11-02T11:00:00Z")
+        self.assertEqual(result.json["state"], "failed", result)
+        self.assertIn("before the call at 2026-11-02T11:00:00Z: a person ran it by hand", result.json["detail"])
+        self.world.runs = [run(41, status="queued", conclusion=None, attempt=3, started_at="2026-11-02T11:00:04Z")]
+        result = self.act("ci.rerun", head=HEAD, reconcile=True, external_id=None, started="2026-11-02T11:00:00Z")
+        self.assertEqual(result.json["state"], "confirmed", result)
+        self.assertIn("after the call", result.json["detail"])
+        self.assertEqual(self.server.calls("POST", self.RERUN), [])
+
+
+class BaseRef(AdapterTest):
+    """The base branch comes from base_ref, the `base` of adapter.toml; base_branch overrides it."""
+
+    TEXT = "# Export the report\n\nThe body."
+
+    def setUp(self):
+        super().setUp()
+        self.world = GitHubWorld(self.server, pr={})
+        self.world.pr = None
+
+        def create(req):
+            self.world.pr = pull(number=7, sha=HEAD)
+            return 201, self.world.pr
+        self.server.route("POST", REPO_PATH + "/pulls", create)
+
+    def test_the_base_of_a_pull_request_comes_from_base_ref(self):
+        self.BASE_REF = "origin/release/2.0"
+        result = self.act("pr.open", {"text": self.TEXT}, head=HEAD)
+        self.assertEqual(result.json["state"], "confirmed", result)
+        self.assertEqual(self.server.calls("POST", REPO_PATH + "/pulls")[0]["body"]["base"], "release/2.0")
+
+    def test_base_branch_overrides_base_ref(self):
+        result = self.act("pr.open", {"text": self.TEXT}, head=HEAD, config=self.config(base_branch="develop"))
+        self.assertEqual(result.json["state"], "confirmed", result)
+        self.assertEqual(self.server.calls("POST", REPO_PATH + "/pulls")[0]["body"]["base"], "develop")
+
+    def test_git_push_never_pushes_the_base_branch_of_base_ref(self):
+        self.BASE_REF = "origin/trunk"
+        result = self.act("git.push", {}, branch="trunk", head=HEAD)
+        self.assertEqual(result.code, 2, result)
+        self.assertIn("the base branch", result.json["detail"])
+        result = self.act("pr.open", {"text": self.TEXT}, branch="trunk")
+        self.assertEqual(result.code, 2, result)
+        self.assertEqual(self.server.calls("POST", REPO_PATH + "/pulls"), [])
 
 
 class Deploy(AdapterTest):

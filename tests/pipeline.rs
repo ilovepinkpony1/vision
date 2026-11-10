@@ -291,6 +291,57 @@ fn a_missing_end_fact_resumes_once_then_needs_you_and_retry_enters_the_step_agai
 }
 
 #[test]
+fn the_proof_of_the_build_gets_the_plan_and_a_missing_document_is_an_empty_text() {
+    let world = World::new();
+    world.write_adapter(|text| {
+        let old = "\"doc:pr.md\", { job = \"proof\", args = { plan = \"{doc:approved-plan.md}\" } }]";
+        assert!(text.contains(old));
+        text.replacen(
+            old,
+            "\"doc:pr.md\", { job = \"proof\", args = { plan = \"{doc:approved-plan.md}\", note = \"{doc:nothing.md}\" } }]",
+            1,
+        )
+    });
+    simple_scenarios(&world);
+    // A change with no new behavior and no test: only the plan can make the proof hold.
+    let plan = "# Plan of DEMO-12\n\nA comment for the reader of calc.py.\n\n- **Proof:** green\n";
+    world.scenario(
+        "builder",
+        "plan",
+        json!([ends_with(result("Planned.", &[("plan.md", plan)]))]),
+    );
+    world.scenario(
+        "builder",
+        "build",
+        json!([runs_then(
+            "printf '# The functions of the toy calculator.\\n' >> calc.py && git commit -q -am 'Comment calc.py'",
+            result("Built.", &[("pr.md", "Comment calc.py\n\nNo new behavior.")])
+        )]),
+    );
+    take_and_approve(&world);
+    world.tick_to("review");
+    let head = git(world.clone(), &["rev-parse", "HEAD"]);
+    let jobs: Vec<(String, String)> = world
+        .ledger()
+        .checks_of(KEY, Some(&head))
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == "job" && c.source == "job:proof")
+        .map(|c| (c.command, c.result))
+        .collect();
+    let args = json!({"plan": plan, "note": ""});
+    assert_eq!(
+        jobs,
+        [(
+            vision::executor::job_command("proof", &args),
+            "pass".to_string()
+        )],
+        "the proof ran once, with the text of the plan and an empty text for the missing document"
+    );
+    assert!(world.doc("proof.txt").is_some(), "the proof wrote its log");
+}
+
+#[test]
 fn a_verb_in_the_mode_ask_waits_for_vision_approve_and_then_goes_on() {
     let world = World::new();
     simple_scenarios(&world);
@@ -658,6 +709,16 @@ fn a_turn_that_asks_for_facts_gets_the_read_verbs_and_a_refusal_for_each_other_v
     );
     assert!(world.clone().join(".vision/issue-DEMO-13.json").is_file());
     assert_eq!(world.acts_of("git.push"), 0);
+    // Each turn knows the facts that it can ask for: the read verbs, with their `about`.
+    for turn in &turns {
+        let requests = facts_of(&world, &turn.id)["requests"].clone();
+        assert_eq!(requests.as_array().unwrap().len(), 1, "{requests}");
+        assert_eq!(requests[0]["verb"], "tracker.issue");
+        assert!(
+            requests[0]["about"].as_str().unwrap().contains("args: key"),
+            "{requests}"
+        );
+    }
 }
 
 #[test]
@@ -791,5 +852,179 @@ fn pick_log_diff_and_report_show_the_ticket() {
             .contains("waits for you: vision approve-plan DEMO-12")
             || status.stdout.contains("needs you: 1 plan"),
         "{status:?}"
+    );
+}
+
+/// A private adapter with the scripts of the demo whose entry is one wait step on the draft
+/// flag of the pull request, which does not exist: the watched value is `none`.
+fn wait_adapter(world: &World, keys: &str) {
+    world.write_adapter(|text| {
+        let scripts = text
+            .lines()
+            .find(|l| l.starts_with("scripts = "))
+            .unwrap()
+            .to_string();
+        format!(
+            "name = \"demo\"\nbase = \"origin/main\"\n{scripts}\n\n[[step]]\nid = \"look\"\nkind = \"wait\"\nwatch = \"pr.draft\"\non = {{ \"false\" = \"done\" }}\nevery = 1\n{keys}\n\n[[step]]\nid = \"done\"\nkind = \"end\"\n"
+        )
+    });
+}
+
+#[test]
+fn a_wait_step_flags_a_value_that_nothing_names_and_retry_looks_again() {
+    let world = World::new();
+    wait_adapter(&world, "wait = [\"true\"]");
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains(
+            "the step look watches pr.draft, and its value `none` is in neither on nor wait"
+        ),
+        "a missing path is the value none: {reason}"
+    );
+    let first = world.counts()["visit"]["seq"].as_u64().unwrap();
+    world.run(&["retry", KEY]).expect_code(0);
+    assert!(world.flags().is_empty());
+    let visit = world.counts()["visit"].clone();
+    assert!(
+        visit["seq"].as_u64().unwrap() > first,
+        "retry enters the step again: {visit}"
+    );
+    assert_eq!(visit["since"], Value::Null, "a new visit looks again");
+    world.tick_until("the flag again", LONG, |w| has_flag(w, "needs-you"));
+    assert_eq!(world.step().as_deref(), Some("look"));
+}
+
+#[test]
+fn a_wait_step_above_its_limit_needs_you_and_retry_starts_a_new_limit() {
+    let world = World::new();
+    wait_adapter(&world, "wait = [\"none\", \"true\"]\nlimit = 2");
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick();
+    let since = world.counts()["visit"]["since"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(world.flags().is_empty(), "the first look starts the clock");
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains("the step look watched pr.draft for")
+            && reason.contains("above its limit of 2 s. The last value: none"),
+        "{reason}"
+    );
+    world.run(&["retry", KEY]).expect_code(0);
+    // The first tick of the new visit looks, and its clock starts at that look.
+    world.tick();
+    assert!(
+        world.flags().is_empty(),
+        "a new limit: {}",
+        world.reason("needs-you")
+    );
+    let again = world.counts()["visit"]["since"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(again > since, "{again} > {since}");
+    world.tick_until("the flag after the new limit", LONG, |w| {
+        has_flag(w, "needs-you")
+    });
+}
+
+#[test]
+fn a_turn_step_moves_on_the_kept_findings_of_its_turn() {
+    let world = World::new();
+    world.write_adapter(|text| {
+        let scripts = text
+            .lines()
+            .find(|l| l.starts_with("scripts = "))
+            .unwrap()
+            .to_string();
+        format!(
+            r#"name = "demo"
+base = "origin/main"
+{scripts}
+
+[[step]]
+id = "check"
+kind = "turn"
+agent = "tester"
+turn = "reader"
+reads = ["issue.json"]
+expects = ["doc:qa.md"]
+findings = "qa"
+on = {{ findings = "fix", none = "done" }}
+cap = "qa_fix"
+
+[[step]]
+id = "fix"
+kind = "turn"
+agent = "builder"
+turn = "reader"
+reads = ["qa.md"]
+expects = ["doc:fix-notes.md"]
+next = "check"
+
+[[step]]
+id = "done"
+kind = "end"
+"#
+        )
+    });
+    let bug = "## Bugs\n\n### B1: subtract(2, 5) gives the wrong sign (major)\nSteps: call it.\n\n### B2: the color of the page (minor)\nRejected: style_only.\n";
+    // A turn whose only finding is rejected holds no kept finding.
+    let clean = "## Bugs\n\n### B2: the color of the page (minor)\nRejected: style_only.\n";
+    world.scenario(
+        "tester",
+        "check",
+        json!([
+            ends_with(result("One bug.", &[("qa.md", bug)])),
+            ends_with(result("No bug.", &[("qa.md", clean)]))
+        ]),
+    );
+    world.scenario(
+        "builder",
+        "fix",
+        json!([ends_with(result(
+            "Fixed.",
+            &[("fix-notes.md", "B1 is fixed.")]
+        ))]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+    let spans: Vec<String> = world
+        .ledger()
+        .spans_of(Some(KEY))
+        .unwrap()
+        .into_iter()
+        .map(|s| format!("{} ({})", s.state, s.reason.unwrap_or_default()))
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            "check (take)",
+            "fix (on findings)",
+            "check (next)",
+            "done (on none)"
+        ]
+    );
+    let findings = world.ledger().findings_of(KEY).unwrap();
+    let rows: Vec<(i64, &str, &str)> = findings
+        .iter()
+        .map(|f| (f.round, f.source.as_str(), f.verdict.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (1, "qa", "kept"),
+            (1, "qa", "rejected"),
+            (2, "qa", "rejected")
+        ]
+    );
+    assert_eq!(
+        world.counts()["entries"]["check"],
+        2,
+        "an entry by on counts for the cap"
     );
 }

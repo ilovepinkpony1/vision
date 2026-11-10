@@ -42,13 +42,14 @@ use crate::tick::{JobRun, OperationRun, Pass};
 pub use clean::{Document, RESERVED_DOCUMENTS};
 pub use context::{diff, short, TicketContext};
 pub use jobs::{
-    job, job_passed, job_source, read, write_documents, JobResult, ReadAnswer, JOB_CHECK,
+    job, job_command, job_passed, job_passed_with, job_source, read, write_documents, JobResult,
+    ReadAnswer, JOB_CHECK,
 };
 pub use observe::{observe_queue, observe_ticket, CiFacts, PrFacts, QueueTicket, TicketFacts};
 pub use ops::{
-    approve, approve_command, change_mode, commit_arg, demoted, idempotency_key, lookup, mode_of,
-    operation, operations_of, promoted, reconcile, release_failed, request, OpState,
-    OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
+    approve, approve_command, args_hash, change_mode, commit_arg, demoted, idempotency_key, lookup,
+    mode_of, once_key, operation, operations_of, promoted, reconcile, release_failed, request,
+    OpState, OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
 };
 pub use scripts::{Answer, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT, PASSED_ENV};
 

@@ -74,13 +74,15 @@ impl TicketFacts {
     }
 
     /// The value at a path of `watch` as the text that `on` compares: a string as it is, a
-    /// boolean or a number as JSON, and `None` for a missing value, a null, a list, or a table.
+    /// boolean or a number as JSON, `none` for a path that the answer does not have or a null,
+    /// and `None` for a list or a table.
     pub fn watch_text(&self, path: &str) -> Option<String> {
-        match self.watch(path)? {
-            Value::String(s) => Some(s.clone()),
-            Value::Bool(b) => Some(b.to_string()),
-            Value::Number(n) => Some(n.to_string()),
-            _ => None,
+        match self.watch(path) {
+            None | Some(Value::Null) => Some("none".to_string()),
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(Value::Bool(b)) => Some(b.to_string()),
+            Some(Value::Number(n)) => Some(n.to_string()),
+            Some(_) => None,
         }
     }
 }

@@ -4,7 +4,8 @@
 //! stream. When the turn ended, it writes the row (status, reason, times, session id, cost,
 //! the four usage numbers, the refused tool calls, and both limit readings with their reset
 //! times), writes `result.json`, and adds an event. A turn whose supervisor is dead while
-//! `turn.json` says it runs gets the reason `crash`.
+//! `turn.json` still says it runs, also when read again after the test of the lock, gets the
+//! reason `crash`.
 //!
 //! A turn that ended with no valid result object, with an error, or with a crash gets one
 //! automatic resume of its session with the message `continue` (section 7.6). When that turn
@@ -163,13 +164,13 @@ fn collect_one(
             if state::supervisor_alive(&turn.dir) {
                 return Ok(None);
             }
-            crashed(&turn, s)?
+            ended_or_crashed(&turn, s)?
         }
         other => {
             if age < START_GRACE_SECS || state::supervisor_alive(&turn.dir) {
                 return Ok(None);
             }
-            crashed(&turn, other.unwrap_or_else(|| TurnState::queued(&row.id)))?
+            ended_or_crashed(&turn, other.unwrap_or_else(|| TurnState::queued(&row.id)))?
         }
     };
     let reason = ended.reason.unwrap_or(Reason::Error);
@@ -316,6 +317,17 @@ fn no_retry(
     None
 }
 
+/// The end of a turn whose supervisor holds no lock. The supervisor writes its end before it
+/// lets its lock go, so a supervisor that ended between the first read of `turn.json` and the
+/// test of the lock left its end there: a second read finds it. Only with no end there did
+/// the supervisor stop before it wrote one.
+fn ended_or_crashed(turn: &TurnPaths, seen: TurnState) -> Result<TurnState> {
+    match TurnState::read(&turn.status).unwrap_or(None) {
+        Some(now) if now.is_ended() => Ok(now),
+        now => crashed(turn, now.unwrap_or(seen)),
+    }
+}
+
 /// Marks a turn whose supervisor died as crashed, and kills what is left of its session.
 fn crashed(turn: &TurnPaths, status: TurnState) -> Result<TurnState> {
     if let Some(child) = status.child_pid {
@@ -453,6 +465,32 @@ mod tests {
         ] {
             assert_eq!(TurnStatus::parse(status.as_str()), Some(status));
         }
+    }
+
+    /// The collector read "running", and then the supervisor wrote its end and let its lock
+    /// go: the end counts, not a crash.
+    #[test]
+    fn a_supervisor_that_ended_after_the_first_read_is_no_crash() {
+        let home = tempfile::tempdir().unwrap();
+        let key = TicketKey::parse("DEMO-12").unwrap();
+        let id = TurnId::parse("20261110T183922Z-DEMO-12-qa-1").unwrap();
+        let turn = crate::paths::Paths::new(home.path()).turn(&key, &id);
+        ensure_dir(&turn.dir).unwrap();
+        let mut seen = TurnState::queued(&id.to_string());
+        seen.state = Phase::Running;
+        let end = seen.clone().ended(Reason::Result, None);
+        end.write(&turn.status).unwrap();
+        let got = ended_or_crashed(&turn, seen.clone()).unwrap();
+        assert_eq!(got.reason, Some(Reason::Result));
+        let on_disk = TurnState::read(&turn.status).unwrap().unwrap();
+        assert_eq!(on_disk.reason, Some(Reason::Result), "the end stays");
+
+        // With no end in turn.json, the supervisor stopped before it wrote one.
+        seen.write(&turn.status).unwrap();
+        let got = ended_or_crashed(&turn, seen).unwrap();
+        assert_eq!(got.reason, Some(Reason::Crash));
+        let on_disk = TurnState::read(&turn.status).unwrap().unwrap();
+        assert_eq!(on_disk.reason, Some(Reason::Crash));
     }
 
     #[test]

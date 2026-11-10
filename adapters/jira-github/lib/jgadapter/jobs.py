@@ -30,7 +30,7 @@ def job(request):
     if name not in JOBS:
         raise core.Failure("the adapter jira-github has no job %r. Its jobs: %s" % (
             core.clean(name, 40), ", ".join(sorted(JOBS))))
-    return JOBS[name](core.Config(request.get("config")), request)
+    return JOBS[name](core.Config.of(request), request)
 
 
 # Commands of the project ----------------------------------------------------------------------
@@ -148,6 +148,42 @@ def paths_of(value):
     return out
 
 
+# A line of the plan that declares the proof green: `Proof: green` for the whole proof, or
+# `Proof: green <path>` for one test file. Any case; a list mark, a quote mark, and emphasis
+# marks can come first, such as `- **Proof:** green tests/test_export.py`.
+PROOF_LINE = re.compile(r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s+)?[*_]*\s*proof\s*[*_]*\s*:\s*[*_]*\s*green(?![A-Za-z0-9]|_[A-Za-z0-9])(.*)$",
+                        re.IGNORECASE)
+
+
+def plan_green(text):
+    """What the plan text declares green: (True, set()) for the whole proof, or (False, the
+    test files). A path has a `/` or a file ending, or it stands in backticks. Each other text
+    after `green`, such as `- no new behavior`, `(a refactor)`, or `because ...`, is a comment:
+    the whole proof is green."""
+    whole, paths = False, set()
+    if not isinstance(text, str):
+        return whole, paths
+    for line in text.splitlines():
+        match = PROOF_LINE.match(line)
+        if not match:
+            continue
+        rest = match.group(1).strip().strip("*_").strip()
+        if rest.startswith("`"):
+            path = rest[1:].split("`", 1)[0].strip()
+        elif rest and (rest[0].isalnum() or rest[0] in "./_"):
+            # A path has a folder part or a file ending. A plain word, such as `because`,
+            # starts a comment.
+            word = rest.split()[0].rstrip(".,;:*_")
+            path = word if ("/" in word or "." in word) else ""
+        else:
+            path = ""
+        if path:
+            paths.add(path[2:] if path.startswith("./") else path)
+        else:
+            whole = True
+    return whole, paths
+
+
 @contextlib.contextmanager
 def worktree(clone, commit):
     """A temporary worktree of the clone at the commit. It is always removed."""
@@ -173,8 +209,11 @@ def proof(config, request):
     clone, base, head = need_commits(request, what)
     timeout = config.number("test_timeout", 600)
     args = request.get("args") or {}
-    green_all = args.get("green") is True
-    green = paths_of(args.get("green"))
+    # The plan (args.plan, the text of approved-plan.md) declares the proof green, and the
+    # older form args.green does too: true, or the test files.
+    plan_all, plan_paths = plan_green(args.get("plan"))
+    green_all = args.get("green") is True or plan_all
+    green = paths_of(args.get("green")) | plan_paths
     at = core.git_text(["rev-parse", "HEAD"], cwd=clone)
     if at != head:
         raise core.Failure("the clone is at %s, not at the head %s" % (core.short(at), core.short(head)))
@@ -266,10 +305,12 @@ def proof(config, request):
 def second_review(config, request):
     command = config.text("second_review_command")
     if not command:
+        # No document: the facts file of the review turn then gives null for second-review.md,
+        # which the reviewer reads as "no second review ran".
         return {
             "ok": True,
-            "detail": "no second reviewer is set: second_review_command is empty",
-            "documents": [{"name": "second-review.md", "content": ""}],
+            "detail": "no second reviewer is set: second_review_command is empty, so no second review ran",
+            "documents": [],
             "checks": [],
         }
     clone, base, head = need_commits(request, "the second review")
@@ -298,7 +339,9 @@ def second_review(config, request):
 
 
 def comments(config, request):
-    """The review comment threads that wait, as comments.json. The text is untrusted data."""
+    """Each comment that waits for an answer, as comments.json: the inline threads, the reviews
+    that ask for changes or comment with a body, and the conversation comments, one row each
+    with its kind. The text is untrusted data."""
     why = "the job comments"
     own = config.logins("own_logins")
     if not own:
@@ -309,27 +352,12 @@ def comments(config, request):
         return {"ok": True, "detail": "no pull request, so no comment waits",
                 "documents": [{"name": "comments.json", "content": "[]\n"}]}
     number = pull["number"]
-    rows = []
-    for root, items in sorted(forge.waiting_threads(gh.review_comments(number), own).items()):
-        first, last = items[0], items[-1]
-        mine = [i for i, c in enumerate(items) if forge.login(c.get("user")).lower() in own]
-        new = items[mine[-1] + 1:] if mine else items
-        if len(new) == 1:
-            text = new[0].get("body") or ""
-        else:
-            text = "\n\n".join("%s: %s" % (forge.login(c.get("user")), c.get("body") or "") for c in new)
-        rows.append({
-            "id": root,
-            "author": forge.login(last.get("user")),
-            "path": first.get("path"),
-            "line": first.get("line") or first.get("original_line"),
-            "text": {"untrusted": text},
-            "thread": [{"id": c.get("id"), "author": forge.login(c.get("user")), "text": {"untrusted": c.get("body") or ""}}
-                       for c in items],
-        })
+    rows = forge.waiting_rows(gh.reviews(number), gh.review_comments(number), gh.issue_comments(number), own,
+                              config.logins("ignore_logins"))
+    kinds = ", ".join("%d %s" % (sum(1 for r in rows if r["kind"] == k), k) for k in forge.KINDS)
     return {
         "ok": True,
-        "detail": "%d thread(s) of #%d wait for a reply" % (len(rows), number),
+        "detail": "%d comment(s) of #%d wait for a reply (%s)" % (len(rows), number, kinds),
         "documents": [{"name": "comments.json", "content": json.dumps(rows, indent=2) + "\n"}],
     }
 
@@ -404,7 +432,7 @@ def job_log(gh, config, job_id, keep):
 # app-start ------------------------------------------------------------------------------------
 
 
-def answers(url, timeout=2):
+def answers(url, timeout=2.0):
     """True when the address answers with a status below 400."""
     try:
         return core.send("GET", url, {"User-Agent": "vision-jira-github-adapter"}, timeout=timeout, limit=1024).status < 400
@@ -441,24 +469,43 @@ def app_start(config, request):
     key = core.check_key(request.get("key"))
     log_path = os.path.join(tempfile.gettempdir(), "vision-app-%s-%s.log" % (key, core.stamp()))
     started = time.monotonic()
+    deadline = started + timeout
+    # A Python app writes its output at once, so that its log shows how far it came even when
+    # it is stopped: a stopped process loses the output that waits in its buffer.
+    env = dict(core.plain_env(), PYTHONUNBUFFERED="1")
     with open(log_path, "ab") as log:
-        proc = subprocess.Popen(["sh", "-c", command], cwd=clone, env=core.plain_env(), stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(["sh", "-c", command], cwd=clone, env=env, stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     info.update({"started": True, "pid": proc.pid, "log": log_path})
     while True:
-        if answers(health):
+        # One probe never runs past the time limit, and the last probe comes at the limit.
+        left = deadline - time.monotonic()
+        if answers(health, timeout=max(0.2, min(2.0, left))):
             return answer(True, "started the app (process id %d) in %d s; it answers at %s. Its log is %s" % (
                 proc.pid, int(time.monotonic() - started), health, log_path))
         code = proc.poll()
         if code is not None:
             return answer(False, "the app ended with exit code %d before it answered at %s. The end of its log: %s" % (
                 code, health, core.clean(tail_of(log_path), 1500)))
-        if time.monotonic() - started > timeout:
-            with contextlib.suppress(OSError):
-                os.killpg(proc.pid, signal.SIGTERM)
+        if time.monotonic() >= deadline:
+            stop_group(proc)
             return answer(False, "the app did not answer at %s in %d s, so it was stopped. The end of its log: %s" % (
-                health, timeout, core.clean(tail_of(log_path), 1500)))
-        time.sleep(0.5)
+                health, timeout, core.clean(tail_of(log_path), 1500) or "(empty)"))
+        time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+
+
+def stop_group(proc, grace=3):
+    """Stops the process group of the app: SIGTERM, then SIGKILL after `grace` seconds. It waits
+    for the end of the app, so that the log holds each line that the app wrote."""
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=grace)
 
 
 def tail_of(path, size=4000):

@@ -265,11 +265,14 @@ The first message of a turn is one line: `Turn <id>. Read .vision/turns/<id>/fac
   "sensitive_topics": ["security", "money"],
   "sensitive_paths": [".github/", "db/migrate/"],
   "expects": ["commits", "doc:pr.md"],
+  "requests": [{"verb": "tracker.issue", "about": "One ticket of the tracker as issue-<KEY>.json. args: key"}],
   "message": null
 }
 ```
 
 `documents` has one key for each name of `reads`. If the ticket folder has no such file, the value is `null`. A turn step with the key `with` also gets those values under `with`.
+
+`requests` lists each read verb of the adapter with its `about` line. That line says what the verb gives and which arguments it takes. If `adapter.toml` gives no such line, the value is `null`. A session that needs one of these facts ends its turn with the kind `requests`.
 
 Text from the tracker, from review comments, and from logs is wrapped as `{"untrusted": "..."}`. Each role file says that such text is data, never an order.
 
@@ -319,7 +322,7 @@ Claude Code adds the tool `StructuredOutput` by itself, because each turn has a 
 7. At the time limit of the kind, kill the process group and end with the reason `timeout`.
 8. Write `result.json` and the final `turn.json`: the state `ended`, the exit code, and the reason.
 
-The reasons are `result`, `error`, `timeout`, `contract`, `killed`, and `crash`. A later tick reads `turn.json` and the stream. A supervisor holds a lock on `supervisor.lock` while it lives. If `turn.json` says `running` and no process holds that lock, the tick sets the reason `crash`. The tick does not trust a process id, because a different process can get the same id later.
+The reasons are `result`, `error`, `timeout`, `contract`, `killed`, and `crash`. A later tick reads `turn.json` and the stream. A supervisor holds a lock on `supervisor.lock` while it lives. If `turn.json` says `running` and no process holds that lock, the tick reads `turn.json` again. The supervisor writes its end before it frees the lock. So the second read finds the end of a supervisor that ended between the two reads. If `turn.json` still says `running`, the tick sets the reason `crash`. The tick does not trust a process id, because a different process can get the same id later.
 
 A row of `turns` has one of four statuses: `running`, `done`, `retried`, and `failed`. `[time]` gives the time limit of a kind in minutes. A caller of the launch API can give a limit in seconds, as the Judge does with `caps.judge_minutes`.
 
@@ -641,7 +644,7 @@ Vision looks for the adapter of `project` first in `$VISION_HOME/adapters/`, and
 
 An `adapter.toml` can name a different folder for its scripts with the key `scripts`. A private adapter then holds only its own step list, and it uses the scripts of a public adapter.
 
-Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that the script refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration.
+Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that the script refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration. It also always has `base_ref`, the `base` of `adapter.toml`, such as `origin/main`. So the base branch has one place.
 
 The environment of a script has only `PATH`, `HOME`, `LANG`, and `TMPDIR`. `bin/observe` and `bin/act` also get each secret of `[secrets]` as an environment name. `bin/job` gets no secret, because a job can run code that an agent wrote. A job that only reads the tracker or the forge sets `secrets = true`. The executor masks each secret value in an answer before it stores the answer.
 
@@ -656,7 +659,8 @@ observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 
 act      {"verb": "git.push", "op": "op-id", "key": "DEMO-12", "clone": "/path", "branch": "vision/DEMO-12",
           "head": "abc", "pr": 7, "args": {}, "config": {}}
       -> {"state": "confirmed", "external_id": "...", "detail": "...", "set": {"pr": 7}}
-act      {"verb": "git.push", "op": "op-id", "reconcile": true, ...}
+act      {"verb": "git.push", "op": "op-id", "reconcile": true, "external_id": null,
+          "started": "2026-11-16T14:30:00Z", ...}
       -> the same object. The script only reads the outside state, and it never acts again.
 act      {"verb": "tracker.issue", "read": true, "key": "DEMO-12", "args": {}, ...}
       -> {"detail": "...", "documents": [{"name": "links.json", "content": "..."}]}
@@ -668,12 +672,14 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
 
 - `state` of an `act` answer is `confirmed`, `failed`, or `uncertain`.
 - `set` can give new values for the ticket row: `pr`, `head`.
-- `documents` of a job go to the ticket folder. A later turn can read them. A script cannot write a document that the person or the pipeline owns, such as `plan.md` or `issue.json`.
+- `documents` of a job go to the ticket folder. The documents of an `act` answer with the state `confirmed` go there too. A later turn can read them. The runner masks each secret value in them. A script cannot write a document that the person or the pipeline owns, such as `plan.md` or `issue.json`.
+- A reconcile call also has `external_id` and `started`. `external_id` is the id that the first answer stored, or `null`. `started` is the time of the first call.
 - A read verb changes nothing outside. A turn can ask for it, and the documents of its answer go to that turn.
 - If `act` ends with a different exit code, a signal, a time limit, or bad output, the operation becomes `uncertain`. The outside state is unknown then.
 - The `cause` of a check is `code`, `infra`, `flaky`, `env`, `not ours`, or `unknown`.
 - `ci.state` is `green` or `red` for a run that ended. Each other word means that no run ended at that commit. For each pair of commit and result, the runner writes one row in `checks` with the kind `ci`.
 - Each run of a job also writes one row in `checks` with the kind `job` and the source `job:<name>`. Its result is `pass`, `fail`, or `error`. The end fact `job:<name>` reads that row at the last commit.
+- A job with arguments writes the command `<name> <hash>` in that row. The hash is the first 16 hex characters of the SHA-256 of its arguments as JSON with sorted keys. An end fact with arguments reads only a row with the same command. So the job runs again after its arguments change at the same commit.
 
 ### 11.2 The steps
 
@@ -705,7 +711,7 @@ kind = "turn"
 agent = "builder"
 turn = "worker"
 reads = ["approved-plan.md", "refine.md", "answers.md"]
-expects = ["commits", "clean", "doc:pr.md", "job:proof"]
+expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push", "pr.open"]
 next = "review"
 
@@ -727,6 +733,8 @@ kind = "wait"
 start = ["ci.run"]            # verbs that run at the entry
 watch = "ci.state"            # a path into the observe answer
 on = { green = "ready", red = "fix-ci" }
+wait = ["none"]               # the values that mean "not yet". Each other value sets needs-you.
+limit = 3600                  # seconds that one visit can watch before it sets needs-you
 every = 60                    # seconds between two observe calls
 
 [[step]]
@@ -738,8 +746,12 @@ mode = "auto"                 # the mode at the start. [modes] of the configurat
 leaves = true                 # text or code leaves the machine, so the gates run first
 timeout = 120                 # seconds for one call. The default is 300.
 
+[verbs."tracker.move"]
+once = true                   # one run for each ticket and its arguments, at any commit. The default is false.
+
 [verbs."tracker.issue"]
 read = true                   # it changes nothing outside, so it has no mode. A turn can ask for it.
+about = "One ticket of the tracker as issue-<KEY>.json. args: key"   # one line for the facts file
 
 [jobs.proof]
 timeout = 1800
@@ -755,9 +767,16 @@ after = ["git.push", { verb = "deploy", args = { env = "staging" } }]
 before = [{ job = "app-start", args = { env = "local" } }]
 with = { env = "staging" }    # a turn step: these values go into the facts file under "with"
 findings = "review"           # a turn step: each finding of its documents becomes a row with this source
+on = { findings = "fix-qa", none = "ready" }   # a turn step with findings: it replaces next
 ```
 
 A text argument of an entry can hold `{doc:NAME}`. The runner puts the text of that document of the ticket folder in its place. If the document does not exist, the ticket gets the flag `needs-you`, and the verb does not run.
+
+An entry of `expects` can also be a table: `{ job = "<name>", args = {...} }`. Its arguments follow the same `{doc:NAME}` rule, with one difference. A missing document gives an empty text and no flag, and the job decides what an empty text means.
+
+A turn step with the key `findings` can have `on` in the place of `next`. This `on` has exactly the keys `findings` and `none`. The loader refuses `on` without `findings`, `on` together with `next`, and a target that is not a step.
+
+A verb with `once = true` runs one time for a ticket and its arguments, at any commit. The loader refuses `once` on a read verb and on a verb with `leaves`, because the gates judge what leaves at each commit. A read verb can have `about`, one line of up to 300 characters.
 
 The runner reads three documents of a turn by their form:
 
@@ -770,7 +789,7 @@ A step can expect these end facts:
 - `doc:<name>`: the result has that document, and it is not empty.
 - `commits`: the branch has a commit that it did not have at the entry into the step.
 - `clean`: the work tree of the clone is clean.
-- `job:<name>`: the job passes at the last commit.
+- `job:<name>`: the job passes at the last commit. The table form gives the job its arguments.
 - `human:<action>`: the person did that action.
 
 ### 11.3 How a ticket moves
@@ -783,8 +802,11 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - A turn that ends with `result`. The runner writes each expected document to the ticket folder. Then it tests each end fact.
 - If an end fact does not hold, one new turn resumes the session with a message that names the fact. After a second failure, the ticket gets the flag `needs-you`.
 - If each end fact holds, the `after` verbs run in order. After each one has the state `confirmed`, the ticket moves to `next`.
+- A turn step with `on` moves by its findings. If the documents of its last turn hold a kept finding, the ticket moves to the step of `findings`. If they hold none, it moves to the step of `none`.
 - A step with a `cap` counts each entry that comes from `next` or `on`. One entry above the cap sets the flag `needs-you` with the open items. An entry by `vision retry` or `vision take` does not count.
 - A wait step first runs its `start` verbs. After each one has the state `confirmed`, it runs `observe` each `every` seconds, and it moves on the value of `watch`.
+- The value of `watch` is a text. A path that the answer does not have gives `none`, and a `null` gives `none` too. If the step has `wait`, a value that is in neither `on` nor `wait` sets the flag `needs-you` at once.
+- If a wait step has `limit`, a visit that watches for more than `limit` seconds sets the flag `needs-you`. The reason names the last value. The time counts from the first `observe` of the visit. `vision retry KEY` enters the step again and starts a new limit.
 - A human step waits for its command. `vision needs` lists it. The one action is `approve-plan`.
 - The end step frees the clone. If the pull request is merged, it records the event `ticket-merged`.
 
@@ -801,18 +823,51 @@ A `failed` operation is final for its key. `vision retry KEY` frees the key, so 
 
 `vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time.
 
-The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. A plan can declare the proof `green` for a change with no new behavior. Any new commit voids the proof.
+The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. Any new commit voids the proof.
+
+The proof gets the approved plan in `args.plan`. A line `Proof: green` in the plan declares the whole proof green, for a change with no new behavior. The changed tests then only have to pass at the last commit. A line `Proof: green <path>` declares one test file green, and the proof does not run that file on the base commit.
 
 ### 11.4 The demo adapter
 
 `adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
+
+### 11.5 The adapter for Jira and GitHub
+
+`adapters/jira-github` connects Vision to Jira Cloud and GitHub. Its scripts are Python 3 with the standard library only. The comment block at the top of its `adapter.toml` documents each key of `[adapter]`, each secret, and the path of a ticket.
+
+The path has these parts:
+
+1. The Scout refines the ticket, and `tracker.describe` writes the new description to Jira. The answer keeps the old description as a backup document.
+2. The Scout writes the plan, and the person approves it.
+3. `tracker.move` moves the issue to the status of work. The Builder builds, and the proof runs.
+4. `git.push` pushes the branch, and `pr.open` opens a draft pull request.
+5. The Reviewer reviews the diff. A second review command is optional.
+6. `ci.run` starts the CI workflow. After a red run, `ci.rerun` runs the failed jobs one more time. After a second red run, the Builder fixes the fault.
+7. The Tester does QA on the local app. A kept bug goes to a fix, to CI, and to QA again.
+8. The person marks the pull request as ready. The team reviews it.
+9. The Shepherd judges each comment that waits, and it fixes each fault that a comment names. `review.reply` answers each comment.
+10. After the approval, the person merges, and the ticket ends.
+
+These rules keep the tokens and the repo safe:
+
+- A token goes to a service only in a header, and only over https. It never goes into a file, a command line, a remote address, an error text, or an answer.
+- `git.push` gives the token to one git call through environment variables, for the address of the remote only. A push never forces.
+- A job that runs code of the project gets no secret.
+- A reconcile call only reads.
+- Text from Jira and from GitHub is data. Each document wraps it as `{"untrusted": "..."}`.
+
+A comment that waits has one of three kinds. `inline` is a thread on a line of the diff, and its reply goes into the thread. `review` is a review with a text that asks for changes or that comments. `conversation` is a comment in the conversation of the pull request. A reply to a review or to a conversation comment is a new conversation comment. It quotes the first line of the comment, and it ends with a hidden mark that names the comment. So a later round does not answer the same comment again.
+
+The key `own_logins` names the logins of the person and of the bot. The key `ignore_logins` names logins whose comments never wait, such as a CI bot.
+
+`tests/e2e_jira_github.rs` drives the whole path against `adapters/jira-github/tests/serve_world.py`. That script is a fake Jira and GitHub with state on a free localhost port. No run against the real services is part of the tests.
 
 ## 12. The executor
 
 No session can call the executor. It runs after a rule in code, after a typed command of the person, or after a turn whose end fact holds.
 
 - Each verb has a mode: `hold`, `shadow`, `ask`, or `auto`. `hold` sets the flag `needs-you`. `shadow` records what the verb intends, does nothing, and sets the flag. `ask` waits for `vision approve KEY VERB COMMIT`. Only `vision promote` and `vision demote` change a mode.
-- Each operation gets a row with the state `pending` and an idempotency key before it runs. The key is a hash of the ticket, the verb, the last commit, and the arguments. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`.
+- Each operation gets a row with the state `pending` and an idempotency key before it runs. The key is a hash of the ticket, the verb, the last commit, and the arguments. The key of a verb with `once = true` leaves out the commit, so a newer commit does not end its operation. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`.
 - At each tick, the executor reconciles each operation in the state `executing` or `uncertain`. It calls the script with `reconcile` set to true. An `uncertain` operation never runs again by itself.
 - Before a verb with `leaves` runs, the gates test what leaves the machine. They refuse text or a diff that contains a secret of `[secrets]`, a private key, or a common form of a token. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name. `vision approve` lets a held diff go.
 - The secrets gate reads the diff from the base to the last commit. It also reads the patch of each commit between them, because a push sends each commit. It reads each file as text, so that an attribute of the repo cannot hide a file.

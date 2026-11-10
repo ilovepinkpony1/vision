@@ -2,7 +2,8 @@
 //! `bin/job` of an adapter.
 //!
 //! A call writes one JSON object to standard input (always with `config`, the `[adapter]` table
-//! of the configuration) and reads one JSON object from standard output. The environment holds
+//! of the configuration, and `base_ref`, the `base` of `adapter.toml`) and reads one JSON object
+//! from standard output. The environment holds
 //! only `PATH`, `HOME`, `LANG`, `TMPDIR`, and each secret of `[secrets]`. Exit code 0 is done,
 //! 2 is a refused gate, and each other code or the end of the time limit is a failure whose
 //! text has the last lines of standard error. The script runs in its own process group, so that
@@ -269,6 +270,8 @@ pub struct Runner<'a> {
     pub scripts: PathBuf,
     /// The `[adapter]` table of the configuration, as JSON.
     pub config: Value,
+    /// The `base` of `adapter.toml`, such as `origin/main`: the one place of the base branch.
+    pub base_ref: String,
     pub secrets: &'a Secrets,
 }
 
@@ -277,6 +280,7 @@ impl<'a> Runner<'a> {
         Runner {
             scripts: adapter.scripts.clone(),
             config: Value::Object(table_to_json(&config.adapter)),
+            base_ref: adapter.base.clone(),
             secrets,
         }
     }
@@ -313,7 +317,8 @@ impl<'a> Runner<'a> {
         self.call(Script::Job, input, timeout, with_secrets)
     }
 
-    /// Starts a script with `input` plus `config`, waits at most `timeout`, and reads its answer.
+    /// Starts a script with `input` plus `config` and `base_ref`, waits at most `timeout`, and
+    /// reads its answer.
     /// The environment of the script holds the names of [`PASSED_ENV`], and the secrets when
     /// `with_secrets` is true. The answer is masked in both cases.
     pub fn call(
@@ -333,6 +338,7 @@ impl<'a> Runner<'a> {
             _ => Map::new(),
         };
         input.insert("config".into(), self.config.clone());
+        input.insert("base_ref".into(), Value::String(self.base_ref.clone()));
         let bytes = serde_json::to_vec(&Value::Object(input)).unwrap_or_default();
         let mut command = Command::new(&path);
         command.current_dir(&self.scripts).env_clear();
@@ -623,6 +629,7 @@ mod tests {
         Runner {
             scripts: dir.to_path_buf(),
             config: json!({"root": "/world"}),
+            base_ref: "origin/trunk".into(),
             secrets,
         }
     }
@@ -642,7 +649,7 @@ mod tests {
         assert_eq!(
             answer,
             Answer::Done(
-                json!({"got": {"what": "queue", "config": {"root": "/world"}}})
+                json!({"got": {"what": "queue", "config": {"root": "/world"}, "base_ref": "origin/trunk"}})
                     .as_object()
                     .unwrap()
                     .clone()

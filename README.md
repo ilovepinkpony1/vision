@@ -2,7 +2,7 @@
 
 Vision takes a ticket from a tracker to a pull request that is ready to merge. Named agents do the work in Claude Code sessions. A person gives the ticket, approves the plan, and merges.
 
-Vision is in development. The demo path works from the ticket to the merged pull request. The adapter for Jira and GitHub is not built yet. The design is in `docs/design.md`.
+Vision is in development. The demo path works from the ticket to the merged pull request with real sessions. The adapter for Jira and GitHub is built, and a test drives its whole path against a fake server. No run against the real services happened yet. The design is in `docs/design.md`.
 
 ## What it does
 

@@ -14,9 +14,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use super::clean::{self, object_args, DETAIL_MAX};
+use super::clean::{self, object_args, Document, DETAIL_MAX};
 use super::context::{commits_between, diff, history, short, TicketContext};
 use super::gates::{self, FileDiff, Gate, Text};
+use super::jobs::write_documents;
 use super::scripts::{Answer, Runner, Script, Secrets, DEFAULT_TIMEOUT};
 use crate::adapter::{self, Adapter, Verb};
 use crate::config::{Config, ConfigEditor, Mode};
@@ -170,6 +171,8 @@ pub struct OperationResult {
     pub detail: String,
     pub external_id: Option<String>,
     pub set: SetValues,
+    /// The documents of the confirmed answer that the executor wrote to the ticket folder.
+    pub documents: Vec<String>,
     /// The sensitive paths that wait for the approval of the person.
     pub held: Vec<String>,
     /// For the mode shadow: what the verb would do.
@@ -187,6 +190,9 @@ struct Stored {
     detail: String,
     #[serde(default, skip_serializing_if = "SetValues::is_empty")]
     set: SetValues,
+    /// The documents of the confirmed answer, written to the ticket folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    documents: Vec<String>,
     /// The gate that refused the operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gate: Option<String>,
@@ -226,6 +232,39 @@ pub fn idempotency_key(ticket: &str, verb: &str, head: &str, args: &Value) -> St
     ])
     .to_string();
     ids::sha256_hex(text.as_bytes())
+}
+
+/// The idempotency key of a verb that runs one time for a ticket (`once = true`): a hash of the
+/// ticket, the verb, and the arguments. It has no commit, so a later commit asks for the same
+/// operation.
+pub fn once_key(ticket: &str, verb: &str, args: &Value) -> String {
+    let text = Value::Array(vec![
+        Value::from(ticket),
+        Value::from(verb),
+        Value::Null,
+        canonical(args),
+    ])
+    .to_string();
+    ids::sha256_hex(text.as_bytes())
+}
+
+/// The key of an operation of `verb` at `head`.
+fn key_of(ticket: &str, verb: &Verb, head: &str, args: &Value) -> String {
+    if verb.once {
+        once_key(ticket, &verb.name, args)
+    } else {
+        idempotency_key(ticket, &verb.name, head, args)
+    }
+}
+
+/// A short hash of the arguments of a call, with the keys of each object in order. Empty
+/// arguments (`{}` or `null`) give the empty text.
+pub fn args_hash(args: &Value) -> String {
+    match args {
+        Value::Null => String::new(),
+        Value::Object(map) if map.is_empty() => String::new(),
+        other => ids::sha256_hex(canonical(other).to_string().as_bytes())[..16].to_string(),
+    }
 }
 
 fn canonical(value: &Value) -> Value {
@@ -291,7 +330,7 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
     let ticket = TicketContext::load(ledger, &adapter, &op.ticket)?;
     ticket.require_row()?;
     let head = ticket.head_text();
-    let idem = idempotency_key(op.ticket.as_str(), &op.verb, &head, &args);
+    let idem = key_of(op.ticket.as_str(), &verb, &head, &args);
     if let Some(row) = ledger.operation_by_idem(&idem)? {
         if row.state != STATE_PENDING {
             return result_of(&row);
@@ -299,7 +338,7 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
     }
     let secrets = Secrets::read(config)?;
     let mode = mode_of(config, &adapter, &op.verb)?;
-    let call = CallRecord {
+    let mut call = CallRecord {
         args,
         head,
         branch: ticket.branch.clone(),
@@ -309,7 +348,14 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
     if row.state != STATE_PENDING {
         return result_of(&row);
     }
-    supersede(ctx, ledger, &row, &call.head)?;
+    if verb.once {
+        // The operation of the first request stays: a newer commit does not make it stale, and
+        // its approval command keeps its commit. A verb with `once` has no `leaves` (the loader
+        // refuses that), so no gate reads a diff here.
+        call.head = call_of(&row).head;
+    } else {
+        supersede(ctx, ledger, &row, &call.head)?;
+    }
     // A pending operation is judged again from the start: the mode, the plan, or the secrets
     // may have changed since the last request.
     let mut stored = stored_of(&row);
@@ -385,9 +431,10 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
 /// nothing.
 pub fn lookup(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Option<OperationResult>> {
     let adapter = adapter::load(ctx)?;
+    let verb = adapter.verb(&op.verb)?.clone();
     let args = object_args(&op.args)?;
     let ticket = TicketContext::load(ledger, &adapter, &op.ticket)?;
-    let idem = idempotency_key(op.ticket.as_str(), &op.verb, &ticket.head_text(), &args);
+    let idem = key_of(op.ticket.as_str(), &verb, &ticket.head_text(), &args);
     ledger
         .operation_by_idem(&idem)?
         .map(|row| result_of(&row))
@@ -458,7 +505,9 @@ pub fn approve(
     let ticket = TicketContext::load(ledger, &adapter, key)?;
     let now_head = ticket.head_text();
     let asked_head = call_of(matching[0]).head;
-    if asked_head != now_head {
+    // A verb that runs one time for a ticket has no commit in its key: a newer commit leaves
+    // it as it is. It has no `leaves`, so no gate reads a diff.
+    if asked_head != now_head && !verb.once {
         let mut change = String::new();
         if let Some(clone) = &ticket.clone {
             let commits = commits_between(clone, &asked_head, &now_head);
@@ -579,6 +628,9 @@ fn reconcile_one(
                     let answer = act_answer(&map);
                     stored.detail = format!("reconcile: {}", answer.detail);
                     stored.set = answer.set;
+                    if answer.state == OpState::Confirmed {
+                        stored.documents = act_documents(ctx, row, &answer.documents, &secrets)?;
+                    }
                     (answer.state, answer.external_id)
                 }
                 Ok(Answer::Refused(map)) => {
@@ -893,6 +945,9 @@ fn execute(
             let answer = act_answer(&map);
             stored.detail = answer.detail;
             stored.set = answer.set;
+            if answer.state == OpState::Confirmed {
+                stored.documents = act_documents(ctx, row, &answer.documents, secrets)?;
+            }
             (answer.state, answer.external_id)
         }
         Ok(Answer::Refused(map)) => {
@@ -930,9 +985,29 @@ fn act_input(row: &OperationRow, call: &CallRecord, pr: Option<i64>, reconcile: 
         "args": call.args,
     });
     if reconcile {
+        // The facts of the first call, so that the script needs no guess: the external id that
+        // its answer stored, if any, and the time of the call.
         input["reconcile"] = Value::Bool(true);
+        input["external_id"] = json!(row.external_id);
+        input["started"] = json!(row.started);
     }
     input
+}
+
+/// Writes the documents of a confirmed answer to the ticket folder, with the rules of the
+/// documents of a job: masked, plain names only, and never a name that the person or the
+/// pipeline owns. Gives their names.
+fn act_documents(
+    ctx: &Ctx,
+    row: &OperationRow,
+    documents: &[Document],
+    secrets: &Secrets,
+) -> Result<Vec<String>> {
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+    let key = TicketKey::parse(&row.ticket)?;
+    write_documents(&ctx.paths, &key, documents, secrets)
 }
 
 fn timeout_of(verb: &Verb) -> Duration {
@@ -947,6 +1022,8 @@ struct ActAnswer {
     detail: String,
     external_id: Option<String>,
     set: SetValues,
+    /// The valid documents of the answer. A dropped one is a note of `detail`.
+    documents: Vec<Document>,
 }
 
 fn act_answer(map: &Map<String, Value>) -> ActAnswer {
@@ -982,6 +1059,8 @@ fn act_answer(map: &Map<String, Value>) -> ActAnswer {
             },
         }
     }
+    let (documents, dropped) = clean::documents(map.get("documents"));
+    notes.extend(dropped);
     let mut detail = clean::text(map.get("detail"), DETAIL_MAX);
     for note in notes {
         if !detail.is_empty() {
@@ -994,6 +1073,7 @@ fn act_answer(map: &Map<String, Value>) -> ActAnswer {
         detail,
         external_id: clean::line(map.get("external_id"), 200),
         set,
+        documents,
     }
 }
 
@@ -1164,6 +1244,7 @@ fn result_of(row: &OperationRow) -> Result<OperationResult> {
         detail: stored.detail,
         external_id: row.external_id.clone(),
         set: stored.set,
+        documents: stored.documents,
         held: stored.held,
         intent: stored.intent,
         source: row.source.clone(),

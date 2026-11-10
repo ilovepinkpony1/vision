@@ -50,11 +50,13 @@ class FakeServer:
 
     `route(method, path, answer)`: `path` has no query. `answer` is a callable that takes the
     request record and gives (status, body) or (status, body, headers), or a list of such
-    tuples that is served in order (the last one repeats). An unknown route answers 404.
+    tuples that is served in order (the last one repeats). `fallback`, when set, answers each
+    request that no route answers, or gives None. An unknown route answers 404.
     """
 
     def __init__(self):
         self.routes = {}
+        self.fallback = None
         self.requests = []
         self.lock = threading.Lock()
         fake = self
@@ -118,7 +120,9 @@ class FakeServer:
             else:
                 result = None
         if answer is None:
-            result = (404, {"message": "Not Found (fake server)"})
+            result = self.fallback(record) if self.fallback else None
+            if result is None:
+                result = (404, {"message": "Not Found (fake server)"})
         elif result is None:
             result = answer(record)
         status, data = result[0], result[1]
@@ -229,7 +233,6 @@ class AdapterTest(unittest.TestCase):
             "queue_jql": "project = DEMO AND status = \"To Do\"",
             "github_repo": REPO,
             "github_api": self.server.url,
-            "base_branch": "main",
             "ci_workflow": "ci.yml",
             "approvers": ["lead"],
             "own_logins": ["vision-bot", "person"],
@@ -260,14 +263,18 @@ class AdapterTest(unittest.TestCase):
         self.assert_no_secret(result.stdout + result.stderr, "the output of bin/%s" % name)
         return result
 
+    # The core gives each call the `base` of adapter.toml as base_ref.
+    BASE_REF = "origin/main"
+
     def observe(self, request, **kw):
         request = dict(request)
         request.setdefault("config", self.config())
+        request.setdefault("base_ref", self.BASE_REF)
         return self.run_script("observe", request, **kw)
 
     def act(self, verb, args=None, reconcile=False, read=False, config=None, secrets=None, **fields):
         request = {"verb": verb, "op": "op-test", "key": KEY, "branch": BRANCH, "args": args or {},
-                   "config": config or self.config()}
+                   "config": config or self.config(), "base_ref": self.BASE_REF}
         request.update(fields)
         if reconcile:
             request["reconcile"] = True
@@ -275,10 +282,11 @@ class AdapterTest(unittest.TestCase):
             request["read"] = True
         return self.run_script("act", request, secrets=secrets)
 
-    def job(self, name, args=None, config=None, secrets=None, **fields):
-        request = {"job": name, "key": KEY, "branch": BRANCH, "args": args or {}, "config": config or self.config()}
+    def job(self, name, args=None, config=None, secrets=None, timeout=120, **fields):
+        request = {"job": name, "key": KEY, "branch": BRANCH, "args": args or {}, "config": config or self.config(),
+                   "base_ref": self.BASE_REF}
         request.update(fields)
-        return self.run_script("job", request, secrets={} if secrets is None else secrets)
+        return self.run_script("job", request, secrets={} if secrets is None else secrets, timeout=timeout)
 
     def assert_no_secret(self, text, where):
         for form in secret_forms():

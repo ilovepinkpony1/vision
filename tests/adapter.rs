@@ -73,6 +73,26 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
     assert_eq!(ci.on["red"], "fix-ci");
     assert_eq!(ci.start[0].name, "ci.run");
     assert_eq!(adapter.step("ready").unwrap().on["false"], "comments");
+    // Each wait step names the values that mean "not yet", and has a limit.
+    for wait in adapter
+        .steps
+        .iter()
+        .filter(|s| matches!(s.kind, StepKind::Wait(_)))
+    {
+        let StepKind::Wait(spec) = &wait.kind else {
+            unreachable!()
+        };
+        assert!(spec.wait.is_some() && spec.limit.is_some(), "{}", wait.id);
+    }
+    // The proof reads the approved plan, and the read verb says what it gives.
+    assert_eq!(
+        build.expect_args_of("proof")["plan"],
+        "{doc:approved-plan.md}"
+    );
+    assert!(adapter.verbs["tracker.issue"]
+        .about
+        .as_deref()
+        .is_some_and(|a| a.contains("args: key")));
 }
 
 #[test]
@@ -264,7 +284,11 @@ fn observe_follows_the_pull_request_and_the_ci() {
     assert_eq!(facts.watch_text("pr.draft").as_deref(), Some("true"));
     assert_eq!(facts.watch_text("pr.number").as_deref(), Some("1"));
     assert_eq!(facts.watch_text("pr.approved_by"), None);
-    assert_eq!(facts.watch_text("pr.nothing"), None);
+    assert_eq!(
+        facts.watch_text("pr.nothing").as_deref(),
+        Some("none"),
+        "a path that the answer does not have counts as none"
+    );
 
     demo.world_cmd(&["ready", demo.root(), "1"]);
     demo.world_cmd(&["approve", demo.root(), "1"]);

@@ -19,8 +19,10 @@
 #   git_remote_url         The address that git.push pushes to. Default
 #                          "https://github.com/<github_repo>.git" when github_api is the default.
 #                          It must be https, or a local path (for tests).
-#   base_branch            The branch that pull requests go into. Default "main". Keep it equal
-#                          to the branch of `base` below.
+#   base_branch            Optional. The branch that pull requests go into. The default comes
+#                          from `base` below: the text after its first `/`, such as main of
+#                          origin/main. Set it only when the branch on GitHub has a different
+#                          name than the remote branch of `base`.
 #   ci_workflow            The file name of the CI workflow, such as "ci.yml". It needs the
 #                          trigger workflow_dispatch, so that ci.run can start it.
 #   ci_find_seconds        How long ci.run looks for the new run before it answers uncertain.
@@ -29,8 +31,12 @@
 #   approvers              The GitHub logins whose approval counts. Default []: each reviewer
 #                          who is not in own_logins counts.
 #   approvals_needed       The approvals that make review.state "approved". Default 1.
-#   own_logins             The logins of the person and of the bot. A thread whose last comment
-#                          is from one of them does not wait. review.reply needs this key.
+#   own_logins             The logins of the person and of the bot. A comment of one of them
+#                          never waits: an inline thread whose last comment is from one of them
+#                          does not wait, and a review or a conversation comment waits until one
+#                          of them answers it. review.reply and the job comments need this key.
+#   ignore_logins          The logins whose comments never wait for an answer, such as a CI bot
+#                          that posts a status comment. Default []. Do not name a reviewer here.
 #   statuses               A table from a role to the status name of the project, such as
 #                          { in_progress = "In Progress", in_review = "In Review" }. tracker.move
 #                          takes the role. The steps below use in_progress and in_review.
@@ -55,6 +61,8 @@
 #   app_start_timeout      Seconds that app-start waits for app_health_url. Default 120.
 #   second_review_command  Optional. A command that reviews the diff. It gets the range
 #                          "<base>..<head>" as its last argument and prints its findings.
+#                          With no command, the job gives no document, and the review turn gets
+#                          null for second-review.md.
 #   second_review_timeout  Seconds for it. Default 1100.
 #   log_tail_kb            The kilobytes that ci-log keeps of the end of each failed job log.
 #                          Default 64.
@@ -79,15 +87,14 @@
 # bin/app-token prints an installation token of a GitHub App (see `bin/app-token --help`).
 #
 # ---------------------------------------------------------------------------------------------
-# The path of a ticket. A turn step cannot branch on its result, so a wait step decides each
-# fork from a fact of observe:
+# The path of a ticket. A wait step moves on a fact of observe, and the step qa moves on its
+# findings:
 #
 #   refine -> plan -> plan-ready -> build -> review -> ci
 #   ci:        green -> qa, red -> ci-rerun (the failed jobs run once more)
 #   ci-rerun:  green -> qa, red -> fix-ci -> ci
-#   qa -> fix-qa -> qa-check
-#   qa-check:  the CI state of the head. green (fix-qa made no commit) -> ready;
-#              running or none (a new commit) -> ci, which leads to a new QA; red -> fix-ci
+#   qa:        a kept bug in qa.md -> fix-qa -> ci (each commit goes through CI, then QA
+#              again); no kept bug -> ready
 #   ready:     the person marks the pull request ready -> in-review
 #   in-review: review.state approved -> ready-to-merge, changes or comments -> comments,
 #              merged -> done
@@ -96,7 +103,15 @@
 #   ready-to-merge: merged -> done, changes or comments -> comments
 #
 # Each turn step of a loop has a cap: fix-ci (ci_fix), qa and fix-qa (qa_fix), comments
-# (comments), review (review_rounds).
+# (comments), review (review_rounds). Each wait step names the values that mean "not yet" in
+# `wait`, and its `limit` in seconds: any other value, or a longer wait, needs the person.
+#
+# The proof gets the approved plan in args.plan. A line `Proof: green` of the plan declares the
+# whole proof green (a change with no new behavior), and a line `Proof: green <path>` declares
+# one test file, which then only has to pass at the head.
+#
+# tracker.move has `once = true`: it moves a ticket one time for each status, whatever the
+# commit. The read verbs say in `about` what they give; each turn finds them in its facts file.
 #
 # ---------------------------------------------------------------------------------------------
 # A project with staging envs writes its own adapter.toml in $VISION_HOME/adapters/<name>/,
@@ -104,12 +119,14 @@
 # steps below and adds two steps for each env, such as staging, with
 # envs = [{ name = "staging", branch = "staging" }] in the [adapter] table:
 #
-#   [[step]]                      # qa-check then moves on green to deploy-staging
+#   [[step]]                      # the step qa then has none = "deploy-staging" in its `on`
 #   id = "deploy-staging"
 #   kind = "wait"
 #   start = [{ verb = "deploy", args = { env = "staging" } }]
 #   watch = "envs.staging.holds"
 #   on = { "true" = "qa-staging" }
+#   wait = ["false", "none"]
+#   limit = 3600
 #
 #   [[step]]
 #   id = "qa-staging"
@@ -120,8 +137,11 @@
 #   with = { env = "staging", url = "https://staging.example.com" }
 #   expects = ["doc:qa.md"]
 #   findings = "qa"
+#   on = { findings = "fix-qa", none = "ready" }
 #   cap = "qa_fix"
-#   next = "fix-qa"
+#
+# A bug on the env then goes the same way as a local bug: fix-qa, CI, QA on local, a new deploy
+# of the new commit, and QA on the env again.
 #
 # `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
 # merge happened, not that the env already runs the new code.
@@ -162,7 +182,7 @@ agent = "builder"
 turn = "worker"
 before = [{ verb = "tracker.move", args = { status = "in_progress" } }]
 reads = ["approved-plan.md", "refine.md", "answers.md"]
-expects = ["commits", "clean", "doc:pr.md", "job:proof"]
+expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "review"
 
@@ -173,7 +193,7 @@ agent = "reviewer"
 turn = "worker"
 before = ["job:second-review"]
 reads = ["approved-plan.md", "second-review.md"]
-expects = ["clean", "doc:review.md", "job:proof"]
+expects = ["clean", "doc:review.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push"]
 findings = "review"
 cap = "review_rounds"
@@ -185,6 +205,8 @@ kind = "wait"
 start = ["ci.run"]
 watch = "ci.state"
 on = { green = "qa", red = "ci-rerun" }
+wait = ["running", "none"]
+limit = 7200
 every = 60
 
 [[step]]
@@ -193,6 +215,8 @@ kind = "wait"
 start = ["ci.rerun"]
 watch = "ci.state"
 on = { green = "qa", red = "fix-ci" }
+wait = ["running", "none"]
+limit = 7200
 every = 60
 
 [[step]]
@@ -202,7 +226,7 @@ agent = "builder"
 turn = "worker"
 before = ["job:ci-log"]
 reads = ["ci-log.txt", "approved-plan.md"]
-expects = ["commits", "clean", "job:proof"]
+expects = ["commits", "clean", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push"]
 cap = "ci_fix"
 next = "ci"
@@ -217,8 +241,8 @@ reads = ["approved-plan.md", "app-local.json"]
 with = { env = "local" }
 expects = ["doc:qa.md"]
 findings = "qa"
+on = { findings = "fix-qa", none = "ready" }   # a kept bug of qa.md, or none
 cap = "qa_fix"
-next = "fix-qa"
 
 [[step]]
 id = "fix-qa"
@@ -230,14 +254,7 @@ with = { env = "local" }
 expects = ["clean", "doc:fix-notes.md"]
 after = ["git.push"]
 cap = "qa_fix"
-next = "qa-check"
-
-[[step]]
-id = "qa-check"
-kind = "wait"
-watch = "ci.state"
-on = { green = "ready", running = "ci", none = "ci", red = "fix-ci" }
-every = 30
+next = "ci"
 
 [[step]]
 id = "ready"
@@ -245,6 +262,8 @@ kind = "wait"
 start = [{ verb = "tracker.move", args = { status = "in_review" } }]
 watch = "pr.draft"
 on = { "false" = "in-review" }
+wait = ["true"]
+limit = 604800
 every = 120
 
 [[step]]
@@ -252,6 +271,8 @@ id = "in-review"
 kind = "wait"
 watch = "review.state"
 on = { approved = "ready-to-merge", changes = "comments", comments = "comments", merged = "done" }
+wait = ["waiting"]
+limit = 1209600
 every = 120
 
 [[step]]
@@ -276,6 +297,8 @@ kind = "wait"
 start = ["ci.run"]
 watch = "ci.state"
 on = { green = "in-review", red = "fix-ci" }
+wait = ["running", "none"]
+limit = 7200
 every = 60
 
 [[step]]
@@ -283,6 +306,8 @@ id = "ready-to-merge"
 kind = "wait"
 watch = "review.state"
 on = { merged = "done", changes = "comments", comments = "comments" }
+wait = ["approved", "waiting"]
+limit = 1209600
 every = 120
 
 [[step]]
@@ -297,6 +322,7 @@ leaves = true
 
 [verbs."tracker.move"]
 mode = "ask"
+once = true                   # one move for each status in a ticket, whatever the commit
 
 [verbs."git.push"]
 mode = "auto"
@@ -331,16 +357,20 @@ mode = "ask"
 
 [verbs."jira.issue"]
 read = true
+about = "One Jira issue as issue-<KEY>.json: title, description, status, parent, comments. args: key (default: the ticket)"
 
 [verbs."jira.search"]
 read = true
+about = "The issues of a JQL query as jira-search.json: key, title, status, type. args: jql, limit (default 20, at most 50)"
 
 [verbs."github.pr"]
 read = true
+about = "The pull request as pr-<N>.json: its facts, review state, reviews, and comment threads. args: number (default: the pull request of the ticket)"
 
 [verbs."ci.log"]
 read = true
 timeout = 180
+about = "The end of the log of each failed job of a CI run as ci-log-<run>.txt. args: run (default: the last run at the head)"
 
 # The jobs. A job gets no secret, because a job can run code that an agent wrote. Only ci-log
 # and comments set `secrets = true`: they only read GitHub, and they run no code of the project.

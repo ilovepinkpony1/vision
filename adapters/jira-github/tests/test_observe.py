@@ -2,7 +2,8 @@
 
 import unittest
 
-from fixtures import HEAD, OTHER, REPO_PATH, GitHubWorld, adf_doc, comment, jira_issue, pull, review, run
+from fixtures import (HEAD, OTHER, REPO_PATH, GitHubWorld, adf_doc, comment, issue_comment, jira_issue, pull, review,
+                      review_with, run)
 from support import BRANCH, KEY, SECRETS, AdapterTest
 
 SEARCH = "/rest/api/3/search/jql"
@@ -143,6 +144,33 @@ class Ticket(AdapterTest):
         w.pr = pull(draft=False, mergeable_state="dirty")
         w.comments = []
         self.assertTrue(self.observe_ticket()["pr"]["conflict"])
+
+    def test_each_kind_of_comment_waits_and_the_state_agrees(self):
+        w = self.world
+        w.pr, w.reviews, w.comments = pull(draft=False), [review(1, "lead", "APPROVED")], []
+        self.assertEqual(self.observe_ticket()["review"]["state"], "approved")
+        w.issue_comments = [issue_comment(60, "lead", "One more thing: the README.")]
+        facts = self.observe_ticket()
+        self.assertEqual(facts["review"]["state"], "comments", "a conversation comment waits")
+        self.assertEqual(facts["pr"]["comments_waiting"], 1)
+        w.reviews.append(review_with(2, "other", "COMMENTED", "Why CSV?"))
+        self.assertEqual(self.observe_ticket()["pr"]["comments_waiting"], 2, "a review with a body waits")
+        w.issue_comments += [
+            issue_comment(61, "vision-bot", "> One more thing: the README.\n\nDone.\n\n<!-- vision-reply conversation 60 -->"),
+            issue_comment(62, "person", "> Why CSV?\n\nThe ticket asks for it."),
+        ]
+        facts = self.observe_ticket()
+        self.assertEqual(facts["pr"]["comments_waiting"], 0, "a mark or a quote answers each one")
+        self.assertEqual(facts["review"]["state"], "approved")
+
+    def test_a_comment_of_an_ignored_login_does_not_change_the_state(self):
+        w = self.world
+        w.pr, w.reviews, w.comments = pull(draft=False), [review(1, "lead", "APPROVED")], []
+        w.issue_comments = [issue_comment(60, "ci-bot", "Deployed the preview.")]
+        self.assertEqual(self.observe_ticket()["review"]["state"], "comments")
+        facts = self.observe_ticket(ignore_logins=["ci-bot"])
+        self.assertEqual(facts["pr"]["comments_waiting"], 0)
+        self.assertEqual(facts["review"]["state"], "approved")
 
     def test_any_reviewer_counts_when_approvers_is_empty(self):
         self.world.reviews = [review(1, "someone", "APPROVED")]

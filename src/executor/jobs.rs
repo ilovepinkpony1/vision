@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use super::clean::{self, object_args, Document, DETAIL_MAX};
 use super::context::{short, TicketContext};
+use super::ops::args_hash;
 use super::scripts::{Answer, Runner, Script, Secrets, DEFAULT_TIMEOUT};
 use crate::adapter;
 use crate::ctx::Ctx;
@@ -155,7 +156,7 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
             (None, false) => "fail",
         }
         .into(),
-        command: run.job.clone(),
+        command: job_command(&run.job, &args),
         seconds,
         cause: if result.failure.is_some() {
             "infra"
@@ -181,8 +182,19 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
     Ok(result)
 }
 
-/// The result of the newest run of a job at a commit: `Some(true)` when it passed, `None` when
-/// it did not run there. Any new commit voids a pass.
+/// The `command` of the check row of a whole job: the job name, and a hash of its arguments
+/// when it has some, such as `proof 1f2e3d4c5b6a7980`.
+pub fn job_command(job: &str, args: &Value) -> String {
+    let hash = args_hash(args);
+    if hash.is_empty() {
+        job.to_string()
+    } else {
+        format!("{job} {hash}")
+    }
+}
+
+/// The result of the newest run of a job at a commit, with any arguments: `Some(true)` when it
+/// passed, `None` when it did not run there. Any new commit voids a pass.
 pub fn job_passed(ledger: &Ledger, ticket: &str, job: &str, head: &str) -> Result<Option<bool>> {
     let source = job_source(job);
     Ok(ledger
@@ -190,6 +202,25 @@ pub fn job_passed(ledger: &Ledger, ticket: &str, job: &str, head: &str) -> Resul
         .into_iter()
         .rev()
         .find(|row| row.kind == JOB_CHECK && row.source == source)
+        .map(|row| row.result == "pass"))
+}
+
+/// The result of the newest run of a job at a commit with these arguments. A run with other
+/// arguments does not count, so a job runs again when its arguments change at the same commit.
+pub fn job_passed_with(
+    ledger: &Ledger,
+    ticket: &str,
+    job: &str,
+    head: &str,
+    args: &Value,
+) -> Result<Option<bool>> {
+    let source = job_source(job);
+    let command = job_command(job, args);
+    Ok(ledger
+        .checks_of(ticket, Some(head))?
+        .into_iter()
+        .rev()
+        .find(|row| row.kind == JOB_CHECK && row.source == source && row.command == command)
         .map(|row| row.result == "pass"))
 }
 

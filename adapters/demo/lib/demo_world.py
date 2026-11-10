@@ -631,17 +631,60 @@ def is_test(path):
     )
 
 
+# A line of the plan that declares the proof green: `Proof: green` for the whole proof, or
+# `Proof: green <path>` for one test file. Any case; a list mark, a quote mark, and emphasis
+# marks can come first, such as `- **Proof:** green test_calc.py`.
+PROOF_LINE = re.compile(r"^\s*(?:>\s*)*(?:(?:[-*+]|\d+[.)])\s+)?[*_]*\s*proof\s*[*_]*\s*:\s*[*_]*\s*green(?![A-Za-z0-9]|_[A-Za-z0-9])(.*)$",
+                        re.IGNORECASE)
+
+
+def plan_green(text):
+    """What the plan text declares green: (True, set()) for the whole proof, or (False, the
+    test files). A path has a `/` or a file ending, or it stands in backticks. Each other text
+    after `green`, such as `- no new behavior` or `because ...`, is a comment: the whole proof
+    is green."""
+    whole, paths = False, set()
+    if not isinstance(text, str):
+        return whole, paths
+    for line in text.splitlines():
+        match = PROOF_LINE.match(line)
+        if not match:
+            continue
+        rest = match.group(1).strip().strip("*_").strip()
+        if rest.startswith("`"):
+            path = rest[1:].split("`", 1)[0].strip()
+        elif rest and (rest[0].isalnum() or rest[0] in "./_"):
+            # A path has a folder part or a file ending. A plain word, such as `because`,
+            # starts a comment.
+            word = rest.split()[0].rstrip(".,;:*_")
+            path = word if ("/" in word or "." in word) else ""
+        else:
+            path = ""
+        if path:
+            paths.add(path[2:] if path.startswith("./") else path)
+        else:
+            whole = True
+    return whole, paths
+
+
 def proof(world, request):
-    """The changed tests pass at the last commit and fail on the base commit (design 11.3)."""
+    """The changed tests pass at the last commit and fail on the base commit (design 11.3).
+
+    args.plan is the text of the approved plan: a line `Proof: green` declares the whole proof
+    green, and a line `Proof: green <path>` one test file, which then only has to pass at the
+    last commit. args.green set to true still declares the whole proof green."""
     config = request.get("config") or {}
     command = config.get("test_command")
     if not isinstance(command, str) or not command.strip():
         raise Failure('the proof needs test_command in the [adapter] table, such as "%s"' % TEST_COMMAND)
     clone, base, head = need_commits(request, "the proof")
-    green = bool((request.get("args") or {}).get("green"))
+    args = request.get("args") or {}
+    plan_all, plan_paths = plan_green(args.get("plan"))
+    green = bool(args.get("green")) or plan_all
     timeout = int(config.get("test_timeout") or 300)
     changed = git_text(["diff", "--name-only", "--no-renames", "--diff-filter=d", base, head], cwd=clone).splitlines()
     tests = [path for path in changed if is_test(path)]
+    on_base_tests = [path for path in tests if path not in plan_paths]
     checks = []
     log = []
     with tempfile.TemporaryDirectory() as temp:
@@ -656,10 +699,14 @@ def proof(world, request):
         elif not tests:
             ok = False
             detail = "no test changed between the base and the last commit, so nothing proves the change. Add a test that fails on the base, or declare the proof green in the plan"
+        elif not on_base_tests:
+            ok = passed
+            detail = "the plan declares each changed test green (%s); the tests %s at %s" % (
+                ", ".join(sorted(tests)), "pass" if passed else "fail", short(head))
         else:
             on_base = os.path.join(temp, "base")
             export_tree(clone, base, on_base)
-            for path in tests:
+            for path in on_base_tests:
                 target = os.path.join(on_base, path)
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with open(target, "wb") as handle:
@@ -670,6 +717,8 @@ def proof(world, request):
             ok = passed and not base_passed
             if ok:
                 detail = "the changed tests fail on the base %s and pass at %s" % (short(base), short(head))
+                if plan_paths & set(tests):
+                    detail += "; the plan declares %s green" % ", ".join(sorted(plan_paths & set(tests)))
             elif not passed:
                 detail = "the tests fail at the last commit %s" % short(head)
             else:

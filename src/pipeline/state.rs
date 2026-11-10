@@ -76,6 +76,9 @@ pub struct Visit {
     /// A wait step: when `observe` last ran, and the watched value then.
     pub observed: Option<String>,
     pub watched: Option<String>,
+    /// A wait step: when the visit began to watch, after its `start` verbs. The `limit` of the
+    /// step counts from here.
+    pub since: Option<String>,
 }
 
 /// Why a flag is set.

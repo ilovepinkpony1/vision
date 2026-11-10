@@ -8,6 +8,7 @@ something, and each failure of a reconcile, is `uncertain`: the tick asks again.
 """
 
 import base64
+import datetime
 import json
 import os
 import re
@@ -26,7 +27,7 @@ class Acting:
 
 
 def act(request):
-    config = core.Config(request.get("config"))
+    config = core.Config.of(request)
     verb = request.get("verb")
     if request.get("read"):
         if verb not in READS:
@@ -431,11 +432,16 @@ def verdict_rows(text):
         if not isinstance(raw, int) or isinstance(raw, bool):
             raise core.Failure("row %d of verdicts.json has no comment_id number" % (n + 1))
         reply = row.get("reply")
-        rows.append((raw, reply if isinstance(reply, str) else ""))
+        kind = row.get("kind")
+        rows.append((raw, reply if isinstance(reply, str) else "", kind if kind in forge.KINDS else None))
     return rows
 
 
 def review_reply(config, request, reconcile, state):
+    """Posts the reply of each row of verdicts.json in the right place: an inline comment gets
+    a reply in its thread, and a review or a conversation comment gets a new conversation
+    comment that quotes its first line and ends with its mark. The `kind` of a row (copied
+    from comments.json) names the place; with no kind, the id must be of one kind only."""
     why = "review.reply"
     rows = verdict_rows((request.get("args") or {}).get("verdicts"))
     own = config.logins("own_logins")
@@ -448,40 +454,112 @@ def review_reply(config, request, reconcile, state):
     number = pull["number"]
     groups = forge.threads(gh.review_comments(number))
     root_of = {c.get("id"): root for root, items in groups.items() for c in items}
-    posted, skipped, missing, unanswered = [], [], [], []
-    for comment_id, reply in rows:
+    reviews = {r.get("id"): r for r in gh.reviews(number) if isinstance(r.get("id"), int)}
+    conversation = gh.issue_comments(number)
+    talk = {c.get("id"): c for c in conversation
+            if isinstance(c.get("id"), int) and forge.login(c.get("user")).lower() not in own}
+    marks, _quotes = forge.reply_marks(conversation, own)
+    posted, skipped, missing, unanswered, unclear = [], [], [], [], []
+    for comment_id, reply, kind in rows:
         if not reply.strip():
             continue
-        root = root_of.get(comment_id)
-        if root is None:
+        places = [k for k, known in (("inline", root_of), ("review", reviews), ("conversation", talk))
+                  if kind in (None, k) and comment_id in known]
+        if not places:
             missing.append(comment_id)
             continue
-        if any(forge.login(c.get("user")).lower() in own and same_text(c.get("body"), reply) for c in groups[root]):
+        if len(places) > 1:
+            unclear.append(comment_id)
+            continue
+        place = places[0]
+        if place == "inline":
+            root = root_of[comment_id]
+            done = any(forge.login(c.get("user")).lower() in own and same_text(c.get("body"), reply) for c in groups[root])
+        else:
+            done = (place, comment_id) in marks
+        if done:
             skipped.append(comment_id)
             continue
         if reconcile:
             unanswered.append(comment_id)
             continue
         state.acted = True
-        gh.client.call(
-            "POST", gh.path("pulls/%d/comments/%d/replies" % (number, root)),
-            "reply to the comment %d of #%d" % (comment_id, number), body={"body": reply}, ok=(201,),
-        )
-        groups[root].append({"user": {"login": own[0]}, "body": reply})
+        if place == "inline":
+            gh.client.call(
+                "POST", gh.path("pulls/%d/comments/%d/replies" % (number, root)),
+                "reply to the comment %d of #%d" % (comment_id, number), body={"body": reply}, ok=(201,),
+            )
+            groups[root].append({"user": {"login": own[0]}, "body": reply})
+        else:
+            original = reviews[comment_id] if place == "review" else talk[comment_id]
+            first = forge.review_first_line(original) if place == "review" else forge.first_line(original.get("body"))
+            gh.client.call(
+                "POST", gh.path("issues/%d/comments" % number),
+                "answer the %s %d of #%d" % (place, comment_id, number),
+                body={"body": forge.reply_body(place, comment_id, "> " + forge.no_mentions(first), reply)}, ok=(201,),
+            )
+            marks.add((place, comment_id))
         posted.append(comment_id)
     external = "replies-%d" % number
+    problems = ""
+    if missing:
+        problems += ". Pull request #%d has no comment %s" % (number, missing)
+    if unclear:
+        problems += ". The ids %s name comments of more than one kind: give each row the kind of comments.json" % unclear
     if reconcile:
-        if missing or unanswered:
-            return failed("pull request #%d has no reply for the comments %s%s" % (
-                number, unanswered + missing, " (no such comment: %s)" % missing if missing else ""))
+        if missing or unanswered or unclear:
+            return failed("pull request #%d has no reply for the comments %s%s" % (number, unanswered, problems))
         return confirmed("each reply on #%d is posted" % number, external)
     detail = "on #%d: posted the replies to %s, and skipped %s, which have the same reply already" % (number, posted, skipped)
-    if missing:
-        return failed(detail + ". Pull request #%d has no comment %s" % (number, missing))
+    if missing or unclear:
+        return failed(detail + problems)
     return confirmed(detail, external)
 
 
 # ci.rerun -------------------------------------------------------------------------------------
+
+
+RUN_ID = re.compile(r"^run-(\d{1,20})(?:-attempt-(\d{1,6}))?$")
+
+
+def stored_run(external_id):
+    """The run and its attempt before the rerun, from the external id that the first answer
+    stored: `run-<id>-attempt-<n>`, or `run-<id>`. (None, None) for anything else."""
+    match = RUN_ID.match(external_id) if isinstance(external_id, str) else None
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2)) if match.group(2) else None
+
+
+def utc(text):
+    """An RFC 3339 time of GitHub or of the core, or None."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        return datetime.datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def rerun_happened(run, before, started):
+    """Whether the rerun of this operation happened: (yes, how). The attempt of the run before
+    the call, when the first answer stored it, decides. Else the start of the last attempt
+    against the time of the first call: an attempt that started before the call is a rerun that
+    a person started by hand. With neither fact, an attempt above 1 counts."""
+    attempt = run.get("run_attempt") or 1
+    if before is not None:
+        return attempt > before, "attempt %s, and the call found attempt %s" % (attempt, before)
+    at, call = utc(run.get("run_started_at")), utc(started)
+    if at is not None and call is not None:
+        if at >= call:
+            return attempt > 1, "attempt %s started at %s, after the call at %s" % (
+                attempt, run.get("run_started_at"), started)
+        if attempt > 1:
+            return False, "attempt %s started at %s, before the call at %s: a person ran it by hand" % (
+                attempt, run.get("run_started_at"), started)
+        return False, "the run is still its first attempt, which started at %s, before the call at %s" % (
+            run.get("run_started_at"), started)
+    return attempt > 1, "attempt %s, and no time of the call to compare" % attempt
 
 
 def ci_rerun(config, request, reconcile, state):
@@ -491,21 +569,28 @@ def ci_rerun(config, request, reconcile, state):
         raise core.Failure("ci.rerun needs the last commit in head")
     workflow = config.text("ci_workflow", why)
     gh = forge.GitHub(config, why)
-    run = gh.last_run(head, workflow)
+    known_id, before = stored_run(request.get("external_id")) if reconcile else (None, None)
+    if known_id is not None:
+        run = gh.client.json("GET", gh.path("actions/runs/%d" % known_id), "read the run %d" % known_id) or {}
+    else:
+        run = gh.last_run(head, workflow)
     if not run:
         return failed("no run of %s at %s, so nothing runs again" % (workflow, core.short(head)))
     run_id = run.get("id")
     external = "run-%s" % run_id
     attempt = run.get("run_attempt") or 1
     status = forge.run_state(run)
+    if reconcile:
+        happened, how = rerun_happened(run, before, request.get("started"))
+        if happened:
+            return confirmed("the run %s ran again: %s; it is %s" % (run_id, how, status), external)
+        if status == "green":
+            return confirmed("the run %s is green (attempt %s), so nothing has to run again" % (run_id, attempt), external)
+        return failed("the failed jobs of the run %s did not run again for this operation: %s" % (run_id, how))
     if status == "running":
         return confirmed("the run %s runs (attempt %s)" % (run_id, attempt), external)
     if status == "green":
         return confirmed("the run %s is green (attempt %s), so nothing runs again" % (run_id, attempt), external)
-    if reconcile:
-        if attempt > 1:
-            return confirmed("the run %s ran again: attempt %s is %s" % (run_id, attempt, status), external)
-        return failed("the run %s is still its first attempt and %s: the failed jobs did not run again" % (run_id, status))
     state.acted = True
     try:
         gh.client.call("POST", gh.path("actions/runs/%d/rerun-failed-jobs" % int(run_id)),
@@ -524,7 +609,10 @@ def ci_rerun(config, request, reconcile, state):
                 run_id, now.get("run_attempt") or attempt + 1), external)
         left = deadline - time.monotonic()
         if left <= 0:
-            return uncertain("GitHub took the rerun of the run %s, but it did not start in %d s. The tick looks again" % (run_id, find))
+            # The attempt before the call goes with the answer, so that the reconcile knows
+            # which attempt is new.
+            return answer("uncertain", "GitHub took the rerun of the run %s, but it did not start in %d s. The tick looks again" % (
+                run_id, find), external_id="run-%s-attempt-%s" % (run_id, attempt))
         time.sleep(min(poll, left))
 
 
@@ -664,8 +752,11 @@ def github_pr(config, request):
     threads = [[{"id": c.get("id"), "author": forge.login(c.get("user")), "path": c.get("path"),
                  "line": c.get("line") or c.get("original_line"), "text": c.get("body") or ""} for c in items]
                for _root, items in sorted(forge.threads(gh.review_comments(n)).items())]
+    conversation = [{"id": c.get("id"), "author": forge.login(c.get("user")), "text": c.get("body") or ""}
+                    for c in gh.issue_comments(n)]
     data = {"pr": facts, "review_state": review, "untrusted": {
-        "title": pull.get("title") or "", "body": pull.get("body") or "", "reviews": reviews, "threads": threads}}
+        "title": pull.get("title") or "", "body": pull.get("body") or "", "reviews": reviews, "threads": threads,
+        "conversation": conversation}}
     return read_doc("pr-%d.json" % n, data, "the pull request #%d" % n)
 
 

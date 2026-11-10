@@ -137,6 +137,15 @@ pub fn build(ctx: &Ctx, ledger: &Ledger, start: &TurnStart) -> Result<LaunchRequ
     if !turn.with.is_empty() {
         facts["with"] = Value::Object(turn.with.clone());
     }
+    // The read verbs that the session can ask for with a result of the kind `requests`.
+    facts["requests"] = Value::Array(
+        adapter
+            .verbs
+            .values()
+            .filter(|v| v.read)
+            .map(|v| json!({"verb": v.name, "about": v.about}))
+            .collect(),
+    );
     request.facts = facts;
     request.view = view;
     Ok(request)

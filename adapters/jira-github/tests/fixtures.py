@@ -63,10 +63,25 @@ def comment(comment_id, login, body, reply_to=None, path="app.py", line=3):
     return item
 
 
-def run(run_id, sha=HEAD, status="completed", conclusion="success", path=".github/workflows/ci.yml", attempt=1):
-    return {"id": run_id, "head_sha": sha, "status": status, "conclusion": conclusion, "path": path,
+def issue_comment(comment_id, login, body):
+    return {"id": comment_id, "user": {"login": login}, "body": body,
+            "created_at": "2026-11-02T11:00:%02dZ" % (comment_id % 60)}
+
+
+def review_with(review_id, login, state, body):
+    item = review(review_id, login, state)
+    item["body"] = body
+    return item
+
+
+def run(run_id, sha=HEAD, status="completed", conclusion="success", path=".github/workflows/ci.yml", attempt=1,
+        started_at=None):
+    item = {"id": run_id, "head_sha": sha, "status": status, "conclusion": conclusion, "path": path,
             "created_at": "2026-11-02T10:%02d:00Z" % (run_id % 60), "run_attempt": attempt,
             "html_url": "https://github.example/acme/widgets/actions/runs/%d" % run_id}
+    if started_at:
+        item["run_started_at"] = started_at
+    return item
 
 
 class GitHubWorld:
@@ -78,6 +93,7 @@ class GitHubWorld:
         self.pr = pr if pr is not None else pull()
         self.reviews = []
         self.comments = []
+        self.issue_comments = []
         self.runs = []
         self.branch_sha = HEAD
         self.next_id = 900
@@ -89,6 +105,8 @@ class GitHubWorld:
         s.route("GET", REPO_PATH + "/pulls/7", lambda r: (200, self.pr) if self.pr else (404, {"message": "Not Found"}))
         s.route("GET", REPO_PATH + "/pulls/7/reviews", lambda r: (200, self.page(self.reviews, r)))
         s.route("GET", REPO_PATH + "/pulls/7/comments", lambda r: (200, self.page(self.comments, r)))
+        s.route("GET", REPO_PATH + "/issues/7/comments", lambda r: (200, self.page(self.issue_comments, r)))
+        s.route("POST", REPO_PATH + "/issues/7/comments", self.add_issue_comment)
         s.route("GET", REPO_PATH + "/actions/runs", self.list_runs)
         s.route("GET", REPO_PATH + "/git/ref/heads/" + BRANCH, self.branch_ref)
 
@@ -114,6 +132,11 @@ class GitHubWorld:
         if not self.branch_sha:
             return 404, {"message": "Not Found"}
         return 200, {"ref": "refs/heads/" + BRANCH, "object": {"sha": self.branch_sha, "type": "commit"}}
+
+    def add_issue_comment(self, req, login="vision-bot"):
+        self.next_id += 1
+        self.issue_comments.append(issue_comment(self.next_id, login, req["body"]["body"]))
+        return 201, self.issue_comments[-1]
 
     def add_reply_route(self, login="vision-bot"):
         def reply(req):

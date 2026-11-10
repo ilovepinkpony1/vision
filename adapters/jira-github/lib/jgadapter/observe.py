@@ -9,7 +9,7 @@ QUEUE_LIMIT = 100
 
 
 def observe(request):
-    config = core.Config(request.get("config"))
+    config = core.Config.of(request)
     what = request.get("what")
     if what == "queue":
         return queue(config)

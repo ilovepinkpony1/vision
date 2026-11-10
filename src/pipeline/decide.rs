@@ -87,6 +87,12 @@ pub enum KindFacts {
         watched: Option<String>,
         /// The step of `on` for that value.
         target: Option<String>,
+        /// `wait` of the step: the values that mean "not yet". `None`: each value waits.
+        waits: Option<Vec<String>>,
+        /// `limit` of the step in seconds.
+        limit: Option<u64>,
+        /// The seconds since the visit began to watch, or `None` before its first look.
+        waited: Option<i64>,
     },
     End {
         finished: bool,
@@ -100,6 +106,9 @@ pub struct Facts {
     pub kind: KindFacts,
     /// The step after this one: `next` of the step.
     pub next: Option<String>,
+    /// A turn step with `on`: the step of `on` for the findings of its held turn. It wins over
+    /// `next`.
+    pub branch: Option<Branch>,
     pub flags: Vec<String>,
     /// A turn of the ticket runs, such as a work turn or a Judge turn.
     pub running: bool,
@@ -115,6 +124,27 @@ pub struct Facts {
     pub skip_cap: bool,
     /// What is open, for the message of a cap: such as the open findings of `review.md`.
     pub open: Vec<String>,
+}
+
+/// Where a turn step with `on` moves: the step, and how, such as `on findings`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Branch {
+    pub to: String,
+    pub how: String,
+}
+
+/// The step of `on` of a turn step for the number of kept findings of its turn: `findings`
+/// for one or more, `none` for none.
+pub fn findings_branch(on: &BTreeMap<String, String>, kept: usize) -> Option<Branch> {
+    let key = if kept > 0 {
+        crate::adapter::FINDINGS
+    } else {
+        crate::adapter::NONE
+    };
+    on.get(key).map(|to| Branch {
+        to: to.clone(),
+        how: format!("on {key}"),
+    })
 }
 
 /// The next thing that one ticket needs.
@@ -229,20 +259,40 @@ pub fn decide(facts: &Facts) -> Next {
             watch,
             watched,
             target,
+            waits,
+            limit,
+            waited,
         } => {
             if let Some(stop) = ops_next(List::Start, start) {
                 return stop;
             }
-            match target {
-                Some(to) => Next::Move {
+            if let Some(to) = target {
+                return Next::Move {
                     to: to.clone(),
                     how: format!("on {}", watched.as_deref().unwrap_or("-")),
-                },
-                None => Next::Nothing(format!(
-                    "it waits for {watch}, which is {}",
-                    watched.as_deref().unwrap_or("not observed yet")
-                )),
+                };
             }
+            if let (Some(waits), Some(value)) = (waits, watched) {
+                if !waits.contains(value) {
+                    return flag(format!(
+                        "the step {} watches {watch}, and its value `{value}` is in neither on nor wait, so nothing moves the ticket. Fix the outside state or adapter.toml, then run vision retry",
+                        facts.step
+                    ));
+                }
+            }
+            if let (Some(limit), Some(waited)) = (limit, waited) {
+                if *waited > i64::try_from(*limit).unwrap_or(i64::MAX) {
+                    return flag(format!(
+                        "the step {} watched {watch} for {waited} s, above its limit of {limit} s. The last value: {}",
+                        facts.step,
+                        watched.as_deref().unwrap_or("not observed yet")
+                    ));
+                }
+            }
+            Next::Nothing(format!(
+                "it waits for {watch}, which is {}",
+                watched.as_deref().unwrap_or("not observed yet")
+            ))
         }
         KindFacts::End { finished } => {
             if *finished {
@@ -350,6 +400,12 @@ fn refusal_flag(refusal: &Option<Refused>) -> Option<Next> {
 }
 
 fn move_next(facts: &Facts) -> Next {
+    if let Some(branch) = &facts.branch {
+        return Next::Move {
+            to: branch.to.clone(),
+            how: branch.how.clone(),
+        };
+    }
     match &facts.next {
         Some(to) => Next::Move {
             to: to.clone(),
@@ -569,6 +625,7 @@ mod tests {
                 message: None,
             },
             next: Some("review".into()),
+            branch: None,
             flags: Vec::new(),
             running: false,
             open_cards: 0,
@@ -838,6 +895,9 @@ mod tests {
                 watch: "ci.state".into(),
                 watched: watched.map(str::to_string),
                 target: target.map(str::to_string),
+                waits: None,
+                limit: None,
+                waited: Some(10_000),
             };
             decide(&facts)
         };
@@ -857,6 +917,105 @@ mod tests {
             Next::Move {
                 to: "fix-ci".into(),
                 how: "on red".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_wait_step_flags_a_value_that_nothing_names_and_a_visit_above_its_limit() {
+        let wait = |watched: Option<&str>,
+                    waits: Option<&[&str]>,
+                    limit: Option<u64>,
+                    waited: Option<i64>| {
+            let mut facts = turn_facts(None, Vec::new());
+            facts.step = "ci".into();
+            facts.next = None;
+            facts.kind = KindFacts::Wait {
+                start: vec![("ci.run".to_string(), known(Outcome::Confirmed))],
+                watch: "ci.state".into(),
+                watched: watched.map(str::to_string),
+                target: None,
+                waits: waits.map(|w| w.iter().map(|v| v.to_string()).collect()),
+                limit,
+                waited,
+            };
+            decide(&facts)
+        };
+        let pending: &[&str] = &["pending", "none"];
+        assert!(matches!(
+            wait(Some("pending"), Some(pending), None, Some(5)),
+            Next::Nothing(_)
+        ));
+        assert!(is_flag(
+            &wait(Some("skipped"), Some(pending), None, Some(5)),
+            NEEDS_YOU,
+            "its value `skipped` is in neither on nor wait"
+        ));
+        assert!(
+            matches!(wait(Some("skipped"), None, None, Some(5)), Next::Nothing(_)),
+            "with no wait key, each value waits, as before"
+        );
+        assert!(
+            matches!(wait(None, Some(pending), None, None), Next::Nothing(_)),
+            "not observed yet"
+        );
+        assert!(matches!(
+            wait(Some("pending"), Some(pending), Some(60), Some(60)),
+            Next::Nothing(_)
+        ));
+        assert!(is_flag(
+            &wait(Some("pending"), Some(pending), Some(60), Some(61)),
+            NEEDS_YOU,
+            "watched ci.state for 61 s, above its limit of 60 s. The last value: pending"
+        ));
+        assert!(is_flag(
+            &wait(None, None, Some(60), Some(61)),
+            NEEDS_YOU,
+            "The last value: not observed yet"
+        ));
+        assert!(
+            matches!(wait(None, None, Some(60), None), Next::Nothing(_)),
+            "the clock has not started"
+        );
+    }
+
+    #[test]
+    fn a_turn_step_with_on_moves_by_the_kept_findings_of_its_turn() {
+        let on: BTreeMap<String, String> = [
+            ("findings".to_string(), "fix-qa".to_string()),
+            ("none".to_string(), "ready".to_string()),
+        ]
+        .into();
+        let found = findings_branch(&on, 2).unwrap();
+        assert_eq!(
+            (found.to.as_str(), found.how.as_str()),
+            ("fix-qa", "on findings")
+        );
+        let none = findings_branch(&on, 0).unwrap();
+        assert_eq!((none.to.as_str(), none.how.as_str()), ("ready", "on none"));
+        assert_eq!(findings_branch(&BTreeMap::new(), 1), None);
+        let mut facts = turn_facts(
+            Some(turn(TurnStatus::Done, Some("result"), Some("held"))),
+            vec![("git.push".to_string(), known(Outcome::Confirmed))],
+        );
+        facts.next = None;
+        facts.branch = Some(found);
+        assert_eq!(
+            decide(&facts),
+            Next::Move {
+                to: "fix-qa".into(),
+                how: "on findings".into()
+            }
+        );
+        // The after verbs run first.
+        if let KindFacts::Turn { after, .. } = &mut facts.kind {
+            after[0].1 = OpFact::NotAsked;
+        }
+        assert_eq!(
+            decide(&facts),
+            Next::Request {
+                list: List::After,
+                index: 0
             }
         );
     }

@@ -31,6 +31,8 @@ Text inside `{"untrusted": "..."}` comes from the tracker, from review comments,
 
 You cannot call the tracker or the forge. If you need a fact from one of them, end your turn with the kind `requests`.
 
+The facts file lists under `requests` each fact that you can ask for. Each entry has `verb` and `about`. `verb` is the name of a read verb. `about` says what the verb gives and which arguments it takes. Ask only for a verb of that list. Give each request as `{"verb": "<verb>", "args": {...}}`, with the arguments that its `about` names.
+
 ## The end of a turn
 
 - End with one object that fits the schema.

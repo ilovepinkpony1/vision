@@ -22,6 +22,10 @@ pub const DEFAULT_BRANCH: &str = "vision/{key}";
 pub const DEFAULT_BASE: &str = "origin/main";
 /// Seconds between two observe calls of a wait step when `every` is missing.
 pub const DEFAULT_EVERY: u64 = 60;
+/// The key of `on` of a turn step for a turn whose documents hold a kept finding.
+pub const FINDINGS: &str = "findings";
+/// The key of `on` of a turn step for a turn whose documents hold no kept finding.
+pub const NONE: &str = "none";
 
 /// A parsed and tested `adapter.toml`.
 #[derive(Clone, Debug, PartialEq)]
@@ -56,18 +60,30 @@ pub struct Step {
     pub kind: StepKind,
     /// The step after this one. Each step but a wait step and the end has one.
     pub next: Option<String>,
-    /// A wait step: the value of `watch` (as text) -> the next step.
+    /// A wait step: the value of `watch` (as text) -> the next step. A turn step with
+    /// `findings`: `findings` and `none` -> the next step, by the kept findings of its turn.
     pub on: BTreeMap<String, String>,
     /// A key of `[caps]`: the step counts each entry.
     pub cap: Option<String>,
     /// The end facts that the step expects.
     pub expects: Vec<Expect>,
+    /// The arguments of each end-fact job that `expects` gives as a table, such as
+    /// `{ job = "proof", args = { plan = "{doc:approved-plan.md}" } }`, by the job name. A job of
+    /// a plain `job:<name>` has no entry: its arguments are empty.
+    pub expect_args: BTreeMap<String, Map<String, Value>>,
     /// What runs when each end fact holds: verbs, usually.
     pub after: Vec<Entry>,
     /// What runs first: jobs, usually. Their documents become inputs.
     pub before: Vec<Entry>,
     /// What runs at the entry of the step, such as `ci.run`.
     pub start: Vec<Entry>,
+}
+
+impl Step {
+    /// The arguments of the end-fact job `job`: the `args` of its table in `expects`, or none.
+    pub fn expect_args_of(&self, job: &str) -> Map<String, Value> {
+        self.expect_args.get(job).cloned().unwrap_or_default()
+    }
 }
 
 /// The five kinds of step (section 11).
@@ -124,9 +140,16 @@ pub struct HumanStep {
 /// A wait step: it asks `observe` each `every` seconds and moves on the value of `watch`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaitStep {
-    /// A path into the answer of `observe` for the ticket, such as `ci.state`.
+    /// A path into the answer of `observe` for the ticket, such as `ci.state`. A path that does
+    /// not exist in the answer gives the value `none`.
     pub watch: String,
     pub every: u64,
+    /// `wait`: the values that mean "not yet", such as `pending`. With this key, each value that
+    /// is in neither `on` nor `wait` sets the flag needs-you at once. `None`: any value waits.
+    pub wait: Option<Vec<String>>,
+    /// `limit`: the seconds that one visit may watch. A visit that watches longer sets the flag
+    /// needs-you. `None`: no limit.
+    pub limit: Option<u64>,
 }
 
 /// One end fact of a step (section 11.2).
@@ -223,6 +246,12 @@ pub struct Verb {
     pub read: bool,
     /// Seconds before the executor kills `bin/act`. `None` takes the default.
     pub timeout: Option<u64>,
+    /// `once = true`: the verb runs one time for a ticket. Its idempotency key leaves out the
+    /// commit, so the same verb with the same arguments never runs again at a later commit.
+    /// A verb with `leaves` cannot have it: its gates judge what leaves at each commit.
+    pub once: bool,
+    /// `about`: one line for a session: what a read verb gives and which arguments it takes.
+    pub about: Option<String>,
 }
 
 /// One `[jobs.<name>]`.
@@ -504,10 +533,20 @@ fn parse_verbs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<
         let leaves = boolean(fields.remove("leaves"), &at, problems).unwrap_or(false);
         let read = boolean(fields.remove("read"), &at, problems).unwrap_or(false);
         let timeout = seconds(fields.remove("timeout"), &format!("{at} timeout"), problems);
+        let once = boolean(fields.remove("once"), &at, problems).unwrap_or(false);
+        let about = string(fields.remove("about"), &format!("{at} about"), problems);
+        if let Some(text) = &about {
+            if text.trim().is_empty() || text.contains(['\n', '\r']) || text.chars().count() > 300 {
+                problems.add(
+                    &at,
+                    "about is one line of up to 300 characters: what the verb gives and which arguments it takes",
+                );
+            }
+        }
         for key in fields.keys() {
             problems.add(
                 &at,
-                format!("`{key}` is not a key of a verb. The keys: mode, leaves, read, timeout"),
+                format!("`{key}` is not a key of a verb. The keys: mode, leaves, read, timeout, once, about"),
             );
         }
         let mode = match mode_text.as_deref() {
@@ -526,6 +565,18 @@ fn parse_verbs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<
                 "a read verb changes nothing outside, so it has no mode and no leaves",
             );
         }
+        if read && once {
+            problems.add(
+                &at,
+                "a read verb has no idempotency key, so once does not belong to it",
+            );
+        }
+        if leaves && once {
+            problems.add(
+                &at,
+                "the gates judge what leaves at each commit, so a verb with leaves cannot have once",
+            );
+        }
         verbs.insert(
             name.clone(),
             Verb {
@@ -534,6 +585,8 @@ fn parse_verbs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<
                 leaves,
                 read,
                 timeout,
+                once,
+                about: about.map(|t| t.trim().to_string()),
             },
         );
     }
@@ -625,13 +678,13 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
         "turn" => &[
             "agent", "turn", "reads", "expects", "with", "before", "after", "start", "next", "cap",
-            "findings",
+            "findings", "on",
         ],
         "job" => &[
             "job", "args", "expects", "before", "after", "start", "next", "cap",
         ],
         "human" => &["action", "expects", "after", "start", "next", "cap"],
-        "wait" => &["start", "watch", "on", "every", "cap"],
+        "wait" => &["start", "watch", "on", "every", "wait", "limit", "cap"],
         _ => &[],
     }
 }
@@ -715,16 +768,7 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
     }
     let next = string(table.remove("next"), &at, problems);
     let cap = string(table.remove("cap"), &at, problems);
-    let expects = strings(table.remove("expects"), &format!("{at} expects"), problems)
-        .into_iter()
-        .filter_map(|text| match Expect::parse(&text) {
-            Ok(expect) => Some(expect),
-            Err(e) => {
-                problems.add(&at, e);
-                None
-            }
-        })
-        .collect();
+    let (expects, expect_args) = expects(table.remove("expects"), &at, problems);
     let after = entries(table.remove("after"), &format!("{at} after"), problems);
     let before = entries(table.remove("before"), &format!("{at} before"), problems);
     let start = entries(table.remove("start"), &format!("{at} start"), problems);
@@ -752,16 +796,49 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         _ => StepKind::End,
     };
     let on = match &kind {
-        StepKind::Wait(_) => on_table(table.remove("on"), &at, problems),
+        StepKind::Wait(_) | StepKind::Turn(_) => on_table(table.remove("on"), &at, problems),
         _ => BTreeMap::new(),
     };
     match &kind {
         StepKind::End => {}
+        StepKind::Turn(turn) if !on.is_empty() => {
+            if turn.findings.is_none() {
+                problems.add(
+                    &at,
+                    "a turn step moves on its findings, so on needs the key findings, such as findings = \"qa\"",
+                );
+            }
+            let keys: Vec<&str> = on.keys().map(String::as_str).collect();
+            if keys != [FINDINGS, NONE] {
+                problems.add(
+                    &at,
+                    format!(
+                        "on of a turn step has exactly the keys findings and none, such as on = {{ findings = \"fix\", none = \"ready\" }}, not {}",
+                        keys.join(", ")
+                    ),
+                );
+            }
+            if next.is_some() {
+                problems.add(
+                    &at,
+                    "a turn step with on moves by on, so it has no next",
+                );
+            }
+        }
         StepKind::Wait(_) if on.is_empty() => problems.add(
             &at,
             "a wait step moves on the value of watch, so it needs on, such as on = { green = \"ready\" }",
         ),
-        StepKind::Wait(_) => {}
+        StepKind::Wait(wait) => {
+            for value in wait.wait.iter().flatten() {
+                if on.contains_key(value) {
+                    problems.add(
+                        &at,
+                        format!("`{value}` is in on and in wait. A value moves the ticket, or it waits"),
+                    );
+                }
+            }
+        }
         _ if next.is_none() => problems.add(
             &at,
             "it has no next. Each step but a wait step and the end names the step after it",
@@ -775,10 +852,110 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         on,
         cap,
         expects,
+        expect_args,
         after,
         before,
         start,
     })
+}
+
+/// The end facts of `expects`: each one a text such as `doc:pr.md`, or a table for a job with
+/// arguments, such as `{ job = "proof", args = { plan = "{doc:approved-plan.md}" } }`. Gives the
+/// end facts in their order and the arguments of each table, by the job name.
+fn expects(
+    value: Option<toml::Value>,
+    at: &str,
+    problems: &mut Problems,
+) -> (Vec<Expect>, BTreeMap<String, Map<String, Value>>) {
+    let mut list = Vec::new();
+    let mut args = BTreeMap::new();
+    let Some(value) = value else {
+        return (list, args);
+    };
+    let toml::Value::Array(items) = value else {
+        problems.add(&format!("{at} expects"), "it must be a list of strings");
+        return (list, args);
+    };
+    for item in items {
+        let expect = match item {
+            toml::Value::String(text) => match Expect::parse(&text) {
+                Ok(expect) => expect,
+                Err(e) => {
+                    problems.add(at, e);
+                    continue;
+                }
+            },
+            toml::Value::Table(mut table) => {
+                let job = string(table.remove("job"), at, problems);
+                let given = object(
+                    table.remove("args"),
+                    &format!("{at} expects args"),
+                    problems,
+                );
+                for key in table.keys() {
+                    problems.add(
+                        at,
+                        format!("`{key}` is not a key of an end fact. A table of expects has job and args, such as {{ job = \"proof\", args = {{ plan = \"{{doc:approved-plan.md}}\" }} }}"),
+                    );
+                }
+                let Some(job) = job.filter(|j| valid_name(j, true)) else {
+                    problems.add(
+                        at,
+                        "a table of expects names one job, such as { job = \"proof\", args = {} }",
+                    );
+                    continue;
+                };
+                if let Err(e) = check_doc_refs(&Value::Object(given.clone())) {
+                    problems.add(at, format!("expects job:{job}: {e}"));
+                }
+                args.insert(job.clone(), given);
+                Expect::Job(job)
+            }
+            other => {
+                problems.add(
+                    &format!("{at} expects"),
+                    format!("`{other}` is not an end fact: use a text such as \"doc:pr.md\", or a table such as {{ job = \"proof\", args = {{}} }}"),
+                );
+                continue;
+            }
+        };
+        if list.contains(&expect) {
+            problems.add(
+                at,
+                format!("expects names {expect} more than once. Name each end fact once"),
+            );
+            continue;
+        }
+        list.push(expect);
+    }
+    (list, args)
+}
+
+/// Tests each `{doc:NAME}` of the strings of a value: it closes, and it names a plain file of
+/// the ticket folder.
+fn check_doc_refs(value: &Value) -> Result<(), String> {
+    match value {
+        Value::String(text) => {
+            let mut rest = text.as_str();
+            while let Some(start) = rest.find("{doc:") {
+                let after = &rest[start + 5..];
+                let Some(end) = after.find('}') else {
+                    return Err(format!("`{text}` opens {{doc: and never closes it"));
+                };
+                let name = &after[..end];
+                if !valid_document_name(name) {
+                    return Err(format!(
+                        "`{{doc:{name}}}` does not name a plain file of the ticket folder"
+                    ));
+                }
+                rest = &after[end + 1..];
+            }
+            Ok(())
+        }
+        Value::Array(items) => items.iter().try_for_each(check_doc_refs),
+        Value::Object(map) => map.values().try_for_each(check_doc_refs),
+        _ => Ok(()),
+    }
 }
 
 fn turn_step(table: &mut Table, at: &str, problems: &mut Problems) -> TurnStep {
@@ -861,7 +1038,16 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
             seconds(Some(value), &format!("{at} every"), problems).unwrap_or(DEFAULT_EVERY)
         }
     };
-    WaitStep { watch, every }
+    let wait = table
+        .remove("wait")
+        .map(|value| strings(Some(value), &format!("{at} wait"), problems));
+    let limit = seconds(table.remove("limit"), &format!("{at} limit"), problems);
+    WaitStep {
+        watch,
+        every,
+        wait,
+        limit,
+    }
 }
 
 fn on_table(
@@ -1301,7 +1487,9 @@ url = "http://localhost:3000"
             ci.kind,
             StepKind::Wait(WaitStep {
                 watch: "ci.state".into(),
-                every: 30
+                every: 30,
+                wait: None,
+                limit: None,
             })
         );
         assert_eq!(ci.on["red"], "build");
@@ -1424,6 +1612,203 @@ url = "http://localhost:3000"
         for cap in ["review_rounds", "ci_fix", "comments"] {
             assert!(caps.contains(&cap.to_string()), "{caps:?}");
         }
+    }
+
+    #[test]
+    fn an_end_fact_job_can_have_arguments_with_documents() {
+        let text = with(
+            "expects = [\"commits\", \"clean\", \"doc:pr.md\", \"job:proof\"]",
+            "expects = [\"commits\", { job = \"proof\", args = { plan = \"{doc:approved-plan.md}\", depth = 2 } }]",
+        );
+        let adapter = parse(&text).unwrap();
+        let build = adapter.step("build").unwrap();
+        assert_eq!(
+            build.expects,
+            [Expect::Commits, Expect::Job("proof".into())]
+        );
+        let args = build.expect_args_of("proof");
+        assert_eq!(args["plan"], "{doc:approved-plan.md}");
+        assert_eq!(args["depth"], 2);
+        assert!(
+            adapter
+                .step("refine")
+                .unwrap()
+                .expect_args_of("proof")
+                .is_empty(),
+            "a plain end fact has no arguments"
+        );
+        let cases = [
+            (
+                "{ job = \"proof\", env = \"x\" }",
+                "`env` is not a key of an end fact",
+            ),
+            ("{ args = {} }", "a table of expects names one job"),
+            (
+                "{ job = \"prove\" }",
+                "expects job:prove names the job `prove`, which is not in [jobs]",
+            ),
+            (
+                "{ job = \"proof\", args = { plan = \"{doc:plan.md\" } }",
+                "opens {doc: and never closes it",
+            ),
+            (
+                "{ job = \"proof\", args = { plan = \"{doc:../x}\" } }",
+                "does not name a plain file",
+            ),
+            (
+                "\"job:proof\", { job = \"proof\" }",
+                "expects names job:proof more than once",
+            ),
+            ("3", "`3` is not an end fact"),
+        ];
+        for (entry, expected) in cases {
+            let text = with(
+                "expects = [\"commits\", \"clean\", \"doc:pr.md\", \"job:proof\"]",
+                &format!("expects = [{entry}]"),
+            );
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+    }
+
+    #[test]
+    fn a_verb_can_run_once_for_a_ticket_and_a_read_verb_can_say_what_it_gives() {
+        let text = with(
+            "[verbs.deploy]\n",
+            "[verbs.deploy]\nonce = true\n",
+        )
+        .replacen(
+            "[verbs.\"tracker.issue\"]\nread = true",
+            "[verbs.\"tracker.issue\"]\nread = true\nabout = \" One issue as issue-KEY.json. args: key \"",
+            1,
+        );
+        let adapter = parse(&text).unwrap();
+        assert!(adapter.verbs["deploy"].once);
+        assert!(!adapter.verbs["git.push"].once, "false by default");
+        assert_eq!(
+            adapter.verbs["tracker.issue"].about.as_deref(),
+            Some("One issue as issue-KEY.json. args: key")
+        );
+        assert_eq!(adapter.verbs["git.push"].about, None);
+        for (old, new, expected) in [
+            (
+                "[verbs.deploy]\n",
+                "[verbs.deploy]\nonce = \"yes\"\n",
+                "must be true or false",
+            ),
+            (
+                "[verbs.\"tracker.issue\"]\nread = true",
+                "[verbs.\"tracker.issue\"]\nread = true\nonce = true",
+                "once does not belong to it",
+            ),
+            (
+                "mode = \"shadow\"\nleaves = true",
+                "mode = \"shadow\"\nleaves = true\nonce = true",
+                "a verb with leaves cannot have once",
+            ),
+            (
+                "[verbs.deploy]\n",
+                "[verbs.deploy]\nabout = \"two\\nlines\"\n",
+                "about is one line",
+            ),
+            (
+                "[verbs.deploy]\n",
+                "[verbs.deploy]\nabout = \"  \"\n",
+                "about is one line",
+            ),
+        ] {
+            let err = error(&with(old, new));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+    }
+
+    #[test]
+    fn a_wait_step_names_the_values_that_wait_and_its_limit() {
+        let text = with(
+            "every = 30",
+            "every = 30\nwait = [\"pending\", \"none\"]\nlimit = 3600",
+        );
+        let adapter = parse(&text).unwrap();
+        let StepKind::Wait(ci) = &adapter.step("ci").unwrap().kind else {
+            panic!("ci is a wait step")
+        };
+        assert_eq!(
+            ci.wait.as_deref(),
+            Some(&["pending".to_string(), "none".to_string()][..])
+        );
+        assert_eq!(ci.limit, Some(3600));
+        for (new, expected) in [
+            ("wait = [\"red\"]", "`red` is in on and in wait"),
+            (
+                "wait = \"pending\"",
+                "step `ci` wait: it must be a list of strings",
+            ),
+            (
+                "limit = 0",
+                "step `ci` limit: `0` must be a number of seconds above 0",
+            ),
+        ] {
+            let err = error(&with("every = 30", &format!("every = 30\n{new}")));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        let err = error(&with(
+            "action = \"approve-merge\"",
+            "action = \"approve-merge\"\nlimit = 5",
+        ));
+        assert!(
+            err.contains("the key `limit` does not belong to a human step"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_turn_step_with_findings_can_move_on_them() {
+        let refine = "after = [\"tracker.describe\"]\nnext = \"build\"";
+        let good = with(
+            refine,
+            "after = [\"tracker.describe\"]\nfindings = \"qa\"\non = { findings = \"build\", none = \"ci\" }",
+        );
+        let adapter = parse(&good).unwrap();
+        let step = adapter.step("refine").unwrap();
+        assert_eq!(step.next, None);
+        assert_eq!(step.on[FINDINGS], "build");
+        assert_eq!(step.on[NONE], "ci");
+        for (new, expected) in [
+            (
+                "on = { findings = \"build\", none = \"ci\" }",
+                "on needs the key findings",
+            ),
+            (
+                "findings = \"qa\"\non = { findings = \"build\", none = \"ci\", red = \"ci\" }",
+                "exactly the keys findings and none",
+            ),
+            (
+                "findings = \"qa\"\non = { findings = \"build\" }",
+                "exactly the keys findings and none",
+            ),
+            (
+                "findings = \"qa\"\non = { findings = \"fix\", none = \"ci\" }",
+                "on.findings names the step `fix`, which does not exist",
+            ),
+            (
+                "findings = \"qa\"\non = { findings = \"build\", none = \"ci\" }\nnext = \"build\"",
+                "a turn step with on moves by on, so it has no next",
+            ),
+        ] {
+            let err = error(&with(
+                refine,
+                &format!("after = [\"tracker.describe\"]\n{new}"),
+            ));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        let err = error(&with(
+            "next = \"done\"",
+            "on = { findings = \"done\", none = \"done\" }",
+        ));
+        assert!(
+            err.contains("the key `on` does not belong to a job step"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -135,10 +135,16 @@ def not_built(what):
 
 
 class Config:
-    """The [adapter] table of the configuration, with the defaults of adapter.toml."""
+    """The [adapter] table of the configuration, with the defaults of adapter.toml, and
+    `base_ref` of the call: the `base` of adapter.toml, such as origin/main."""
 
-    def __init__(self, table):
+    def __init__(self, table, base_ref=None):
         self.table = table if isinstance(table, dict) else {}
+        self.base_ref = base_ref if isinstance(base_ref, str) else None
+
+    @classmethod
+    def of(cls, request):
+        return cls(request.get("config"), request.get("base_ref"))
 
     def get(self, key, default=None):
         value = self.table.get(key)
@@ -180,7 +186,17 @@ class Config:
         return repo
 
     def base_branch(self):
-        return self.text("base_branch", default="main")
+        """The branch that pull requests go into. `base_ref` of the call gives it: the text
+        after its first `/`, such as main of origin/main. The key `base_branch` of the
+        [adapter] table overrides it, for a project whose remote branch has a different name.
+        With neither, it is main."""
+        override = self.text("base_branch")
+        if override:
+            return override
+        ref = (self.base_ref or "").strip()
+        if ref:
+            return ref.split("/", 1)[1] if "/" in ref else ref
+        return "main"
 
     def http_timeout(self):
         return self.number("http_timeout", DEFAULT_HTTP_TIMEOUT)

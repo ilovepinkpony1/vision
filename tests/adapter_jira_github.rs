@@ -45,7 +45,6 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
             "fix-ci",
             "qa",
             "fix-qa",
-            "qa-check",
             "ready",
             "in-review",
             "comments",
@@ -86,7 +85,16 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
     }
     for verb in ["jira.issue", "jira.search", "github.pr", "ci.log"] {
         assert!(adapter.verbs[verb].read, "{verb}");
+        let about = adapter.verbs[verb].about.as_deref().unwrap_or("");
+        assert!(
+            about.contains("args:"),
+            "{verb} says what it gives: {about}"
+        );
     }
+    assert!(
+        adapter.verbs["tracker.move"].once,
+        "one move for each status, whatever the commit"
+    );
     let timeout = adapter.verbs["ci.run"].timeout.unwrap();
     assert!(
         timeout >= 60,
@@ -202,6 +210,31 @@ fn the_steps_name_their_documents_and_their_evidence() {
     assert_eq!(turn.with["env"], "local");
     assert_eq!(qa.before[0].kind, EntryKind::Job);
     assert_eq!(qa.before[0].name, "app-start");
+    // QA moves on its findings; a fix goes through CI, and then through QA again.
+    assert_eq!(qa.next, None);
+    assert_eq!(qa.on["findings"], "fix-qa");
+    assert_eq!(qa.on["none"], "ready");
+    assert_eq!(step("fix-qa").next.as_deref(), Some("ci"));
+    // Each wait step names the values that mean "not yet", and has a limit.
+    for wait in adapter
+        .steps
+        .iter()
+        .filter(|s| matches!(s.kind, StepKind::Wait(_)))
+    {
+        let StepKind::Wait(spec) = &wait.kind else {
+            unreachable!()
+        };
+        assert!(spec.wait.is_some(), "{}", wait.id);
+        assert!(spec.limit.is_some_and(|l| l >= 600), "{}", wait.id);
+    }
+    // The proof of each step reads the approved plan.
+    for id in ["build", "review", "fix-ci"] {
+        assert_eq!(
+            step(id).expect_args_of("proof")["plan"],
+            "{doc:approved-plan.md}",
+            "{id}"
+        );
+    }
     let StepKind::Wait(ci) = &step("ci").kind else {
         panic!("ci is a wait step")
     };

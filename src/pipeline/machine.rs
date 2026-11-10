@@ -4,7 +4,7 @@
 //! the turns, the operations, the checks, and the events prove the progress, so nothing runs
 //! two times and no document is lost.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use ::time::OffsetDateTime;
@@ -12,8 +12,8 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 
 use super::decide::{
-    check_end_facts, ci_result, decide, wait_target, Check, FactInputs, Facts, JobFact, KindFacts,
-    LastTurn, List, Next, OpFact, Refused,
+    check_end_facts, ci_result, decide, findings_branch, wait_target, Branch, Check, FactInputs,
+    Facts, JobFact, KindFacts, LastTurn, List, Next, OpFact, Refused,
 };
 use super::docs::{self, result_documents};
 use super::state::{flags_of, flags_text, waits_on, Counts, FlagReason, Seen, WAITS_FOR_LIMIT};
@@ -341,15 +341,20 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
         jobs: Default::default(),
         human: human_actions(ledger, &ticket.key)?,
     };
+    let mut job_args = BTreeMap::new();
     for expect in &step.expects {
         if let Expect::Job(job) = expect {
-            // A job that did not pass at this commit runs again: a result is tested once, and
-            // a job can fail for a reason outside the commit, such as a slow machine.
-            let fact = match executor::job_passed(ledger, ticket.key.as_str(), job, &head)? {
-                Some(true) => JobFact::Passed,
-                None | Some(false) => JobFact::NotRun,
-            };
+            let args = end_fact_args(ctx, &ticket.key, step, job);
+            // A job that did not pass at this commit with these arguments runs again: a result
+            // is tested once, and a job can fail for a reason outside the commit, such as a
+            // slow machine.
+            let fact =
+                match executor::job_passed_with(ledger, ticket.key.as_str(), job, &head, &args)? {
+                    Some(true) => JobFact::Passed,
+                    None | Some(false) => JobFact::NotRun,
+                };
             inputs.jobs.insert(job.clone(), fact);
+            job_args.insert(job.clone(), args);
         }
     }
     let mut job_docs = Vec::new();
@@ -360,7 +365,10 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
                     ticket: ticket.key.clone(),
                     step: step.id.clone(),
                     job: job.clone(),
-                    args: Value::Object(Map::new()),
+                    args: job_args
+                        .get(&job)
+                        .cloned()
+                        .unwrap_or_else(|| Value::Object(Map::new())),
                 };
                 let result = executor::job(ctx, ledger, &run)?;
                 let fact = match (&result.failure, result.ok) {
@@ -643,9 +651,30 @@ fn observe_wait(
     if !due {
         return Ok(());
     }
-    let facts = executor::observe_ticket(ctx, ledger, &ticket.key)?;
-    let watched = facts.watch_text(&wait.watch);
     let at = time::rfc3339(now);
+    // The clock of `limit` starts at the first look of the visit, also when that look fails.
+    let first = visit.since.is_none();
+    if first {
+        if let Some(visit) = ticket.counts.visit.as_mut() {
+            visit.since = Some(at.clone());
+        }
+    }
+    let facts = match executor::observe_ticket(ctx, ledger, &ticket.key) {
+        Ok(facts) => facts,
+        Err(e) => {
+            if first {
+                save(ledger, ticket, &at, None)?;
+            }
+            return Err(e);
+        }
+    };
+    // A list or a table is no value of `on`: its JSON text names it in the reason of a flag.
+    let watched = facts.watch_text(&wait.watch).or_else(|| {
+        facts.watch(&wait.watch).map(|v| {
+            let text = v.to_string();
+            text.chars().take(100).collect::<String>()
+        })
+    });
     ticket.counts.seen = Some(Seen::of(&facts, &at));
     if let Some(visit) = ticket.counts.visit.as_mut() {
         visit.observed = Some(at.clone());
@@ -756,7 +785,7 @@ fn select_one(
     }
     ensure_visit(ctx, ledger, ticket, &step)?;
     for _ in 0..2 {
-        let facts = gather(ctx, ledger, ticket, &step)?;
+        let facts = gather(ctx, ledger, ticket, &step, now)?;
         let next = decide(&facts);
         match next {
             Next::Nothing(_) => return Ok(None),
@@ -851,6 +880,24 @@ fn last_turn_id(ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Option<
             .last()
             .map(|t| t.id.clone()),
     )
+}
+
+/// The arguments of the end-fact job `job` of a step, with each `{doc:NAME}` replaced by the
+/// document of the ticket. A missing document gives an empty text: the job decides what that
+/// means, such as a proof with no plan.
+pub(crate) fn end_fact_args(ctx: &Ctx, key: &TicketKey, step: &Step, job: &str) -> Value {
+    let read = |name: &str| {
+        Some(
+            read_optional(&ctx.paths.ticket_doc(key, name))
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        )
+    };
+    let args = step.expect_args_of(job);
+    // The loader tested each `{doc:NAME}`, so the expansion cannot fail; the plain arguments
+    // are the fallback.
+    docs::expand_args(&args, &read).unwrap_or(Value::Object(args))
 }
 
 /// The arguments of an entry, with each `{doc:NAME}` replaced by the document of the ticket.
@@ -984,10 +1031,17 @@ pub(crate) fn open_items(
 }
 
 /// The facts of the step of one ticket, for [`decide`].
-fn gather(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Facts> {
+fn gather(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    step: &Step,
+    now: OffsetDateTime,
+) -> Result<Facts> {
     let visit = ticket.visit();
     let key = &ticket.key;
     let mut refusal = None;
+    let mut branch = None;
     let kind = match &step.kind {
         StepKind::Turn(turn) => {
             refusal = turn::refusal(ctx, ledger, key, turn.turn)?.map(|r| {
@@ -1032,6 +1086,14 @@ fn gather(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Fa
                 }
                 _ => Vec::new(),
             };
+            if let Some(t) = last
+                .as_ref()
+                .filter(|t| t.end_fact.as_deref() == Some("held"))
+            {
+                if !step.on.is_empty() {
+                    branch = Some(turn_branch(ctx, ledger, step, &t.id)?);
+                }
+            }
             KindFacts::Turn {
                 last,
                 failures,
@@ -1069,6 +1131,13 @@ fn gather(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Fa
             watch: wait.watch.clone(),
             watched: visit.watched.clone(),
             target: wait_target(&step.on, visit.watched.as_deref()),
+            waits: wait.wait.clone(),
+            limit: wait.limit,
+            waited: visit
+                .since
+                .as_deref()
+                .and_then(|t| time::parse_rfc3339(t).ok())
+                .map(|since| time::seconds_between(since, now)),
         },
         StepKind::End => KindFacts::End {
             finished: ticket.counts.finished.is_some(),
@@ -1083,6 +1152,7 @@ fn gather(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Fa
         step: step.id.clone(),
         kind,
         next: step.next.clone(),
+        branch,
         flags: ticket.flags.clone(),
         running: ledger.running_turns_of_ticket(key.as_str())? > 0,
         open_cards: ledger.open_cards(key.as_str())?,
@@ -1095,6 +1165,30 @@ fn gather(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Fa
         } else {
             Vec::new()
         },
+    })
+}
+
+/// Where a turn step with `on` moves after its held turn: `findings` when the documents of the
+/// turn hold one or more kept findings, else `none`.
+fn turn_branch(ctx: &Ctx, ledger: &Ledger, step: &Step, turn_id: &str) -> Result<Branch> {
+    let outcome = turn::outcome(ctx, ledger, &TurnId::parse(turn_id)?)?;
+    let kept = outcome
+        .result
+        .as_ref()
+        .map(|result| {
+            result_documents(result, &expected_docs(step))
+                .docs
+                .values()
+                .flat_map(|text| docs::findings(text))
+                .filter(|f| f.verdict == "kept")
+                .count()
+        })
+        .unwrap_or(0);
+    findings_branch(&step.on, kept).with_context(|| {
+        format!(
+            "the step {} has on with no target for its findings. Fix adapter.toml",
+            step.id
+        )
     })
 }
 

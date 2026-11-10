@@ -8,6 +8,10 @@
 #
 # A string argument `{doc:NAME}` of an entry takes the text of the document NAME of the ticket
 # folder when the pipeline requests the verb, so the gates read the text that leaves.
+#
+# The proof gets the approved plan in args.plan. A line `Proof: green` of the plan declares the
+# whole proof green (a change with no new behavior), and a line `Proof: green <path>` declares
+# one test file, which then only has to pass at the last commit.
 
 name = "demo"
 branch = "vision/{key}"
@@ -44,7 +48,7 @@ kind = "turn"
 agent = "builder"
 turn = "worker"
 reads = ["approved-plan.md", "refine.md", "answers.md"]
-expects = ["commits", "clean", "doc:pr.md", "job:proof"]
+expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "review"
 
@@ -55,7 +59,7 @@ agent = "reviewer"
 turn = "worker"
 before = ["job:second-review"]
 reads = ["approved-plan.md", "second-review.md"]
-expects = ["clean", "doc:review.md", "job:proof"]
+expects = ["clean", "doc:review.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push"]
 findings = "review"
 cap = "review_rounds"
@@ -67,6 +71,8 @@ kind = "wait"
 start = ["ci.run"]
 watch = "ci.state"
 on = { green = "ready", red = "fix-ci" }
+wait = ["none"]               # the values that mean "not yet". Any other value needs the person.
+limit = 3600                  # seconds that one visit may watch before it needs the person
 every = 60
 
 [[step]]
@@ -76,7 +82,7 @@ agent = "builder"
 turn = "worker"
 before = ["job:ci-log"]
 reads = ["ci-log.txt", "approved-plan.md"]
-expects = ["commits", "clean", "job:proof"]
+expects = ["commits", "clean", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push"]
 cap = "ci_fix"
 next = "ci"
@@ -86,6 +92,8 @@ id = "ready"
 kind = "wait"
 watch = "pr.draft"
 on = { "false" = "comments" }
+wait = ["true"]
+limit = 604800
 every = 60
 
 [[step]]
@@ -105,6 +113,8 @@ id = "ready-to-merge"
 kind = "wait"
 watch = "pr.merged"
 on = { "true" = "done" }
+wait = ["false"]
+limit = 1209600
 every = 60
 
 [[step]]
@@ -132,6 +142,7 @@ leaves = true
 
 [verbs."tracker.issue"]
 read = true
+about = "One ticket of the tracker as issue-<KEY>.json: title, description, status, assignee. args: key (default: the ticket)"
 
 # A job gets no secret, because a job can run code that an agent wrote. A job that only reads
 # the tracker or the forge sets `secrets = true`. Never set it for a job that runs code of the

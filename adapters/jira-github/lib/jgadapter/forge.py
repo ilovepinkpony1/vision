@@ -92,6 +92,12 @@ class GitHub:
         return [c for c in self.client.pages(self.path("pulls/%d/comments" % number), "list the review comments of #%d" % number)
                 if isinstance(c, dict)]
 
+    def issue_comments(self, number):
+        """The conversation comments of the pull request."""
+        return [c for c in self.client.pages(self.path("issues/%d/comments" % number),
+                                             "list the conversation comments of #%d" % number)
+                if isinstance(c, dict)]
+
     # Actions.
 
     def runs_at(self, head, workflow):
@@ -156,6 +162,162 @@ def waiting_threads(comments, own):
     return out
 
 
+# The last line of a reply of Vision to a review or to a conversation comment: it names the
+# kind and the id of the comment that it answers.
+MARK = re.compile(r"^<!-- vision-reply (review|conversation) (\d{1,20}) -->$")
+KINDS = ("inline", "review", "conversation")
+
+
+def first_line(text, limit=200):
+    """The first line of a text that is not empty, cut, with no mark of an HTML comment, so
+    that a quote of it can never hold the mark of a reply."""
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if line:
+            line = line.replace("<!--", "").replace("-->", "").strip()
+            return line if len(line) <= limit else line[:limit] + "..."
+    return ""
+
+
+def quoted(text):
+    """The quote of the first line of a review or a conversation comment."""
+    return "> " + first_line(text)
+
+
+MENTION = re.compile(r"@(?=[A-Za-z0-9])")
+
+
+def no_mentions(text):
+    """A text whose mentions call nobody: a zero-width space after each `@` that starts a name.
+    A quote of a comment must not notify its people a second time."""
+    return MENTION.sub("@\u200b", str(text or ""))
+
+
+def reply_marks(issue_comments, own):
+    """What the conversation comments of `own` (lowercase logins) answer: the (kind, id) of the
+    mark of their last line, and the quoted first lines."""
+    marks, quotes = set(), set()
+    for c in issue_comments:
+        if login(c.get("user")).lower() not in own:
+            continue
+        lines = [line.strip() for line in str(c.get("body") or "").splitlines() if line.strip()]
+        if lines:
+            match = MARK.match(lines[-1])
+            if match:
+                marks.add((match.group(1), int(match.group(2))))
+        quotes.update(line for line in lines if line.startswith("> ") and len(line) > 2)
+    return marks, quotes
+
+
+def reply_body(kind, comment_id, original, reply):
+    """A reply to a review or a conversation comment: a new conversation comment that quotes
+    the first line of the comment, the reply, and the mark of the comment."""
+    return "%s\n\n%s\n\n<!-- vision-reply %s %d -->" % (original, reply.strip(), kind, comment_id)
+
+
+def last_states(reviews):
+    """The last review state of each author (APPROVED, CHANGES_REQUESTED, or DISMISSED), by the
+    lowercase login, and the login as GitHub shows it."""
+    last, shown = {}, {}
+    for review in sorted(reviews, key=lambda r: r.get("id") or 0):
+        state = review.get("state")
+        name = login(review.get("user"))
+        if state in REVIEW_STATES and name:
+            last[name.lower()] = state
+            shown[name.lower()] = name
+    return last, shown
+
+
+def review_first_line(review):
+    return first_line(review.get("body")) or "%s asked for changes." % login(review.get("user"))
+
+
+def waiting_rows(reviews, review_comments, issue_comments, own, ignore=()):
+    """Each comment of a pull request that waits for an answer, as one row with its kind:
+
+    - `inline`: a thread of review comments whose last comment is not from `own`. Its id is
+      the id of the first comment, and a reply goes into the thread.
+    - `review`: a review with a body of a login that is not in `own`, that asks for changes
+      (while that is the last state of its author) or that comments. A review with no body
+      has nothing to answer: its inline comments are rows of their own.
+    - `conversation`: a conversation comment of a login that is not in `own`.
+
+    A review or a conversation comment waits until a conversation comment of `own` answers it:
+    one with its mark, or one that quotes its first line. A comment of a login of `ignore`
+    (lowercase, such as a CI bot) never waits: the rows leave it out, as if nobody wrote it.
+    The text of each row is untrusted."""
+    ignore = set(ignore)
+    rows = []
+    review_comments = [c for c in review_comments if login(c.get("user")).lower() not in ignore]
+    for root, items in sorted(waiting_threads(review_comments, own).items()):
+        first, last = items[0], items[-1]
+        mine = [i for i, c in enumerate(items) if login(c.get("user")).lower() in own]
+        new = items[mine[-1] + 1:] if mine else items
+        if len(new) == 1:
+            text = new[0].get("body") or ""
+        else:
+            text = "\n\n".join("%s: %s" % (login(c.get("user")), c.get("body") or "") for c in new)
+        rows.append({
+            "id": root,
+            "kind": "inline",
+            "author": login(last.get("user")),
+            "path": first.get("path"),
+            "line": first.get("line") or first.get("original_line"),
+            "text": {"untrusted": text},
+            "thread": [{"id": c.get("id"), "author": login(c.get("user")), "text": {"untrusted": c.get("body") or ""}}
+                       for c in items],
+        })
+    marks, quotes = reply_marks(issue_comments, own)
+
+    def answered(kind, comment_id, text):
+        line = first_line(text)
+        return (kind, comment_id) in marks or (bool(line) and ("> " + line) in quotes)
+
+    last, _shown = last_states(reviews)
+    for review in sorted(reviews, key=lambda r: r.get("id") or 0):
+        name = login(review.get("user"))
+        state = review.get("state")
+        body = review.get("body") or ""
+        if not name or name.lower() in own or name.lower() in ignore or not isinstance(review.get("id"), int):
+            continue
+        if not body.strip():
+            continue
+        if state == "CHANGES_REQUESTED":
+            if last.get(name.lower()) != "CHANGES_REQUESTED":
+                continue
+        elif state != "COMMENTED":
+            continue
+        if answered("review", review["id"], body):
+            continue
+        rows.append({
+            "id": review["id"],
+            "kind": "review",
+            "state": state,
+            "author": name,
+            "path": None,
+            "line": None,
+            "text": {"untrusted": body},
+            "thread": [{"id": review["id"], "author": name, "text": {"untrusted": body}}],
+        })
+    for c in sorted(issue_comments, key=lambda c: c.get("id") or 0):
+        name = login(c.get("user"))
+        if not name or name.lower() in own or name.lower() in ignore or not isinstance(c.get("id"), int):
+            continue
+        body = c.get("body") or ""
+        if answered("conversation", c["id"], body):
+            continue
+        rows.append({
+            "id": c["id"],
+            "kind": "conversation",
+            "author": name,
+            "path": None,
+            "line": None,
+            "text": {"untrusted": body},
+            "thread": [{"id": c["id"], "author": name, "text": {"untrusted": body}}],
+        })
+    return rows
+
+
 def pr_facts(gh, pr, config):
     """The pull request facts of design 11.1, with the review state of the in-review step."""
     number = pr["number"]
@@ -166,18 +328,14 @@ def pr_facts(gh, pr, config):
     def counts(name):
         return name in approvers if approvers else name not in own
 
-    last = {}
-    shown = {}
-    for review in sorted(gh.reviews(number), key=lambda r: r.get("id") or 0):
-        state = review.get("state")
-        name = login(review.get("user"))
-        if state in REVIEW_STATES and name:
-            last[name.lower()] = state
-            shown[name.lower()] = name
+    reviews = gh.reviews(number)
+    last, shown = last_states(reviews)
     approved_by = sorted(shown[n] for n, s in last.items() if s == "APPROVED" and counts(n))
     asked = sorted(shown[n] for n, s in last.items() if s == "CHANGES_REQUESTED" and counts(n))
     requested = {login(u).lower() for u in pr.get("requested_reviewers") or []}
-    waiting = waiting_threads(gh.review_comments(number), own)
+    # Each comment that waits, of each kind: the same rows as the job comments gives.
+    waiting = waiting_rows(reviews, gh.review_comments(number), gh.issue_comments(number), own,
+                           config.logins("ignore_logins"))
     merged = bool(pr.get("merged") or pr.get("merged_at"))
     closed = pr.get("state") == "closed" and not merged
     facts = {

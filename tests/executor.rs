@@ -734,6 +734,307 @@ time.sleep(30)
     demo.edit_config(|doc| doc["adapter"]["dir"] = toml_edit::value(dir));
 }
 
+/// The value of the secret of the probe adapter.
+const PROBE_SECRET: &str = "probe-secret-value-4711";
+
+/// An adapter whose `bin/act` and `bin/job` write each call object to `calls.jsonl` in the
+/// home of the person, and answer by the verb:
+///
+/// - `x.describe`: confirmed, with documents: one good one (with the secret in it), one that
+///   the pipeline owns, one with a folder part.
+/// - `x.no`: failed, with a document.
+/// - `x.later`: uncertain with the external id `ext-7`; its reconcile is confirmed with a
+///   document.
+/// - `x.move`: confirmed; `once = true` and the mode ask.
+fn probe_adapter(demo: &Demo) -> std::path::PathBuf {
+    let dir = demo.home.user_home.join("probe adapter");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("adapter.toml"),
+        r#"name = "probe"
+base = "origin/main"
+
+[[step]]
+id = "work"
+kind = "job"
+job = "look"
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+
+[verbs."x.describe"]
+mode = "auto"
+
+[verbs."x.no"]
+mode = "auto"
+
+[verbs."x.later"]
+mode = "auto"
+
+[verbs."x.move"]
+mode = "ask"
+once = true
+
+[jobs.look]
+"#,
+    )
+    .unwrap();
+    let calls = demo.home.user_home.join("calls.jsonl");
+    let act = format!(
+        r#"#!/usr/bin/env python3
+import json, sys
+req = json.load(sys.stdin)
+with open({calls:?}, "a") as f:
+    f.write(json.dumps(req) + "\n")
+verb = req.get("verb")
+docs = [{{"name": "backup-1.json", "content": "old text {PROBE_SECRET}"}},
+        {{"name": "plan.md", "content": "x"}},
+        {{"name": "../escape.txt", "content": "x"}}]
+if verb == "x.describe":
+    out = {{"state": "confirmed", "detail": "done", "documents": docs}}
+elif verb == "x.no":
+    out = {{"state": "failed", "detail": "no", "documents": [{{"name": "no.txt", "content": "x"}}]}}
+elif verb == "x.later" and not req.get("reconcile"):
+    out = {{"state": "uncertain", "detail": "not known yet", "external_id": "ext-7"}}
+elif verb == "x.later":
+    out = {{"state": "confirmed", "detail": "it happened", "documents": [{{"name": "later.txt", "content": "found"}}]}}
+else:
+    out = {{"state": "confirmed", "detail": "moved"}}
+print(json.dumps(out))
+"#
+    );
+    let job = format!(
+        r#"#!/usr/bin/env python3
+import json, sys
+req = json.load(sys.stdin)
+with open({calls:?}, "a") as f:
+    f.write(json.dumps(req) + "\n")
+print(json.dumps({{"ok": True, "detail": "looked"}}))
+"#
+    );
+    let observe = format!(
+        r#"#!/usr/bin/env python3
+import json, sys
+req = json.load(sys.stdin)
+with open({calls:?}, "a") as f:
+    f.write(json.dumps(req) + "\n")
+print(json.dumps({{"tickets": []}}))
+"#
+    );
+    executor_support::write_script(&dir.join("bin/act"), &act);
+    executor_support::write_script(&dir.join("bin/job"), &job);
+    executor_support::write_script(&dir.join("bin/observe"), &observe);
+    let dir_text = dir.display().to_string();
+    demo.edit_config(|doc| {
+        doc["adapter"]["dir"] = toml_edit::value(dir_text);
+        let mut secret = toml_edit::InlineTable::new();
+        secret.insert("cmd", format!("printf {PROBE_SECRET}").into());
+        doc["secrets"]["PROBE_TOKEN"] = toml_edit::value(secret);
+    });
+    calls
+}
+
+/// The call objects that the probe adapter recorded.
+fn probe_calls(calls: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(calls)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+fn the_documents_of_a_confirmed_act_answer_go_to_the_ticket_folder() {
+    let demo = Demo::new();
+    probe_adapter(&demo);
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let done = executor::request(&ctx, &ledger, &op("x.describe", json!({}))).unwrap();
+    assert_eq!(done.outcome, Outcome::Confirmed, "{done:?}");
+    assert_eq!(done.documents, ["backup-1.json"]);
+    let folder = demo.home.path("tickets/DEMO-12");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("backup-1.json")).unwrap(),
+        "old text [secret PROBE_TOKEN]",
+        "a document is masked"
+    );
+    assert!(
+        !folder.join("plan.md").exists(),
+        "the pipeline owns plan.md"
+    );
+    assert!(!demo.home.path("tickets/escape.txt").exists());
+    assert!(
+        done.detail
+            .contains("the document `plan.md` belongs to the person or the pipeline")
+            && done.detail.contains("is not a plain file name"),
+        "each dropped document is named: {done:?}"
+    );
+    let stored = executor::operation(&ledger, &done.id).unwrap().unwrap();
+    assert_eq!(
+        stored.documents,
+        ["backup-1.json"],
+        "the row keeps the names"
+    );
+
+    let no = executor::request(&ctx, &ledger, &op("x.no", json!({}))).unwrap();
+    assert_eq!(no.outcome, Outcome::Failed);
+    assert!(no.documents.is_empty());
+    assert!(
+        !folder.join("no.txt").exists(),
+        "a failed answer writes nothing"
+    );
+
+    // The documents of a confirmed reconcile answer go there too.
+    let later = executor::request(&ctx, &ledger, &op("x.later", json!({}))).unwrap();
+    assert_eq!(later.outcome, Outcome::Uncertain);
+    assert!(!folder.join("later.txt").exists());
+    let results = executor::reconcile(&ctx, &ledger).unwrap();
+    assert_eq!(results[0].outcome, Outcome::Confirmed, "{results:?}");
+    assert_eq!(results[0].documents, ["later.txt"]);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("later.txt")).unwrap(),
+        "found"
+    );
+}
+
+#[test]
+fn a_verb_with_once_runs_one_time_for_a_ticket_at_the_commit_of_its_first_request() {
+    let demo = Demo::new();
+    let calls = probe_adapter(&demo);
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let first = demo.commit(&[("notes.txt", "one\n")], "One");
+    let asked = executor::request(
+        &ctx,
+        &ledger,
+        &op("x.move", json!({"status": "in_progress"})),
+    )
+    .unwrap();
+    let command = format!("vision approve {KEY} x.move {first}");
+    assert_eq!(
+        asked.outcome,
+        Outcome::Waiting {
+            command: command.clone()
+        }
+    );
+    // A new commit asks for the same operation: it waits at the commit of the first request.
+    let second = demo.commit(&[("notes.txt", "two\n")], "Two");
+    let again = executor::request(
+        &ctx,
+        &ledger,
+        &op("x.move", json!({"status": "in_progress"})),
+    )
+    .unwrap();
+    assert_eq!(again.id, asked.id, "the key has no commit");
+    assert_eq!(again.outcome, Outcome::Waiting { command });
+    assert_eq!(again.head, first);
+    let found = executor::lookup(
+        &ctx,
+        &ledger,
+        &op("x.move", json!({"status": "in_progress"})),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        found.id, asked.id,
+        "the lookup at the newer commit finds it"
+    );
+    let needs = executor::needs(&ctx, &ledger).unwrap();
+    assert_eq!(needs.len(), 1);
+    assert_eq!(needs[0].id, format!("x.move {first}"));
+    // The approval of the first commit runs it, though the ticket is at a newer commit now.
+    let ran = executor::approve(&ctx, &ledger, &key(), "x.move", &first).unwrap();
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].outcome, Outcome::Confirmed, "{ran:?}");
+    let moves: Vec<Value> = probe_calls(&calls)
+        .into_iter()
+        .filter(|c| c["verb"] == "x.move")
+        .collect();
+    assert_eq!(moves.len(), 1);
+    assert_eq!(
+        moves[0]["head"], first,
+        "the call names the commit of the first request"
+    );
+    // A later commit and a later request: nothing runs again.
+    demo.commit(&[("notes.txt", "three\n")], "Three");
+    let later = executor::request(
+        &ctx,
+        &ledger,
+        &op("x.move", json!({"status": "in_progress"})),
+    )
+    .unwrap();
+    assert_eq!(later.id, asked.id);
+    assert_eq!(later.outcome, Outcome::Confirmed);
+    // Other arguments are another operation.
+    let other =
+        executor::request(&ctx, &ledger, &op("x.move", json!({"status": "in_review"}))).unwrap();
+    assert_ne!(other.id, asked.id);
+    assert!(matches!(other.outcome, Outcome::Waiting { .. }));
+    assert_ne!(
+        second, other.head,
+        "it waits at the commit of its own first request"
+    );
+    assert_eq!(
+        executor::once_key(KEY, "x.move", &json!({"a": 1})),
+        executor::once_key(KEY, "x.move", &json!({"a": 1}))
+    );
+    assert_ne!(
+        executor::once_key(KEY, "x.move", &json!({"a": 1})),
+        executor::idempotency_key(KEY, "x.move", "", &json!({"a": 1})),
+        "a once key never meets the key of a ticket with no commit"
+    );
+}
+
+#[test]
+fn a_reconcile_gets_the_external_id_and_the_start_and_each_call_gets_the_base_ref() {
+    let demo = Demo::new();
+    let calls = probe_adapter(&demo);
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    demo.commit(&[("notes.txt", "one\n")], "One");
+    let later = executor::request(&ctx, &ledger, &op("x.later", json!({}))).unwrap();
+    assert_eq!(later.outcome, Outcome::Uncertain);
+    assert_eq!(later.external_id.as_deref(), Some("ext-7"));
+    let started = later.started.clone().expect("the time of the first call");
+    // An operation that crashed before its answer has no external id.
+    let crashed = executor::request(&ctx, &ledger, &op("x.describe", json!({"n": 2}))).unwrap();
+    ledger
+        .conn()
+        .execute(
+            "UPDATE operations SET state = 'executing', external_id = NULL WHERE id = ?1",
+            [&crashed.id],
+        )
+        .unwrap();
+    executor::reconcile(&ctx, &ledger).unwrap();
+    executor::job(&ctx, &ledger, &job("look", json!({}))).unwrap();
+    executor::observe_queue(&ctx).unwrap();
+
+    let recorded = probe_calls(&calls);
+    let reconciles: Vec<&Value> = recorded.iter().filter(|c| c["reconcile"] == true).collect();
+    assert_eq!(reconciles.len(), 2, "{recorded:?}");
+    let of = |verb: &str| *reconciles.iter().find(|c| c["verb"] == verb).unwrap();
+    assert_eq!(of("x.later")["external_id"], "ext-7");
+    assert_eq!(of("x.later")["started"], started.as_str());
+    assert_eq!(of("x.describe")["external_id"], Value::Null);
+    assert!(of("x.describe")["started"].is_string());
+    let first_call = recorded
+        .iter()
+        .find(|c| c["verb"] == "x.later" && c.get("reconcile").is_none())
+        .unwrap();
+    assert!(
+        first_call.get("external_id").is_none() && first_call.get("started").is_none(),
+        "only a reconcile gets the facts of the first call: {first_call}"
+    );
+    // Each call object of act, job, and observe names the base of adapter.toml.
+    assert!(recorded.iter().any(|c| c["job"] == "look"));
+    assert!(recorded.iter().any(|c| c["what"] == "queue"));
+    for call in &recorded {
+        assert_eq!(call["base_ref"], "origin/main", "{call}");
+    }
+}
+
 #[test]
 fn a_script_that_fails_refuses_or_never_ends() {
     let demo = Demo::new();
@@ -875,6 +1176,79 @@ fn the_proof_is_red_on_the_base_and_green_at_the_last_commit() {
     assert_eq!(
         executor::job_passed(&ledger, KEY, "proof", &untested).unwrap(),
         Some(true)
+    );
+}
+
+#[test]
+fn the_proof_reads_the_plan_and_a_job_runs_again_when_its_arguments_change() {
+    let demo = Demo::new();
+    // A change of a test that also passes on the base proves nothing by itself.
+    let calc_test = std::fs::read_to_string(demo.clone.join("test_calc.py")).unwrap();
+    let head = demo.commit(
+        &[(
+            "test_calc.py",
+            &calc_test.replace(
+                "self.assertEqual(add(2, 3), 5)",
+                "self.assertEqual(add(2, 3), 5)\n        self.assertEqual(add(0, 0), 0)",
+            ),
+        )],
+        "Test add with zero",
+    );
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let run = |args: Value| executor::job(&ctx, &ledger, &job("proof", args)).unwrap();
+    let none = run(json!({"plan": "# Plan\n\n## Proof\n\ntest_calc.py covers it.\n"}));
+    assert!(!none.ok, "{none:?}");
+    assert!(none.detail.contains("also pass on the base"), "{none:?}");
+    // One test file declared green, after list and emphasis marks.
+    let file = json!({"plan": "# Plan\n\n- **Proof:** green test_calc.py\n"});
+    let one = run(file.clone());
+    assert!(one.ok, "{one:?}");
+    assert!(
+        one.detail.contains("declares each changed test green"),
+        "{one:?}"
+    );
+    // The whole proof declared green, in any case.
+    let whole = json!({"plan": "PROOF: Green - a test of an existing function\n"});
+    assert!(run(whole.clone()).ok);
+    assert!(
+        run(json!({"plan": ""}))
+            .detail
+            .contains("also pass on the base"),
+        "an empty plan declares nothing"
+    );
+
+    // The check row of the whole job names its arguments, so each set of arguments has its
+    // own result at the same commit.
+    let rows: Vec<String> = ledger
+        .checks_of(KEY, Some(&head))
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == "job")
+        .map(|c| c.command)
+        .collect();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[1], executor::job_command("proof", &file));
+    assert!(rows[1].starts_with("proof ") && rows[1].len() == "proof ".len() + 16);
+    assert_eq!(executor::job_command("proof", &json!({})), "proof");
+    assert_eq!(
+        executor::job_passed_with(&ledger, KEY, "proof", &head, &file).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        executor::job_passed_with(&ledger, KEY, "proof", &head, &json!({"plan": ""})).unwrap(),
+        Some(false)
+    );
+    let changed = json!({"plan": "# Plan\n\nNothing is declared.\n", "other": 1});
+    assert_eq!(
+        executor::job_passed_with(&ledger, KEY, "proof", &head, &changed).unwrap(),
+        None,
+        "new arguments at the same commit: the job runs again"
+    );
+    assert_eq!(
+        executor::job_passed(&ledger, KEY, "proof", &head).unwrap(),
+        Some(false),
+        "the newest run with any arguments"
     );
 }
 
