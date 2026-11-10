@@ -60,4 +60,4 @@ Rejected: style_only.
 - Put one priority word in the title of a finding that you keep: `critical`, `major`, `minor`, or `trivial`.
 - For a finding that you reject, write a line `Rejected:` with the reason code.
 - For a fix, write a line `Fixed in` with the commit.
-- If a section has no entry, write `None` in it.
+- If a section has no entry, write only `None` in it. Never write a finding that says that you found no defect.

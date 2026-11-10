@@ -198,15 +198,44 @@ fn top_item(line: &str) -> Option<&str> {
     None
 }
 
+/// True for an entry that says that the list is empty, such as `None`. A real session also
+/// wrote a finding with the title "F0: no defects found", so a title that starts with such
+/// words, after its id, is no finding.
 fn is_none_item(text: &str) -> bool {
     let lower = text
         .trim()
         .trim_matches(|c: char| c == '.' || c == '*' || c == '_')
         .to_lowercase();
-    matches!(
+    if matches!(
         lower.as_str(),
         "none" | "no findings" | "no open findings" | "nothing" | "-" | "n/a" | "no bugs"
-    )
+    ) {
+        return true;
+    }
+    // The text after an id such as `F0:` or `B1 -`.
+    let after_id = match lower.split_once([':', '-']) {
+        Some((id, rest)) if id.len() <= 4 && id.chars().all(|c| c.is_ascii_alphanumeric()) => {
+            rest.trim()
+        }
+        _ => lower.as_str(),
+    };
+    // The plural forms and the forms with "found" say that the list is empty. A singular form
+    // can start a real finding, such as "no issue key in the branch name".
+    [
+        "no defects",
+        "no findings",
+        "no issues",
+        "no bugs",
+        "no problems",
+        "no defect found",
+        "no issue found",
+        "no bug found",
+        "no problem found",
+        "nothing found",
+        "none found",
+    ]
+    .iter()
+    .any(|start| after_id.starts_with(start))
 }
 
 /// The findings of a review or QA document. The format follows the role files: a section whose
@@ -585,6 +614,19 @@ mod tests {
         assert_eq!(found[1].reason_code.as_deref(), Some("duplicate"));
         assert!(open_items(text).is_empty());
         assert!(findings("## Findings\n\n- None.\n").is_empty());
+        // A real session wrote "nothing found" as a finding with a reason code.
+        let nothing = "## Findings\n\n### F0: no defects found in correctness, security, or tests (none)\nRejected: not_reproducible\n\n## Open findings\n\nNone.\n";
+        assert!(findings(nothing).is_empty(), "{:?}", findings(nothing));
+        assert!(open_items(nothing).is_empty());
+        let real =
+            "## Findings\n\n### F1: no test covers a negative result (minor)\nFixed in 1a2b3c4.\n";
+        assert_eq!(
+            findings(real).len(),
+            1,
+            "a finding about a missing test is a finding"
+        );
+        let singular = "## Findings\n\n- No issue key in the name of the branch\n";
+        assert_eq!(findings(singular).len(), 1);
         assert!(findings("No sections here.\n- a list item\n").is_empty());
     }
 

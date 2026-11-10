@@ -48,11 +48,13 @@ const JUDGE_EXTRAS: [Extra; 2] = [
 ];
 
 /// The extra numbers of the Builder, for each ticket where it used the model: the review
-/// findings, the red CI rounds, and the QA bugs.
+/// findings that the reviewer kept, the red CI rounds, and the QA bugs. A finding that the
+/// reviewer rejected is no fault of the build, so it does not count.
 const BUILDER_EXTRAS: [Extra; 3] = [
     Extra {
         name: "review findings per ticket",
-        sql: "SELECT count(*) FROM findings WHERE coalesce(source, '') <> 'qa' AND ticket IN
+        sql: "SELECT count(*) FROM findings WHERE coalesce(source, '') <> 'qa'
+              AND coalesce(verdict, 'kept') = 'kept' AND ticket IN
               (SELECT DISTINCT ticket FROM turns WHERE agent = ?1 AND model = ?2)",
         per_ticket: true,
     },
