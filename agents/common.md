@@ -33,7 +33,8 @@ You cannot call the tracker or the forge. If you need a fact from one of them, e
 - End with one object that fits the schema.
 - If the step is done, set `kind` to `result`.
 - Put each document of the step in `documents`, with the exact name that the facts file expects.
-- List each principle that you applied in `applied`, with one line that tells how.
+- Put the full text of each document in its `content`. The runner writes the files. Never write a document to a file, and never give a pointer to a file in the place of the text.
+- List each principle of the principles file that you applied in `applied`. Give its id, such as `P-007`, and one line that tells how. If you applied none, give an empty list.
 - If you see a rule that helps later tickets, add it to `candidates`.
 - Write the summary for the person in two or three sentences. Say what you did and what is left.
 

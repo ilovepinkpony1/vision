@@ -457,8 +457,12 @@ fn stop_frees_the_clone_and_take_starts_the_ticket_again_in_the_clone_of_its_bra
         ]),
     );
     world.run(&["take", KEY]).expect_code(0);
+    // The stop must come after the fake session took the first list of its scenario. On a
+    // fast machine the turn row exists before the fake starts, and a stop at that moment
+    // leaves the first list, which sleeps, for the next run.
     world.tick_until("the running turn", LONG, |w| {
         w.ledger().running_turns_of_ticket(KEY).unwrap() > 0
+            && w.scenario_runs("scout", "refine") >= 1
     });
     let busy = world.run(&["retry", KEY]);
     busy.expect_code(1);

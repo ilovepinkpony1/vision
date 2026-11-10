@@ -429,6 +429,8 @@ pub enum JobFact {
 pub struct FactInputs {
     /// The documents of the result: name -> text.
     pub docs: BTreeMap<String, String>,
+    /// The documents of the result whose text only pointed to a file. They are not in `docs`.
+    pub pointers: BTreeSet<String>,
     /// The last commit of the clone, and the one at the start of the visit.
     pub head: Option<String>,
     pub base: Option<String>,
@@ -462,6 +464,9 @@ pub fn check_end_facts(expects: &[Expect], inputs: &FactInputs) -> Check {
     for expect in expects {
         let found = match expect {
             Expect::Doc(name) => match inputs.docs.get(name) {
+                None if inputs.pointers.contains(name) => Some(format!(
+                    "the document {name} of the result only points to a file. A turn cannot write a file for a document. Put the full text of {name} in `content` of `documents`"
+                )),
                 None => Some(format!("the result has no document {name}")),
                 Some(text) if text.trim().is_empty() => {
                     Some(format!("the document {name} of the result is empty"))
@@ -951,6 +956,12 @@ mod tests {
         docs.docs.clear();
         assert!(
             matches!(check_end_facts(&[Expect::Doc("pr.md".into())], &docs), Check::Failed { found, .. } if found.contains("no document pr.md"))
+        );
+        // A document that only pointed to a file gets its own text, so that the agent knows
+        // what to change.
+        docs.pointers.insert("pr.md".into());
+        assert!(
+            matches!(check_end_facts(&[Expect::Doc("pr.md".into())], &docs), Check::Failed { found, .. } if found.contains("only points to a file") && found.contains("full text of pr.md"))
         );
         let human = Expect::Human("approve-plan".into());
         assert!(matches!(

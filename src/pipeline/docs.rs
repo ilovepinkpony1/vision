@@ -5,7 +5,7 @@
 //! A real session writes looser text than a format asks for, so each reader makes one safe
 //! repair where one exists, and each refusal says exactly what was wrong.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -21,6 +21,26 @@ pub struct ResultDocs {
     pub docs: BTreeMap<String, String>,
     /// For the log: each document that was left out, with why.
     pub ignored: Vec<String>,
+    /// The expected documents whose text only points to a file (see [`is_pointer`]). They are
+    /// left out, and the end fact of each one says why.
+    pub pointers: BTreeSet<String>,
+}
+
+/// The longest text that can be a pointer to a file.
+const POINTER_MAX: usize = 800;
+
+/// True for a document that only points to a file, such as "See the file
+/// .vision/turns/T1/refine.md". A real session wrote such a text after it tried to write the
+/// file itself, which a turn cannot do. The text is short, and it names a path in `.vision/`
+/// that ends with the name of the document.
+pub fn is_pointer(name: &str, content: &str) -> bool {
+    if content.len() > POINTER_MAX {
+        return false;
+    }
+    content
+        .split(|c: char| c.is_whitespace() || matches!(c, '`' | '(' | ')' | '"' | '\'' | '<' | '>'))
+        .map(|word| word.trim_end_matches(['.', ',', ';', ':']))
+        .any(|word| word.contains(".vision/") && word.ends_with(name))
 }
 
 /// Reads `documents` of a result object. A name with a folder part, such as `.vision/plan.md`,
@@ -67,6 +87,11 @@ pub fn result_documents(result: &Value, expected: &[String]) -> ResultDocs {
         } else if content.len() > DOCUMENT_MAX {
             out.ignored
                 .push(format!("`{name}`: the document is larger than 4 MB"));
+        } else if is_pointer(&name, content) {
+            out.ignored.push(format!(
+                "`{name}`: the text only points to a file, so it is not the document"
+            ));
+            out.pointers.insert(name);
         } else {
             match out.docs.entry(name) {
                 std::collections::btree_map::Entry::Occupied(e) => out.ignored.push(format!(
@@ -561,6 +586,38 @@ mod tests {
         assert!(open_items(text).is_empty());
         assert!(findings("## Findings\n\n- None.\n").is_empty());
         assert!(findings("No sections here.\n- a list item\n").is_empty());
+    }
+
+    #[test]
+    fn a_text_that_only_points_to_a_file_is_not_a_document() {
+        // The text of a real session after its try to write the file failed.
+        let pointer = "# DEMO-12 refine\n\nSee the file .vision/turns/20261110T134819Z-DEMO-12-refine-1/refine.md. Summary: calc.py has only add.";
+        assert!(is_pointer("refine.md", pointer));
+        assert!(is_pointer("plan.md", "The plan is in `.vision/plan.md`."));
+        // A real document can name a different file of `.vision/`, and a long text is a document.
+        assert!(!is_pointer(
+            "plan.md",
+            "Read .vision/refine.md first. Then change calc.py."
+        ));
+        assert!(!is_pointer(
+            "refine.md",
+            "The research is done. calc.py has only add."
+        ));
+        let long = format!("{pointer}\n{}", "More research. ".repeat(80));
+        assert!(!is_pointer("refine.md", &long));
+
+        let result = json!({"documents": [
+            {"name": "refine.md", "content": pointer},
+            {"name": "description.md", "content": "Add subtract to calc.py."},
+        ]});
+        let docs = result_documents(&result, &["refine.md".into(), "description.md".into()]);
+        assert_eq!(docs.docs.keys().collect::<Vec<_>>(), ["description.md"]);
+        assert!(docs.pointers.contains("refine.md"));
+        assert!(
+            docs.ignored[0].contains("only points to a file"),
+            "{:?}",
+            docs.ignored
+        );
     }
 
     #[test]

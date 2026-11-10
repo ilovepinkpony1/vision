@@ -334,6 +334,7 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
     let head = head_of(&clone)?;
     let mut inputs = FactInputs {
         docs: found.docs.clone(),
+        pointers: found.pointers.clone(),
         head: Some(head.clone()),
         base: visit.base.clone(),
         dirty: dirty_lines(&clone)?,

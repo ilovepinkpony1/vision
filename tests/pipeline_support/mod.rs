@@ -229,6 +229,25 @@ impl World {
         std::fs::write(dir.join(name), json!({ "turns": turns }).to_string()).unwrap();
     }
 
+    /// How many runs of the fake session took a list of this scenario. The fake makes one
+    /// marker file for each run at its start.
+    pub fn scenario_runs(&self, agent: &str, step: &str) -> usize {
+        let dir = self.vision.join("claude/fake-scenarios");
+        let prefix = if step.is_empty() {
+            format!("{agent}.json.run")
+        } else {
+            format!("{agent}-{step}.json.run")
+        };
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Runs `bin/world` and gives its standard output.
     pub fn world_cmd(&self, args: &[&str]) -> String {
         let output = Command::new(demo_dir().join("bin/world"))
