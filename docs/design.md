@@ -55,7 +55,7 @@ $VISION_HOME/
     ARCHIVE.md
   adapters/<name>/       private adapters. They win over the adapters of the repo.
   tickets/<KEY>/
-    refine.md plan.md approved-plan.md answers.md pr.md review.md notes.md
+    refine.md plan.md plan.agent.md approved-plan.md answers.md pr.md review.md notes.md
     turns/<turn-id>/
       facts.json         the input of the turn
       stream.jsonl       each event line of the session
@@ -542,7 +542,7 @@ The Curator is a reader turn. It runs after each merged ticket and one time each
 
 - The new decisions, and the decisions with no reason.
 - Each proposal of the Judge that the person changed, and each correction.
-- The difference between the plan that the agent wrote and the plan that the person approved.
+- The difference between the plan that the agent wrote (`plan.agent.md`) and the plan that the person approved (`approved-plan.md`). The person can edit `plan.md` before the approval, so the runner keeps the first text of the agent in `plan.agent.md`.
 - The cards that the person marked as needless.
 - The review comments of people on the pull requests, and the verdict of each one.
 - Two active files that disagree.

@@ -4,8 +4,9 @@
 //! - The new decisions (the decision files that `main` gained), and those of them with no reason.
 //! - Each proposal of the Judge that the person changed, and each correction of the person.
 //! - The cards that the person marked as needless.
-//! - The difference between the plan of the agent (`plan.md`) and the plan that the person
-//!   approved (`approved-plan.md`) of each ticket folder.
+//! - The difference between the plan of the agent and the plan that the person approved
+//!   (`approved-plan.md`) of each ticket folder. The plan of the agent is `plan.agent.md`, or
+//!   `plan.md` in a folder with no such copy.
 //! - The rows of `review_rows`: the review comments of people with their verdicts.
 //! - Two active files that name the same area and kind, as a hint: the Curator decides whether
 //!   they disagree. A pair needs a principle, or two decisions with the same question, and at
@@ -134,9 +135,11 @@ pub struct NeedlessSignal {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PlanSignal {
     pub ticket: String,
-    /// The lines of `plan.md` that `approved-plan.md` does not have, as untrusted text.
+    /// The lines of the plan of the agent that `approved-plan.md` does not have, as untrusted
+    /// text.
     pub removed: Value,
-    /// The lines of `approved-plan.md` that `plan.md` does not have, as untrusted text.
+    /// The lines of `approved-plan.md` that the plan of the agent does not have, as untrusted
+    /// text.
     pub added: Value,
 }
 
@@ -603,6 +606,14 @@ pub fn plan_signal(ticket: &str, plan: &str, approved: &str) -> Option<PlanSigna
     })
 }
 
+/// The plan of the agent of one ticket folder. The pipeline keeps the first text of the agent
+/// in `plan.agent.md`, because the person can edit `plan.md` before the approval. In a folder
+/// with no such copy, `plan.md` is the text of the agent.
+fn agent_plan(dir: &Path) -> std::io::Result<String> {
+    std::fs::read_to_string(dir.join("plan.agent.md"))
+        .or_else(|_| std::fs::read_to_string(dir.join("plan.md")))
+}
+
 /// The plan differences of the ticket folders whose approved plan changed after `since`.
 fn plan_signals(tickets: &Path, since: Option<OffsetDateTime>) -> Result<Vec<PlanSignal>> {
     let entries = match std::fs::read_dir(tickets) {
@@ -621,10 +632,8 @@ fn plan_signals(tickets: &Path, since: Option<OffsetDateTime>) -> Result<Vec<Pla
         }
         let dir = entry.path();
         let approved_path = dir.join("approved-plan.md");
-        let (Ok(plan), Ok(approved)) = (
-            std::fs::read_to_string(dir.join("plan.md")),
-            std::fs::read_to_string(&approved_path),
-        ) else {
+        let (Ok(plan), Ok(approved)) = (agent_plan(&dir), std::fs::read_to_string(&approved_path))
+        else {
             continue;
         };
         if let Some(since) = since {
@@ -760,6 +769,38 @@ mod tests {
         let signal = plan_signal("DEMO-12", "a\nb\nc\n", "a\nc\nd\n").unwrap();
         assert_eq!(signal.removed, json!({"untrusted": "b"}));
         assert_eq!(signal.added, json!({"untrusted": "d"}));
+    }
+
+    #[test]
+    fn the_plan_of_the_agent_is_its_first_text_and_not_the_text_that_the_person_edited() {
+        let home = tempfile::tempdir().unwrap();
+        let tickets = home.path().join("tickets");
+        // The person edited `plan.md` and approved it, so both files have the same text.
+        let edited = tickets.join("DEMO-12");
+        std::fs::create_dir_all(&edited).unwrap();
+        std::fs::write(edited.join("plan.agent.md"), "Step 1.\nStep 2.\n").unwrap();
+        std::fs::write(edited.join("plan.md"), "Step 1.\nStep 3.\n").unwrap();
+        std::fs::write(edited.join("approved-plan.md"), "Step 1.\nStep 3.\n").unwrap();
+        // A folder with no copy of the first text: `plan.md` is the text of the agent.
+        let plain = tickets.join("DEMO-13");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("plan.md"), "Step 1.\nStep 2.\n").unwrap();
+        std::fs::write(plain.join("approved-plan.md"), "Step 1.\n").unwrap();
+        // The person approved the plan with no change.
+        let same = tickets.join("DEMO-14");
+        std::fs::create_dir_all(&same).unwrap();
+        std::fs::write(same.join("plan.agent.md"), "Step 1.\n").unwrap();
+        std::fs::write(same.join("plan.md"), "Step 1.\n").unwrap();
+        std::fs::write(same.join("approved-plan.md"), "Step 1.\n").unwrap();
+
+        let signals = plan_signals(&tickets, None).unwrap();
+        assert_eq!(signals.len(), 2, "{signals:#?}");
+        assert_eq!(signals[0].ticket, "DEMO-12");
+        assert_eq!(signals[0].removed, json!({"untrusted": "Step 2."}));
+        assert_eq!(signals[0].added, json!({"untrusted": "Step 3."}));
+        assert_eq!(signals[1].ticket, "DEMO-13");
+        assert_eq!(signals[1].removed, json!({"untrusted": "Step 2."}));
+        assert_eq!(signals[1].added, json!({"untrusted": ""}));
     }
 
     #[test]
