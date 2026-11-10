@@ -61,6 +61,9 @@ $VISION_HOME/
       stream.jsonl       each event line of the session
       turn.json          the status that the supervisor writes
       settings.json      the Claude Code settings of the session, with its sandbox
+      launch.json        the request and the resolved start line of the turn
+      role.md            the system prompt file of the session
+      supervisor.lock supervisor.log stderr.log
       result.json        the result object of the turn
       inbox/             messages that wait for the session
       inbox/sent/        messages that the session got
@@ -250,13 +253,13 @@ The first message of a turn is one line: `Turn <id>. Read .vision/turns/<id>/fac
 
 ```json
 {
-  "turn": "20261116T143000Z-build-1", "agent": "builder", "step": "build", "kind": "worker",
+  "turn": "20261116T143000Z-DEMO-12-build-1", "agent": "builder", "step": "build", "kind": "worker",
   "ticket": {"key": "DEMO-12", "title": {"untrusted": "Export the report"},
-             "issue": ".vision/turns/20261116T143000Z-build-1/issue.json"},
+             "issue": ".vision/turns/20261116T143000Z-DEMO-12-build-1/issue.json"},
   "branch": "vision/DEMO-12", "base": "9f3e21c",
   "documents": {"plan": ".vision/approved-plan.md", "refine": ".vision/refine.md",
                 "answers": ".vision/answers.md"},
-  "principles": ".vision/turns/20261116T143000Z-build-1/principles.md",
+  "principles": ".vision/turns/20261116T143000Z-DEMO-12-build-1/principles.md",
   "skills": {},
   "expects": ["commits", "doc:pr.md"],
   "message": null
@@ -294,7 +297,9 @@ and each name in claude.env_pass
 
 The supervisor drops each other name, so that a token of the executor never reaches a session.
 
-The runner renders `settings.json` for each turn. For a worker and a tester, it turns the sandbox on. It denies reads of the home folder, and it allows the clone, the folders of `sandbox.allow_read`, and the domains and sockets of `[sandbox]`. A reader gets no Bash tool, so its file needs no sandbox.
+The runner renders `settings.json` for each turn. For a worker and a tester, it turns the sandbox on. It denies reads of the home folder, and it allows the clone, the folders of `sandbox.allow_read`, and the domains and sockets of `[sandbox]`. A reader gets no Bash tool, so its file needs no sandbox. Its file denies the Bash tool and the web tools.
+
+Claude Code adds the tool `StructuredOutput` by itself, because each turn has a result schema. The contract of 7.4 expects that tool next to the tools of the kind. A test with a real session showed this.
 
 ### 7.4 The supervisor
 
@@ -309,7 +314,9 @@ The runner renders `settings.json` for each turn. For a worker and a tester, it 
 7. At the time limit of the kind, kill the process group and end with the reason `timeout`.
 8. Write `result.json` and the final `turn.json`: the state `ended`, the exit code, and the reason.
 
-The reasons are `result`, `error`, `timeout`, `contract`, `killed`, and `crash`. A later tick reads `turn.json` and the stream. If `turn.json` says `running` and its pid is dead, the tick sets the reason `crash`.
+The reasons are `result`, `error`, `timeout`, `contract`, `killed`, and `crash`. A later tick reads `turn.json` and the stream. A supervisor holds a lock on `supervisor.lock` while it lives. If `turn.json` says `running` and no process holds that lock, the tick sets the reason `crash`. The tick does not trust a process id, because a different process can get the same id later.
+
+A row of `turns` has one of four statuses: `running`, `done`, `retried`, and `failed`. `[time]` gives the time limit of a kind in minutes. A caller of the launch API can give a limit in seconds, as the Judge does with `caps.judge_minutes`.
 
 One input line has this form:
 
@@ -373,7 +380,9 @@ Claude Code tests the output of a turn against a JSON schema. `agents/turn.schem
 - `requests`: the turn needs more facts. The executor serves a closed list of read verbs, and a new turn resumes the session.
 - `documents`: the files that the step makes, such as `plan.md`. The runner writes each one to the ticket folder. A step accepts only the names that it expects.
 
-A turn that ends with no valid result object gets one resume with the message `continue`. A second failure sets the flag "needs you".
+A turn that ends with no valid result object gets one resume with the message `continue`. The same rule applies to the reasons `error` and `crash`. It does not apply to `timeout`, `contract`, and `killed`. A second failure sets the flag `needs-you`.
+
+The first input line of a turn is always the line of 7.2. A message for a resumed turn, such as the answers or `continue`, goes into the key `message` of its facts file.
 
 ## 8. Questions and the Judge
 
@@ -586,6 +595,14 @@ The defaults, with the reason for each one:
 - The part of the turns whose end fact held at the first try.
 - For the Judge: the corrections of the person, and the proposals that the person changed.
 - For the Builder: the review findings, the red CI rounds, and the QA bugs for each ticket.
+
+These numbers come from fixed places of the ledger:
+
+- `turns.end_fact` is `held` or `failed:<fact>`. The pipeline writes it.
+- A correction is a row of `human` with the kind `correct` and the question id as its object.
+- A changed proposal is a question with the outcome `propose` and `took_proposal` set to 0.
+- A QA bug is a row of `findings` with the source `qa`.
+- A red CI round is a row of `checks` with the kind `ci` and the result `red`.
 
 The recommendation is the cheapest model whose quality numbers are not worse than the best model by more than 5 points. With fewer than 10 turns for a second model, the command says that the default stays. `eval` gives that evidence on request: it replays past work with each model and prints the same table. The Judge replay uses the questions that the person answered.
 

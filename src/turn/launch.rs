@@ -464,7 +464,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
                 .time_limit_secs
                 .unwrap_or_else(|| config.time.for_kind(request.kind).saturating_mul(60)),
             contract: Contract {
-                tools,
+                tools: settings::contract_tools(request.kind),
                 permission_mode: mode.into(),
                 mcp_servers: Vec::new(),
             },

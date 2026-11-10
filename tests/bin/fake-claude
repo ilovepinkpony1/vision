@@ -167,6 +167,9 @@ def main():
         return 0
     session = opts.get("--resume") or opts.get("--session-id") or "fake-session"
     tools = [t for t in opts.get("--tools", "").split(",") if t]
+    if opts.get("--json-schema"):
+        # The real Claude Code adds this tool by itself when a turn has a result schema.
+        tools.append("StructuredOutput")
     inp = Input()
     first = inp.line(timeout=10)
     if not first:

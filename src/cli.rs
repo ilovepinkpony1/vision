@@ -222,7 +222,7 @@ pub enum TurnCommand {
     /// Supervise one turn. The tick starts it as a detached process
     #[command(hide = true)]
     TurnRun {
-        /// The turn id, such as 20261116T143000Z-build-1
+        /// The turn id, such as 20261116T143000Z-DEMO-12-build-1
         turn: TurnId,
     },
 
@@ -661,7 +661,7 @@ mod tests {
             &["report", "--week"],
             &["install", "--print"],
             &["uninstall"],
-            &["turn-run", "20261116T143000Z-build-1"],
+            &["turn-run", "20261116T143000Z-DEMO-12-build-1"],
         ];
         for line in lines {
             if let Err(e) = parse(line) {

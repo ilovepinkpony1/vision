@@ -33,8 +33,12 @@ impl Ledger {
 
     fn latest_reading(&self, column: &str) -> Result<Option<LimitReading>> {
         // `column` is one of two fixed names, never input.
+        // A reading that is past its reset time tells nothing about the window of today,
+        // so the view ignores it, as the limit gate of a new turn does.
         let sql = format!(
             "SELECT {column}, coalesce(ended, started, ''), id FROM turns WHERE {column} IS NOT NULL
+             AND ({column}_resets IS NULL
+                  OR {column}_resets > strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
              ORDER BY coalesce(ended, started) DESC LIMIT 1"
         );
         let reading = self
@@ -70,5 +74,22 @@ mod tests {
         assert_eq!(limits.five_hour.unwrap().turn, "t2");
         let seven = limits.seven_day.unwrap();
         assert_eq!((seven.part, seven.turn.as_str()), (0.5, "t1"));
+    }
+
+    #[test]
+    fn a_reading_that_is_past_its_reset_time_is_ignored() {
+        let ledger = Ledger::open_in_memory().unwrap();
+        ledger
+            .conn()
+            .execute_batch(
+                "INSERT INTO turns (id, ended, seven_day, seven_day_resets)
+                     VALUES ('old', '2020-01-01T10:00:00Z', 0.9, '2020-01-02T00:00:00Z');
+                 INSERT INTO turns (id, ended, five_hour, five_hour_resets)
+                     VALUES ('new', '2020-01-01T11:00:00Z', 0.4, '2999-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        let limits = ledger.latest_limits().unwrap();
+        assert_eq!(limits.seven_day, None);
+        assert_eq!(limits.five_hour.unwrap().turn, "new");
     }
 }

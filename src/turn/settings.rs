@@ -17,6 +17,9 @@ use crate::util::fs::{atomic_write, read_optional};
 pub const READER_TOOLS: [&str; 4] = ["Read", "Grep", "Glob", "Task"];
 /// The tools that a worker and a tester have in addition to the reader tools.
 pub const WRITE_TOOLS: [&str; 3] = ["Edit", "Write", "Bash"];
+/// The tool that Claude Code adds by itself when a turn has a result schema (`--json-schema`).
+/// The `init` event lists it next to the tools of `--tools`. A real session showed this.
+pub const SCHEMA_TOOL: &str = "StructuredOutput";
 
 /// The names of the environment that a session gets (section 7.3), next to `claude.env_pass`.
 /// `LC_*` matches each name that starts with `LC_`.
@@ -39,6 +42,14 @@ pub fn tools(kind: TurnKind) -> Vec<String> {
     if kind != TurnKind::Reader {
         tools.extend(WRITE_TOOLS.iter().map(|t| t.to_string()));
     }
+    tools
+}
+
+/// The tools that the `init` event of a turn must list: the tools of the kind, and the tool
+/// of the result schema, because each turn has a schema.
+pub fn contract_tools(kind: TurnKind) -> Vec<String> {
+    let mut tools = tools(kind);
+    tools.push(SCHEMA_TOOL.to_string());
     tools
 }
 
