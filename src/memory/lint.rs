@@ -2,8 +2,9 @@
 //!
 //! The rules: the required keys and their values, the id equals the file name, the required
 //! sections exist, each id in `evidence`, `sources`, and `supersedes` exists, a principle with
-//! the status `candidate` or `active` names only decisions of a person as evidence, and no
-//! decision of the Judge is evidence for a principle.
+//! the status `candidate` or `active` names only decisions of a person as evidence (an imported
+//! decision counts, because an import holds past answers of the person), and no decision of
+//! the Judge is evidence for a principle.
 //!
 //! [`lint`] is pure: it reads a snapshot of the files (path -> text), so that the store can lint
 //! the memory as it would be after a change, before it writes anything.
@@ -143,12 +144,13 @@ fn check_refs(path: &str, doc: &Doc, known: &BTreeMap<MemoryId, Known>) -> Vec<P
                     key,
                     format!("`evidence` names {id}, an answer of the Judge. A decision of the Judge is never evidence for a principle"),
                 ),
-                Some(Writer::Person(_)) => {}
+                // An import holds past answers of the person, so it counts as the person.
+                Some(Writer::Person(_)) | Some(Writer::Import) => {}
                 other if matches!(status, Some(Status::Candidate | Status::Active)) => {
                     let writer = other.as_ref().map_or("no valid writer".to_string(), |w| format!("the writer {w}"));
                     problem(
                         key,
-                        format!("`evidence` names {id}, which has {writer}. A candidate or active principle needs decisions of a person as evidence"),
+                        format!("`evidence` names {id}, which has {writer}. A candidate or active principle needs decisions of a person, or imported answers of the person, as evidence"),
                     );
                 }
                 _ => {}
@@ -239,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn evidence_must_come_from_a_person() {
+    fn evidence_must_come_from_a_person_or_an_import() {
         let files = snapshot(&[
             ("decisions/D-0001.md", decision("D-0001", "judge")),
             ("decisions/D-0002.md", decision("D-0002", "import")),
@@ -260,28 +262,23 @@ mod tests {
             ("principles/P-004.md", principle("P-004", "active", "P-001")),
         ]);
         let got = reasons(&lint(&files, None));
-        assert_eq!(got.len(), 4, "{got:#?}");
+        // P-002 is fine: an imported decision is a past answer of the person.
+        assert_eq!(got.len(), 3, "{got:#?}");
         assert!(
             got[0].starts_with(
                 "principles/P-001.md:8: `evidence` names D-0001, an answer of the Judge"
             ),
             "{got:#?}"
         );
+        // A retired principle also never keeps an answer of the Judge as evidence.
         assert!(
             got[1].starts_with(
-                "principles/P-002.md:8: `evidence` names D-0002, which has the writer import"
-            ),
-            "{got:#?}"
-        );
-        // A retired principle may keep an import as evidence, but never an answer of the Judge.
-        assert!(
-            got[2].starts_with(
                 "principles/P-003.md:8: `evidence` names D-0001, an answer of the Judge"
             ),
             "{got:#?}"
         );
         assert!(
-            got[3].starts_with(
+            got[2].starts_with(
                 "principles/P-004.md:8: `evidence` names `P-001`, which is not a decision id"
             ),
             "{got:#?}"

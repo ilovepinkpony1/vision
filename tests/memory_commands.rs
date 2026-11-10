@@ -337,7 +337,7 @@ fn lint_prints_one_line_for_each_problem_and_exits_with_1() {
     fs::write(memory.join("decisions/notes.md"), "free notes\n").unwrap();
     fs::write(
         memory.join("principles/P-001.md"),
-        "---\nid: P-002\nagent: judge\nkind: product\nstatus: active\nby: user\nevidence: [D-0001, D-0042]\n---\n## Rule\nR\n",
+        "---\nid: P-002\nagent: judge\nkind: product\nstatus: active\nby: user\nevidence: [D-0001, D-0005, D-0042]\n---\n## Rule\nR\n",
     )
     .unwrap();
     fs::write(
@@ -357,7 +357,7 @@ fn lint_prints_one_line_for_each_problem_and_exits_with_1() {
             "decisions/D-0005.md:1: the required section `## Answer` is missing",
             "decisions/notes.md:1: the file name is not an id such as D-0142.md. Rename it, or move it out of the memory",
             "principles/P-001.md:2: `id` is P-002, but the file name says P-001. Rename the file or fix the id",
-            "principles/P-001.md:7: `evidence` names D-0001, which has the writer import. A candidate or active principle needs decisions of a person as evidence",
+            "principles/P-001.md:7: `evidence` names D-0005, an answer of the Judge. A decision of the Judge is never evidence for a principle",
             "principles/P-001.md:7: `evidence` names D-0042, but the memory has no file decisions/D-0042.md",
         ],
         "{run:?}"

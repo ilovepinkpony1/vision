@@ -394,7 +394,7 @@ An agent asks only what the code, the files, the memory, and a command cannot an
 
 ### 8.2 The Judge
 
-The Judge is a reader turn. It gets the cards, the ticket folder, and the memory. For each card it gives one outcome:
+The Judge is a reader turn. It gets the cards, the ticket folder, and the memory. Its facts file also names `person`, the writer name of the person from the configuration key `user`. For each card it gives one outcome:
 
 | Outcome | Basis | What the person sees |
 | --- | --- | --- |
@@ -508,7 +508,7 @@ The finance team imports CSV into their tool, and no export so far needed formul
 A customer asks for a formatted file.
 ```
 
-The front matter is a small subset of YAML: one key on each line, with a string, a number, `null`, a flat list, or a flat map. The parser keeps unknown keys.
+The front matter is a small subset of YAML: one key on each line, with a string, a number, `null`, a flat list, or a flat map. The parser keeps unknown keys. `kind` can be `null`. A retired file gets the key `retired_at` and a section `## Retired` with the reason. An imported decision keeps a stable hash in `import_hash`, so that a second import adds nothing.
 
 ### 9.2 Commands
 
@@ -534,7 +534,7 @@ The person can also edit the files with any tool. The next tick reads the change
 3. Used. Each turn records the principles that it got. Each result lists the principles that it applied, and how.
 4. Retired. The person retires it, or the Curator proposes that after a correction.
 
-Only people teach the memory. A decision with the writer `judge` never counts as evidence for a principle. It never outranks a decision of the person.
+Only people teach the memory. A decision with the writer `judge` never counts as evidence for a principle. It never outranks a decision of the person. An imported decision is a past answer of the person, so it counts as evidence.
 
 ### 9.4 The Curator
 
@@ -551,7 +551,7 @@ Its output is a list of changes: a new candidate, an edit, a merge of two files,
 
 - `add`: `path` is `principles/NEW-<n>.md`, and `content` is the full file. The runner gives the final id.
 - `edit`: `path` names an existing file, and `content` is its full new text.
-- `merge`: `path` and `content` give the file that stays, and `removes` lists the paths that it replaces.
+- `merge`: `path` and `content` give the file that stays, and `removes` lists the paths that it replaces. The runner retires each replaced file. It deletes no file, because a later file can name it as a source.
 - `retire`: `target` is the id of the file. The runner sets its status to `retired`.
 - `question`: `question` is the text for the person.
 
