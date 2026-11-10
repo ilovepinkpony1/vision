@@ -270,7 +270,11 @@ impl TurnCommand {
 pub enum QuestionsCommand {
     /// Show the cards and the approvals that wait, one at a time
     #[command(display_order = 22)]
-    Needs,
+    Needs {
+        /// Print the list as JSON instead of the interactive view
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Answer a card, or mark it as needless
     #[command(display_order = 23)]
@@ -290,7 +294,7 @@ pub enum QuestionsCommand {
     /// Replace an answer of the Judge with the right answer
     #[command(display_order = 25)]
     Correct {
-        /// The id of the question
+        /// The id of the card, or of the decision file of the Judge
         id: String,
         /// The right answer
         answer: String,
@@ -304,7 +308,7 @@ impl QuestionsCommand {
     /// The command as the person types it, such as `answers`.
     pub fn name(&self) -> &'static str {
         match self {
-            QuestionsCommand::Needs => "needs",
+            QuestionsCommand::Needs { .. } => "needs",
             QuestionsCommand::Answer(_) => "answer",
             QuestionsCommand::Answers { .. } => "answers",
             QuestionsCommand::Correct { .. } => "correct",
@@ -617,6 +621,7 @@ mod tests {
             &["stop", "DEMO-12"],
             &["retry", "DEMO-12"],
             &["needs"],
+            &["needs", "--json"],
             &[
                 "answer", "Q-1", "--choice", "2", "--why", "W", "--when", "C",
             ],

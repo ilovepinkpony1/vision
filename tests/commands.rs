@@ -10,8 +10,6 @@ fn a_command_that_is_not_built_exits_with_code_3() {
         (&["take", "DEMO-12"], "take"),
         (&["approve-plan", "DEMO-12", "ab12"], "approve-plan"),
         (&["approve", "DEMO-12", "git.push", "9f3e21c"], "approve"),
-        (&["needs"], "needs"),
-        (&["answer", "Q-1", "--choice", "1"], "answer"),
         (&["curate"], "curate"),
         (
             &["model", "eval", "judge", "--models", "opus"],

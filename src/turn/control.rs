@@ -222,7 +222,16 @@ pub fn tell(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, text: &str, source: &st
         bail!("the message is empty. Give the text to send, such as vision tell DEMO-12 \"use the old export\"");
     }
     let at = time::now_rfc3339();
-    match running_turn_of(ctx, ledger, key)? {
+    // A message of the person is for the work agent, never for the Judge or the Curator.
+    let work = running_turns(ctx, ledger)?.into_iter().rfind(|t| {
+        t.ticket == key.as_str()
+            && !t
+                .agent
+                .as_deref()
+                .and_then(crate::models::agent)
+                .is_some_and(|spec| spec.alone)
+    });
+    match work {
         Some(running) => {
             let id = running.turn_id()?;
             let message_id = ledger.add_message(Some(&running.id), &at, source, text)?;

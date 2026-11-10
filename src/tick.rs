@@ -26,7 +26,7 @@ use crate::snapshot::{collect_needs, LimitsView, Outcome, Snapshot, TickReport, 
 use crate::turn::TurnKind;
 use crate::util::fs::atomic_write;
 use crate::util::time;
-use crate::{executor, pipeline, turn};
+use crate::{executor, pipeline, questions, turn};
 
 /// What the steps 3 to 7 of one tick share.
 #[derive(Debug)]
@@ -194,6 +194,7 @@ fn run_steps(pass: &mut Pass, done: &mut Vec<String>) -> Result<()> {
     executor::reconcile_operations(pass).context("step 3, reconcile the operations")?;
     done.push("reconcile".into());
     turn::collect_ended_turns(pass).context("step 4, collect the ended turns")?;
+    questions::tick(pass).context("step 4, the cards and the Judge")?;
     done.push("collect".into());
     pipeline::test_end_facts(pass).context("step 5, test the end facts")?;
     done.push("end-facts".into());

@@ -5,7 +5,9 @@ It reads the arguments of the start line (section 7.3 of docs/design.md), reads 
 lines from standard input, and plays a scenario. The scenario file is named in the facts file
 of the turn: the first input line says "Read .vision/turns/<id>/facts.json", and the fake
 reads `fake.scenario` there. So the product code knows nothing of scenarios, and no variable
-of the environment is needed.
+of the environment is needed. A turn whose facts name no scenario, such as a Judge turn that
+the tick starts, plays `fake-scenarios/<agent>.json` of CLAUDE_CONFIG_DIR when that file
+exists, with the agent of its facts.
 
 A scenario file is JSON: {"turns": [[step, ...], [step, ...]]}. The first run takes the first
 list, the second run the second list, and so on; the last list repeats. Each step is an object
@@ -25,6 +27,7 @@ with "do":
   spawn_child  start `sleep 1000` in the same process group, and report its pid.
   env          report the names of the environment, and the values of the names in "show".
   args         report the arguments and the working folder.
+  facts        report the facts file of the turn, such as its `message`.
   partial      write one event in two parts with a pause between, to test partial lines.
 
 After the last step it acts as Claude Code does: it echoes each new input line, answers it, and
@@ -111,6 +114,17 @@ def assistant_text(text):
     emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 
 
+def read_facts(first_text):
+    match = re.search(r"Read (\S+facts\.json)", first_text)
+    if not match:
+        return None
+    try:
+        with open(match.group(1)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 def load_steps(first_text):
     default = [
         {"do": "init"},
@@ -127,7 +141,12 @@ def load_steps(first_text):
         return default
     path = (facts.get("fake") or {}).get("scenario")
     if not path:
-        return default
+        agent = facts.get("agent") or ""
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or ""
+        candidate = os.path.join(config, "fake-scenarios", f"{agent}.json")
+        if not (agent and config and os.path.isfile(candidate)):
+            return default
+        path = candidate
     with open(path) as f:
         turns = json.load(f)["turns"]
     n = 0
@@ -232,6 +251,8 @@ def main():
                   "values": {k: os.environ.get(k) for k in step.get("show", [])}})
         elif kind == "args":
             emit({"type": "system", "subtype": "fake_args", "argv": sys.argv[1:], "cwd": os.getcwd()})
+        elif kind == "facts":
+            emit({"type": "system", "subtype": "fake_facts", "facts": read_facts(first_text)})
         elif kind == "partial":
             text = json.dumps({"type": "assistant", "message": {"content": [
                 {"type": "text", "text": step.get("text", "a line in two parts")}]}})

@@ -511,7 +511,11 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         let _ = fs::remove_dir_all(&turn.dir);
         return Err(e.context(format!("could not write the row of the turn {id}")));
     }
-    deliver_waiting(ctx, ledger, &request.ticket, &id, &turn)?;
+    // A waiting message of the person is for the work agent of the ticket, so the Judge and
+    // the Curator leave it for the next work turn.
+    if !models::agent(&request.agent).is_some_and(|spec| spec.alone) {
+        deliver_waiting(ctx, ledger, &request.ticket, &id, &turn)?;
+    }
     ledger.add_event(
         &Event::now("tick", "turn-started")
             .ticket(request.ticket.as_str())
