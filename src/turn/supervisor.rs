@@ -129,7 +129,7 @@ fn supervise(
         .args(&plan.args)
         .current_dir(&plan.workdir)
         .env_clear()
-        .envs(settings::session_env(std::env::vars_os(), &plan.env_pass))
+        .envs(settings::session_env_of_process(&plan.env_pass))
         .envs(&plan.env_set)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -52,6 +52,17 @@ mod tests {
         assert!(first.is_some());
         assert!(TickLock::try_acquire(&path).unwrap().is_none());
         drop(first);
-        assert!(TickLock::try_acquire(&path).unwrap().is_some());
+        // A different test of this process can start a child at this moment. Between its fork
+        // and its exec, that child still holds a copy of the lock file, so the lock can stay
+        // held for a very short time after the drop. Allow for that.
+        let mut second = None;
+        for _ in 0..100 {
+            second = TickLock::try_acquire(&path).unwrap();
+            if second.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(second.is_some());
     }
 }

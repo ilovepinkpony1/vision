@@ -388,7 +388,7 @@ The first input line of a turn is always the line of 7.2. A message for a resume
 
 ### 8.1 The card
 
-An agent never asks in the text of its answer. It ends its turn with cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches. `area` names the part of the product in one to three nouns, and the decision file keeps it.
+An agent never asks in the text of its answer. It ends its turn with cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches. `area` names the part of the product in one to three nouns, and the decision file keeps it. `recommended` is the index of a choice, and the first choice has the index 0.
 
 An agent asks only what the code, the files, the memory, and a command cannot answer.
 
@@ -558,7 +558,7 @@ Its output is a list of changes: a new candidate, an edit, a merge of two files,
 `evidence` lists the decision ids that support a change. The runner writes the changes to a branch `proposal/<date>-<n>` of the memory repo. Three rules protect the memory:
 
 - No line is lost. Each line that a proposal removes or rewrites goes to `ARCHIVE.md` word for word, with the commit and the reason. The runner tests this in code, and it rejects a proposal that loses a line.
-- A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree.
+- A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree. The replay hides the decision file of each answer that it replays, because the Judge has to find that answer again without it.
 - A person decides. Only a change that the person accepts reaches the main branch.
 
 ## 10. Models

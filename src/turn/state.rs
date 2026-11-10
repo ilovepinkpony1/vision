@@ -282,7 +282,18 @@ mod tests {
         let held = take_lock(dir.path()).unwrap().unwrap();
         assert!(supervisor_alive(dir.path()));
         drop(held);
-        assert!(!supervisor_alive(dir.path()));
+        // A different test of this process can start a child at this moment. Between its fork
+        // and its exec, that child still holds a copy of the lock file, so the lock can look
+        // held for a very short time after the drop. Allow for that.
+        let mut alive = true;
+        for _ in 0..100 {
+            alive = supervisor_alive(dir.path());
+            if !alive {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!alive);
     }
 
     #[test]

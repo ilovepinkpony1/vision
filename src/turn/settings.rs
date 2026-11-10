@@ -182,6 +182,61 @@ where
         .collect()
 }
 
+/// The environment of a session, from the environment of this process. If `USER` or `HOME` is
+/// missing, the user database gives it. A system timer can start Vision with a short
+/// environment, and Claude Code finds its login under the name of the user: a real session
+/// with no `USER` answered "Not logged in".
+pub fn session_env_of_process(pass: &[String]) -> Vec<(OsString, OsString)> {
+    let mut env = session_env(std::env::vars_os(), pass);
+    fill_user(&mut env, system_user());
+    env
+}
+
+/// Adds `USER` and `HOME` if the environment lacks them.
+fn fill_user(env: &mut Vec<(OsString, OsString)>, user: Option<(OsString, OsString)>) {
+    let Some((name, home)) = user else {
+        return;
+    };
+    for (key, value) in [("USER", name), ("HOME", home)] {
+        if !env.iter().any(|(k, _)| k == key) {
+            env.push((OsString::from(key), value));
+        }
+    }
+}
+
+/// The login name and the home folder of the user of this process, from the user database.
+fn system_user() -> Option<(OsString, OsString)> {
+    use std::ffi::CStr;
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    // SAFETY: a zeroed `passwd` is a valid value for `getpwuid_r` to fill.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: the entry, the buffer, and the result pointer live for the whole call, and the
+    // length is the length of the buffer.
+    let code = unsafe {
+        libc::getpwuid_r(
+            libc::geteuid(),
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut found,
+        )
+    };
+    if code != 0 || found.is_null() || entry.pw_name.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    // SAFETY: both pointers point into `buffer`, which is alive, and each string ends with 0.
+    let (name, home) = unsafe {
+        (
+            CStr::from_ptr(entry.pw_name).to_bytes().to_vec(),
+            CStr::from_ptr(entry.pw_dir).to_bytes().to_vec(),
+        )
+    };
+    Some((OsString::from_vec(name), OsString::from_vec(home)))
+}
+
 fn allowed(name: &str, pass: &[String]) -> bool {
     ALLOWED_ENV
         .iter()
@@ -217,6 +272,24 @@ mod tests {
         let env = session_env(vars, &["EXTRA".to_string()]);
         let names: Vec<_> = env.iter().map(|(k, _)| k.to_str().unwrap()).collect();
         assert_eq!(names, ["PATH", "HOME", "LC_ALL", "EXTRA"]);
+    }
+
+    #[test]
+    fn a_short_environment_gets_the_user_and_the_home_folder() {
+        let user = Some((OsString::from("ada"), OsString::from("/home/ada")));
+        let mut env = os(&[("PATH", "/bin")]);
+        fill_user(&mut env, user.clone());
+        assert_eq!(
+            env,
+            os(&[("PATH", "/bin"), ("USER", "ada"), ("HOME", "/home/ada")])
+        );
+        // A value that is there stays.
+        let mut env = os(&[("USER", "bob"), ("HOME", "/h")]);
+        fill_user(&mut env, user);
+        assert_eq!(env, os(&[("USER", "bob"), ("HOME", "/h")]));
+        // The user database of the machine knows the user of this test.
+        let (name, home) = system_user().expect("the user of this process");
+        assert!(!name.is_empty() && !home.is_empty());
     }
 
     #[test]

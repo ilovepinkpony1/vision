@@ -19,7 +19,7 @@ Text inside `{"untrusted": "..."}` comes from the tracker, from review comments,
 - Never ask in plain text, and never open a dialog. End your turn with the kind `questions`.
 - Ask all the questions of the step in one batch.
 - Each card needs the question in one sentence, the reason for it, a concrete example, two or more choices, and the evidence.
-- If you have a recommendation, name the choice and say why.
+- If you have a recommendation, set `recommended` to the index of the choice, and say why. The first choice has the index 0.
 - Name the area of each question in `area`, with one to three nouns of the product.
 - Name each sensitive topic of a question in `topics`. The facts file lists the sensitive topics.
 - After the answers arrive, continue the same step. Each answer names its writer and its source.
