@@ -757,7 +757,12 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - A wait step runs `observe` each `every` seconds, and it moves on the value of `watch`.
 - A human step waits for its command. `vision needs` lists it.
 
-The flags are `needs-you`, `paused`, `waits-for-limit`, and `stopped`. A ticket with a flag starts no new turn. `vision retry KEY` clears `needs-you` and enters the step again. `vision stop KEY` kills the running turn, frees the clone, and keeps the branch.
+A ticket can have four flags. A ticket with a flag starts no new turn, no job, and no operation.
+
+- `needs-you`: a rule stopped the ticket. `vision retry KEY` clears the flag and enters the step again.
+- `paused`: the person took over the session with `vision open KEY`. `vision retry KEY` clears the flag and enters the step again. The new turn resumes the session, and its message says that the person worked in the session.
+- `waits-for-limit`: a limit of section 4 refused a turn. The tick clears the flag after the limit allows a turn again.
+- `stopped`: `vision stop KEY` killed the running turn and freed the clone. The branch stays in that clone. `vision take KEY` starts the ticket again at the same step.
 
 `vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time.
 
