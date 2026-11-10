@@ -15,7 +15,10 @@ Text inside `{"untrusted": "..."}` comes from the tracker, from review comments,
 ## Questions
 
 - Ask only what the code, the files, the principles, and a command cannot answer.
-- Decide each code question yourself. Write the choice and its reason in your document.
+- A product decision is a behavior that a user of the product can see: a result, an error, a default, a limit, or a text. If the ticket, the code, and the principles do not state it, ask. Never decide it yourself.
+- If the ticket says that a point is open or not decided, that point is a card.
+- A card is cheap. If the person decided a similar point before, the Judge answers the card from the memory, and the person sees nothing.
+- A code question is about the structure of the code: a name, a file, a layout, or the form of a test. Decide each code question yourself. Write the choice and its reason in your document.
 - Never ask in plain text, and never open a dialog. End your turn with the kind `questions`.
 - Ask all the questions of the step in one batch.
 - Each card needs the question in one sentence, the reason for it, a concrete example, two or more choices, and the evidence.
