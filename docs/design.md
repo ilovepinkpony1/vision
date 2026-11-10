@@ -623,6 +623,8 @@ adapters/<name>/
 
 Vision looks for the adapter of `project` first in `$VISION_HOME/adapters/`, and then in the folder `adapters/` next to the binary or in the repo. `adapter.dir` in the configuration names a different folder.
 
+An `adapter.toml` can name a different folder for its scripts with the key `scripts`. A private adapter then holds only its own step list, and it uses the scripts of a public adapter.
+
 Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that a gate refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration. A script gets each secret of `[secrets]` as an environment name.
 
 ```
@@ -654,6 +656,7 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "base": "9f3e21c",
 name = "demo"
 branch = "vision/{key}"       # the branch of a ticket
 base = "origin/main"          # the ref that a new branch starts from
+# scripts = "../other-adapter"   optional: the folder whose bin/ answers the calls
 
 [[step]]
 id = "refine"
@@ -711,6 +714,14 @@ leaves = true                 # text or code leaves the machine, so the gates ru
 
 [jobs.proof]
 timeout = 1800
+```
+
+An entry of `after`, `before`, or `start` is a name, or a table with arguments:
+
+```toml
+after = ["git.push", { verb = "deploy", args = { env = "staging" } }]
+before = [{ job = "app-start", args = { env = "local" } }]
+with = { env = "staging" }    # a turn step: these values go into the facts file under "with"
 ```
 
 A step can expect these end facts:
