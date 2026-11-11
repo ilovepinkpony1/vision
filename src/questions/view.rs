@@ -137,43 +137,49 @@ impl Keys for TerminalKeys {
     }
 }
 
-/// One card of the list of `vision needs --json`.
-#[derive(Debug, Serialize)]
-struct CardView {
-    id: String,
-    ticket: String,
-    agent: String,
-    step: String,
-    state: String,
-    question: String,
-    context: String,
-    example: String,
-    choices: Vec<ChoiceView>,
+/// One card that waits for the person, as data: the list of `vision needs --json` prints it,
+/// and the app draws its question card from it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CardView {
+    pub id: String,
+    pub ticket: String,
+    pub agent: String,
+    pub step: String,
+    pub state: String,
+    pub question: String,
+    pub context: String,
+    pub example: String,
+    pub choices: Vec<ChoiceView>,
     /// The number of the recommended choice, from 1.
-    recommended: Option<usize>,
-    why: String,
-    evidence: String,
-    proposal: Option<ProposalView>,
+    pub recommended: Option<usize>,
+    pub why: String,
+    pub evidence: String,
+    pub proposal: Option<ProposalView>,
     /// Why the Judge sent the card to the person.
-    judge_reason: Option<String>,
-    command: String,
+    pub judge_reason: Option<String>,
+    pub command: String,
 }
 
-#[derive(Debug, Serialize)]
-struct ChoiceView {
-    n: usize,
-    letter: Option<char>,
-    label: String,
-    means: String,
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ChoiceView {
+    pub n: usize,
+    pub letter: Option<char>,
+    pub label: String,
+    pub means: String,
 }
 
-#[derive(Debug, Serialize)]
-struct ProposalView {
-    answer: String,
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ProposalView {
+    pub answer: String,
     /// The number of the choice, from 1.
-    choice: Option<usize>,
-    reason: String,
-    sources: Vec<String>,
+    pub choice: Option<usize>,
+    pub reason: String,
+    pub sources: Vec<String>,
+}
+
+/// Each card that waits for the person, oldest first, as `vision needs --json` lists it.
+pub fn card_views(ledger: &Ledger) -> Result<Vec<CardView>> {
+    Ok(waiting_cards(ledger)?.iter().map(card_view).collect())
 }
 
 #[derive(Debug, Serialize)]

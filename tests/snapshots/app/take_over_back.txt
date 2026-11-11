@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
+ ⠴ build               6:00│   ▀▀▀▀▀▀▀  ⠴ 6:00 · 5 tool calls                       │ commits    none to push
+ ○ review                  │                                                        │
+ ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ fix-ci        ╭─ Back from the session of DEMO-12 ───────────────────────────────────────╮               0
+ ○ ready         │                                                                          │ry             1
+ ○ comments      │  You left the session.                                                   │Judge          0
+ ○ ci-review     │                                                                          │
+ ○ ready-to-merge│  DEMO-12 is stopped and paused. The turn of builder that ran is lost,    │
+ ○ done          │  and its session keeps what the agent did.                               │       3f2a1b4 ✓
+                 │                                                                          │               -
+ TEAM            │  Continue: Vision starts DEMO-12 again at its step, then clears the      │               -
+ ✓ scout     fabl│  pause, so that the next turn of builder resumes the session. Keep it    │               -
+ ● builder   opus│  stopped: nothing moves until you press n and continue it there.         │
+ · reviewer  opus│                                                                          │
+ · tester    opus│  enter continue    esc keep it stopped                                   │━━━━━━ 31% of 60
+ · shepherd  opus│                                                                          │ts at 18:00
+ · judge     fabl╰──────────────────────────────────────────────────────────────────────────╯━━━━━━ 71% of 85
+ · curator   fable-5-2 high│                the columns that the plan names.        │
+                           │ 14:24:35 edit  src/report/export.py                    │ ENGINE
+                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 1s ago
+                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
+                           │                month next.                             │
+                           │ 14:25:10 tool  lookup: csv                             │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+

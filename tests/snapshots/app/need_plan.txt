@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+─────────╭─ DEMO-12 · the plan waits for your approval · 3f2a1b4c5d6e ──────────────────────────────╮─────────
+         │                                                                                          │
+    needs│  # Plan of DEMO-12                                                                       │ needs
+         │                                                                                          │
+  IN PROG│  ## Decisions                                                                            │is open
+ ╭───────│                                                                                          │───────╮
+ │ ▸ DEMO│  - The export keeps the order of the columns.                                            │   38m │
+ │       │  - The file uses commas and a header row.                                                │       │
+ │       │                                                                                          │       │
+ │   DEMO│  ## Proof                                                                                │2h 10m │
+ │       │                                                                                          │       │
+ ╰───────│  test_export.py fails on the base and passes after the change.                           │───────╯
+         │                                                                                          │
+  READY T│  - Step 1 of the build writes one part of the export.                                    │n start
+ ╭───────│  - Step 2 of the build writes one part of the export.                                    │───────╮
+ │   DEMO│  - Step 3 of the build writes one part of the export.                                    │ To Do │
+ │   DEMO│  - Step 4 of the build writes one part of the export.                                    │equest │
+ ╰───────│  - Step 5 of the build writes one part of the export.                                    │───────╯
+         │  - Step 6 of the build writes one part of the export.                                    │
+         │  - Step 7 of the build writes one part of the export.                                    │
+         │  - Step 8 of the build writes one part of the export.                                    │
+         │  - Step 9 of the build writes one part of the export.                                    │
+         │  - Step 10 of the build writes one part of the export.                                   │
+         │  - Step 11 of the build writes one part of the export.                                   │
+         │                                                                     ▼ 4 more · ↑↓ scroll │
+         │  To change the plan, edit ~/.vision/tickets/DEMO-12/plan.md, and approve the new plan    │
+  THIS WE│  here. Vision has no way to send a plan back to its agent.                               │
+         │  ↑↓ scroll    a approve    x stop the ticket    esc later                                │
+         │                                                                                          │
+ ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯quit
+

@@ -14,7 +14,8 @@
 //!   ticket reaches its end with a merged pull request. The event has the kind
 //!   [`EVENT_MERGED`] (`ticket-merged`), the ticket key, and the external id
 //!   `ticket-merged:<KEY>:<PR>`.
-//! - [`needs`] gives each open proposal, for the snapshot.
+//! - [`needs`] gives each open proposal, for the snapshot, and [`open_proposals`] gives each
+//!   of them as data, for the app.
 //! - [`run`] is `vision curate`, [`review`] is `vision memory review`, and [`eval`] is
 //!   `vision model eval`. [`last_eval_line`] gives the line of `vision model recommend` about
 //!   the last evaluation.
@@ -31,6 +32,7 @@ pub mod runs;
 pub mod signals;
 
 use anyhow::Result;
+use serde::Serialize;
 
 use crate::cli::ReviewArgs;
 use crate::ctx::Ctx;
@@ -71,9 +73,21 @@ pub fn last_eval_line(ledger: &Ledger, agent: &str) -> Result<Option<String>> {
     eval::last_line(ledger, agent)
 }
 
+/// One proposal of the Curator with an open change, as data.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct OpenProposal {
+    /// The name of its branch, such as `proposal/2026-11-16-1`.
+    pub name: String,
+    pub summary: String,
+    /// The changes that wait for the review of the person.
+    pub open: usize,
+    /// True while its replays still run.
+    pub replaying: bool,
+}
+
 /// Each proposal with an open change: it waits for `vision memory review`. A memory that
-/// cannot be read gives no need, so that the snapshot is still written.
-pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
+/// cannot be read gives no proposal, so that the snapshot is still written.
+pub fn open_proposals(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<OpenProposal>> {
     let Ok(memory) = Memory::from_ctx(ctx) else {
         return Ok(Vec::new());
     };
@@ -88,6 +102,19 @@ pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     Ok(proposals
         .into_iter()
         .filter(|p| p.problem.is_none() && p.open > 0)
+        .map(|p| OpenProposal {
+            replaying: replaying.contains(&p.name),
+            name: p.name,
+            summary: p.summary,
+            open: p.open,
+        })
+        .collect())
+}
+
+/// Each proposal with an open change: it waits for `vision memory review`.
+pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
+    Ok(open_proposals(ctx, ledger)?
+        .into_iter()
         .map(|p| Need {
             kind: NeedKind::Proposal,
             ticket: None,
@@ -95,7 +122,7 @@ pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
                 "the Curator proposes {} change(s): {}{}",
                 p.open,
                 short(&p.summary, 80),
-                if replaying.contains(&p.name) {
+                if p.replaying {
                     " (its replays still run)"
                 } else {
                     ""

@@ -2,31 +2,31 @@
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?     +1 more  n needs
-
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
- │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works · 6 min                                       │
- │       ╭─ 2 things wait for you ──────────────────────────────────────────────────────────────────╮       │
- │   DEMO│                                                                                          │2h 10m │
- │       │  DEMO-12    question   builder asks: Must the export keep the order of the columns?      │       │
- ╰───────│             run        vision answer Q-0002 --choice N                                   │───────╯
+         ╭─ DEMO-12 · 1 of 2 · question · builder asks at the step build ───────────────────────────╮
+  IN PROG│                                                                                          │is open
+ ╭───────│  Must the export keep the order of the columns?                                          │───────╮
+ │ ▸ DEMO│                                                                                          │   38m │
+ │       │  The Judge     proposes a Keep the order                                                 │       │
+ │       │                D-0004 says that each export keeps the order of the screen.               │       │
+ │   DEMO│  Its sources   D-0004                                                                    │2h 10m │
+ │       │                                                                                          │       │
+ ╰───────│  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │───────╯
+         │  Example       The table shows date, client, total. The file can keep that order or      │
+  READY T│                sort the columns by name.                                                 │n start
+ ╭───────│                                                                                          │───────╮
+ │   DEMO│  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │ To Do │
+ │   DEMO│                       order                                                              │equest │
+ ╰───────│    b  Sort by name    the file sorts the columns by their names                          │───────╯
          │                                                                                          │
-  READY T│  DEMO-20    plan       the plan of DEMO-20 waits for your approval at the step plan-rea… │n start
- ╭───────│             run        vision approve-plan DEMO-20 3f2a1b4c5d6e                          │───────╮
- │   DEMO│                                                                                          │ To Do │
- │   DEMO│  Run the command in a shell. vision needs shows each question with its choices.          │equest │
- ╰───────│                                                                                          │───────╯
-         │  esc close                                                                               │
+         │  Recommended   a Keep the order: People compare the file with the table.                 │
+         │  Evidence      src/export.py:42                                                          │
+         │                                                                                          │
+         │  a b answer    enter take the proposal    e your words    k needless    ←→ the others    │
+         │  esc later                                                                               │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-
-
-
-
-
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
 

@@ -1,0 +1,32 @@
+ ◆ VISION ▸ models                                          engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Each agent keeps its model until you change it. A change holds for the next turn of the agent, not for a
+  turn that runs now.
+    AGENT        MODEL                  EFFORT  SOURCE                                              MEASURED
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+    scout        claude-fable-5-2       high    default                               9 turns · $0.12 a turn
+                 A wrong reading of the ticket costs the full build.
+  ▸ builder    ‹ claude-sonnet-5-5 ›    high    pinned 2026-11-02                    21 turns · $0.41 a turn
+                 The default claude-opus-5-5 xhigh was: It writes the code and uses the most tokens.
+    reviewer     claude-opus-5-5        max     default                                          no turn yet
+                 The review is the last gate before a person reads the code.
+    tester       claude-opus-5-5        high    default                                          no turn yet
+                 A false pass sends a bug to a person.
+    shepherd     claude-opus-5-5        high    default                                          no turn yet
+                 It gives verdicts on review comments and fixes the valid ones.
+    judge        claude-fable-5-2       high    default                                          no turn yet
+                 It can answer alone, so a wrong answer costs the most.
+    curator      claude-fable-5-2       high    default                                          no turn yet
+                 It runs seldom, and its proposals change each later answer.
+
+
+
+
+  ╭─ recommendation for builder ───────────────────────────────────────────────────────────────────────────╮
+  │  ✗ go back to the default for builder                                                                  │
+  │  the command failed in the test                                                                        │
+  │  Now  builder keeps its model.                                                                         │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ↑↓ agent   ←→ model   e effort   enter pin   u back to the default   esc home   ? keys
+

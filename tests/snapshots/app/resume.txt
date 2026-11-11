@@ -7,15 +7,15 @@
  │             ●━●━●━●━◉─○─○─○─○─○─○─○  review · stopped · Enter starts it again                            │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
-  READY TO STAR╭─ Resume DEMO-3 ──────────────────────────────────────────────────────────────╮· 1 can start
- ╭─────────────│                                                                              │─────────────╮
- │   DEMO-15   │  Rename the setting of the weekly email                                      │       To Do │
- │   DEMO-9    │                                                                              │pull request │
- ╰─────────────│  DEMO-3 is stopped at the step review.                                       │─────────────╯
+  READY TO START                                                              from the tracker · 1 can start
+ ╭─────────────╭─ Resume DEMO-3 ──────────────────────────────────────────────────────────────╮─────────────╮
+ │   DEMO-15   │                                                                              │       To Do │
+ │   DEMO-9    │  Rename the setting of the weekly email                                      │pull request │
+ ╰─────────────│                                                                              │─────────────╯
+               │  DEMO-3 is stopped at the step review.                                       │
                │  Its branch vision/DEMO-3 stays in the clone ~/clones/demo-1.                │
                │                                                                              │
-               │  Enter runs vision take DEMO-3, and the ticket starts again at the same      │
-               │  step.                                                                       │
+               │  Press Enter to start it again at the same step.                             │
                │                                                                              │
                │  enter resume    esc cancel                                                  │
                │                                                                              │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
 

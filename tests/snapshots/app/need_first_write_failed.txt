@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+─────────╭─ DEMO-12 · the first write of tracker.describe ──────────────────────────────────────────╮─────────
+         │                                                                                          │
+    needs│  Replaces the description of the ticket in the tracker.                                  │ needs
+         │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │
+  IN PROG│  The verb tracker.describe is in the mode shadow, so nothing was sent.                   │is open
+ ╭───────│                                                                                          │───────╮
+ │ ▸ DEMO│  The write that waits                                                                    │   38m │
+ │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
+ │       │  │ text  Export the report of the month as a CSV file.                                │  │       │
+ │   DEMO│  │                                                                                    │  │2h 10m │
+ │       │  │       The file keeps the order of the columns of the table.                        │  │       │
+ ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
+         │  The gates: passed.                                                                      │
+  READY T│                                                                                          │n start
+ ╭───────│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
+ │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │ To Do │
+ │   DEMO│                                                                     ▼ 5 more · ↑↓ scroll │equest │
+ ╰───────│  ✗ move tracker.describe from shadow to ask                                              │───────╯
+         │  · run the writes of the step refine of DEMO-12 again                                    │
+         │  · a pass asks for tracker.describe again                                                │
+         │  · check that the same write waits: tracker.describe at 1a2b3c4d5e6f                     │
+         │  · approve tracker.describe at 1a2b3c4d5e6f                                              │
+         │                                                                                          │
+         │  It did not work:                                                                        │
+         │  the configuration is not valid TOML                                                     │
+         │  Now  Nothing was sent, and DEMO-12 still waits at the step refine.                      │
+  THIS WE│                                                                                          │
+         │  y a n choose    esc later                                                               │
+         │                                                                                          │
+ ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯quit
+

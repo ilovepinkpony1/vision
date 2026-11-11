@@ -1,15 +1,14 @@
 //! The cards over a screen (`modal`, `mStart`, `mQuit`, and `mHelp` of the design): the start
-//! card, the resume card, the kill switch card, the quit card, the keys card, the list of needs,
+//! card, the resume card, the kill switch card, the quit card, the keys card of each screen,
 //! and the card of a long error. A card keeps its width and stays in the center; the screen
-//! behind it dims. Each card is a list of rows, so that its height follows its text.
+//! behind it dims. Each card is a list of rows, so that its height follows its text. The card
+//! of the things that wait has its own modules.
 
 use super::canvas::{ink, Canvas, Ink};
 use super::header::spinner;
 use super::theme::{agent_color, Rgb, T};
 use crate::app::model::{App, Card, KillCard, ResumeCard, Run, StartCard};
 use crate::app::text::{cut, wrap};
-use crate::pipeline::state::clear_command;
-use crate::snapshot::{Need, NeedKind};
 
 /// The rows of a card: each row is a list of (column in the card, text, ink).
 #[derive(Default)]
@@ -47,11 +46,17 @@ impl Rows {
         }
     }
 
-    /// The keys of a card: each key in bold, its label dim.
+    /// The keys of a card: each key in bold, its label dim. A row that would pass the column
+    /// 89, the end of the text of the widest card, goes on in the next row.
     pub(super) fn keys(&mut self, list: &[(&str, &str)]) {
         let mut row = Vec::new();
         let mut x = 3;
         for (key, label) in list {
+            let wide = (crate::app::text::width(key) + 1 + crate::app::text::width(label)) as i32;
+            if x > 3 && x + wide > 89 {
+                self.rows.push(std::mem::take(&mut row));
+                x = 3;
+            }
             row.push((x, key.to_string(), ink(T.fg).bold()));
             x += crate::app::text::width(key) as i32 + 1;
             row.push((x, label.to_string(), ink(T.dim)));
@@ -109,13 +114,15 @@ pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
         Card::Quit => quit(app, c),
         Card::Help => match app.screen {
             crate::app::model::Screen::Live { .. } => super::live_cards::help(c),
+            crate::app::model::Screen::Models => super::models::help(c),
+            crate::app::model::Screen::Stats => super::stats::help(c),
             _ => help(c),
         },
-        Card::Needs => needs(app, c),
+        Card::Need(card) => super::need_card::draw(app, card, c),
         Card::Error { title, text } => error(c, title, text),
         Card::Stop(card) => super::live_cards::stop(app, card, c),
         Card::Retry(card) => super::live_cards::retry(app, card, c),
-        Card::Open(card) => super::live_cards::open(card, c),
+        Card::Open(card) => super::live_cards::open(app, card, c),
         Card::Opened(card) => super::live_cards::opened(app, card, c),
     }
 }
@@ -234,10 +241,7 @@ fn resume(app: &App, card: &ResumeCard, c: &mut Canvas) {
     rows.blank();
     rows.para(
         3,
-        &format!(
-            "Enter runs vision take {}, and the ticket starts again at the same step.",
-            card.key
-        ),
+        "Press Enter to start it again at the same step.",
         72,
         ink(T.dim),
     );
@@ -259,7 +263,7 @@ fn kill(app: &App, card: &KillCard, c: &mut Canvas) {
         rows.blank();
         rows.para(
             3,
-            "No action runs now. Enter runs vision on, and the next pass acts again.",
+            "No action runs now. Press Enter to turn Vision on, and the next pass acts again.",
             68,
             ink(T.dim),
         );
@@ -343,7 +347,9 @@ fn help(c: &mut Canvas) {
     let list = [
         ("↑↓  j k", "move through the tickets"),
         ("enter", "open a ticket, or start one"),
-        ("n", "what waits for you"),
+        ("n", "answer what waits for you"),
+        ("m", "the model of each agent"),
+        ("s", "the stats"),
         ("p", "pause the engine, or start it again"),
         ("r", "load the queue of the tracker again"),
         ("K", "the kill switch: stop each agent now"),
@@ -361,73 +367,6 @@ fn help(c: &mut Canvas) {
     rows.blank();
     rows.text(3, "esc closes this list", ink(T.faint));
     show(c, 70, "Keys", T.primary, rows);
-}
-
-/// The command of today that answers a need.
-pub fn need_command(need: &Need) -> String {
-    let ticket = need.ticket.as_deref().unwrap_or("KEY");
-    match need.kind {
-        NeedKind::Card => format!("vision answer {} --choice N", need.id),
-        NeedKind::Plan => format!("vision approve-plan {ticket} {}", need.id),
-        NeedKind::Operation => format!("vision approve {ticket} {}", need.id),
-        NeedKind::Flag => clear_command(&need.id, ticket),
-        NeedKind::Proposal => "vision memory review".to_string(),
-    }
-}
-
-fn need_word(kind: NeedKind) -> &'static str {
-    match kind {
-        NeedKind::Card => "question",
-        NeedKind::Plan => "plan",
-        NeedKind::Operation => "write",
-        NeedKind::Flag => "blocked",
-        NeedKind::Proposal => "memory",
-    }
-}
-
-fn needs(app: &App, c: &mut Canvas) {
-    let needs = app.needs();
-    let mut rows = Rows::default();
-    let fit = ((c.h - 12) / 3).max(1) as usize;
-    for need in needs.iter().take(fit) {
-        rows.rows.push(vec![
-            (
-                3,
-                cut(need.ticket.as_deref().unwrap_or("-"), 10),
-                ink(T.fg).bold(),
-            ),
-            (14, need_word(need.kind).to_string(), ink(T.warn)),
-            (25, need.text.clone(), ink(T.fg)),
-        ]);
-        rows.rows.push(vec![
-            (14, "run".to_string(), ink(T.faint)),
-            (25, need_command(need), ink(T.accent)),
-        ]);
-        rows.blank();
-    }
-    if needs.len() > fit {
-        rows.text(
-            3,
-            format!(
-                "and {} more. vision needs lists each one.",
-                needs.len() - fit
-            ),
-            ink(T.dim),
-        );
-        rows.blank();
-    }
-    rows.text(
-        3,
-        "Run the command in a shell. vision needs shows each question with its choices.",
-        ink(T.dim),
-    );
-    rows.blank();
-    rows.keys(&[("esc", "close")]);
-    let title = match needs.len() {
-        1 => "1 thing waits for you".to_string(),
-        n => format!("{n} things wait for you"),
-    };
-    show(c, 92, &title, T.warn, rows);
 }
 
 fn error(c: &mut Canvas, title: &str, text: &str) {

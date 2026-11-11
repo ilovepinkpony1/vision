@@ -2,12 +2,13 @@
 //!
 //! The arrows and `k`/`j` move through both boxes; Enter opens the live view of a ticket in progress,
 //! opens the start card of a ticket that can start, says why another ticket cannot start, and
-//! asks to resume a stopped ticket; `n` lists the needs; `p` pauses the engine; `r` loads the
-//! queue again; `K` opens the kill switch card; `?` shows the keys; `q` and Ctrl-C leave.
+//! asks to resume a stopped ticket; `n` opens the card of the first thing that waits; `m` opens
+//! Models and `s` opens Stats; `p` pauses the engine; `r` loads the queue again; `K` opens the
+//! kill switch card; `?` shows the keys; `q` and Ctrl-C leave.
 
 use super::super::model::{App, Card, Item, KillCard, ResumeCard, Run, StartCard, Tone};
 use super::super::msg::{Effect, Key};
-use super::{ask_quit, data, engine, notice};
+use super::{ask_quit, data, engine, models, needs, notice, stats};
 
 pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
     match key {
@@ -21,13 +22,9 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
 /// The keys that work on each screen.
 fn common(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
     match key {
-        Key::Char('n') => {
-            if app.needs().is_empty() {
-                notice(app, "Nothing waits for you.", Tone::Info);
-            } else {
-                app.card = Some(Card::Needs);
-            }
-        }
+        Key::Char('n') => needs::open(app, None, fx),
+        Key::Char('m') => models::open(app, fx),
+        Key::Char('s') => stats::open(app, fx),
         Key::Char('p') => engine::toggle_pause(app),
         Key::Char('r') => data::load_queue(app, fx),
         Key::Char('K') => {

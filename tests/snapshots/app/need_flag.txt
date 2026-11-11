@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │       ╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮       │
+ │       │                                                                                          │       │
+ │   DEMO│  A rule stopped DEMO-12 at the step build.                                               │2h 10m │
+ │       │                                                                                          │       │
+ ╰───────│  the proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change             │───────╯
+         │                                                                                          │
+  READY T│  r starts the step build again with a new turn of builder. Its message says why the      │n start
+ ╭───────│  step stopped.                                                                           │───────╮
+ │   DEMO│  o opens the session of builder in this terminal. Vision pauses DEMO-12 while you work   │ To Do │
+ │   DEMO│  in it, and asks afterwards whether it goes on.                                          │equest │
+ ╰───────│  x stops DEMO-12. Its branch stays in its clone.                                         │───────╯
+         │                                                                                          │
+         │  r try the step again    o open the session    x stop the ticket    esc later            │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

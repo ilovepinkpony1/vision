@@ -93,7 +93,9 @@ Type `vision` in a terminal, and press Enter. A loader shows while Vision reads 
 
 Press Enter on a ticket of the queue to start it. Press Enter on a ticket in progress to open its live view. These keys work on Home:
 
-- `n` shows what waits for you.
+- `n` opens what waits for you, one card at a time. You answer each card with one key.
+- `m` shows the model of each agent, and changes it.
+- `s` shows the stats of the last 7 days, or of all time.
 - `p` pauses the engine, or starts it again.
 - `K` opens the kill switch.
 - `?` shows each key.
@@ -102,12 +104,24 @@ Press Enter on a ticket of the queue to start it. Press Enter on a ticket in pro
 The live view shows the path of the ticket, what happens now, and the work of the agent as it happens. These keys work in the live view:
 
 - `t` sends a line to the agent that works, or keeps it for the next turn.
-- `o` opens the session of the last turn in this terminal. The ticket pauses. Press `r` afterwards to continue it.
+- `n` opens what waits for you on this ticket.
+- `o` opens the session of the last turn in this terminal. The ticket pauses. While a turn runs, `o` on its card stops the turn first. Press Enter afterwards to continue the ticket.
 - `x` stops the ticket. Enter starts a stopped ticket again.
 - `r` retries a ticket that waits for you.
 - `l` shows the log, `p` shows the plan, and `d` shows the commits that the forge does not have yet.
 - The arrows scroll the activity, and `G` goes back to its end.
 - Esc goes back to Home.
+
+Each thing that waits for you has its card:
+
+- A question takes the letter of a choice, your own words with `e`, or `k` for a question that was needless. Then type a reason, or press Tab to skip it.
+- A plan takes `a` to approve it.
+- A write that waits takes `y` to approve it.
+- The first write of a verb in the mode `shadow` takes `y` or `a`. `y` sends it, and Vision asks you each time for that verb. `a` sends it, and Vision never asks again for that verb.
+
+The app approves only the exact plan or write that the card showed. If it changed, the app approves nothing and shows you the new one.
+
+To see your own picture in the loader, put a text file with color codes at `~/.vision/loader.ans`. A tool such as `chafa` writes such a file.
 
 While the window is open, the app runs `vision tick` each minute and after each action. It also runs the next pass at once while a ticket has work ready. If you quit, a running turn finishes by itself. The next step waits until you open Vision again, or until the timer of `vision install` runs.
 

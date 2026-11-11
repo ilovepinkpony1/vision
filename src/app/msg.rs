@@ -1,10 +1,16 @@
 //! The messages that reach the update, and the effects that it gives back for the runtime to
 //! run. A message is a key, a tick of the clock, a change of the window, or the result of a
-//! background thread. An effect starts a load, hands a job to the worker, or leaves.
+//! background thread. An effect starts a load, hands a job to the worker, gives the terminal to
+//! a child, or leaves.
 
+use super::chain::{Check, CheckFacts};
 use super::feed::{Batch, StreamLine};
 use super::live::TicketData;
 use super::model::{Local, Setup, SetupError, StartInfo};
+use super::model_table::ModelLine;
+use super::needs::NeedItem;
+use super::picture::Picture;
+use super::stats::StatsData;
 use crate::pipeline::commands::PickRow;
 use crate::pipeline::{DiffView, PlanView};
 
@@ -85,6 +91,30 @@ pub enum Msg {
         key: String,
         result: ChildResult,
     },
+    /// The review of a proposal of the Curator ended, and the app has the terminal again.
+    ReviewEnded {
+        proposal: String,
+        result: ChildResult,
+    },
+    /// The things that wait for the person, from the load with this number.
+    Needs {
+        load: u64,
+        items: Box<Result<Vec<NeedItem>, String>>,
+    },
+    /// What the read of a check of a chain found.
+    Checked {
+        chain: u64,
+        facts: Box<Result<CheckFacts, String>>,
+    },
+    /// The rows of the screen Models.
+    Models(Box<Result<Vec<ModelLine>, String>>),
+    /// The numbers of the screen Stats, for the last 7 days or for all time.
+    Stats {
+        week: bool,
+        data: Box<Result<StatsData, String>>,
+    },
+    /// The picture of the loader from `loader.ans`, or `None` for the android.
+    Picture(Box<Option<Picture>>),
     /// The worker ended a job.
     JobDone(JobDone),
     /// The process got SIGTERM or SIGHUP. Only the runtime reads it.
@@ -110,6 +140,21 @@ pub enum Effect {
     },
     /// Give the terminal to `vision open KEY`, wait for it, and take the terminal again.
     OpenSession(String),
+    /// Give the terminal to `vision memory review --proposal NAME` in the same way.
+    OpenReview(String),
+    /// Read the things that wait for the person. The number names the load.
+    LoadNeeds(u64),
+    /// Read the facts of the check of a chain.
+    LoadCheck {
+        chain: u64,
+        check: Check,
+    },
+    LoadModels,
+    LoadStats {
+        week: bool,
+    },
+    /// Read `loader.ans` of the home folder.
+    LoadPicture,
     /// Start the worker thread. The update asks for it once.
     StartWorker,
     /// Hand a job to the worker. The update hands over one job at a time.
@@ -132,8 +177,7 @@ pub enum JobKind {
     Action(Action),
 }
 
-/// A change of the state. Each one runs as a child process of the same binary. Part A3 adds
-/// `answer`, `approve`, `approve-plan`, and `promote`.
+/// A change of the state. Each one runs as a child process of the same binary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// `vision take KEY`: start a ticket, or start a stopped ticket again.
@@ -148,10 +192,51 @@ pub enum Action {
     Retry { key: String },
     /// `vision tell KEY -- TEXT`.
     Tell { key: String, text: String },
+    /// `vision answer ID --choice N | --text=T | --needless WHERE [--why=W]`.
+    Answer {
+        id: String,
+        given: Given,
+        /// The reason of the person. Empty for none.
+        why: String,
+    },
+    /// `vision approve-plan KEY HASH`.
+    ApprovePlan { key: String, hash: String },
+    /// `vision approve KEY VERB COMMIT --op ID`, with `-` for a ticket with no commit. The id
+    /// names the one operation that the card showed, so that the command itself, under the
+    /// lock of the tick, refuses a write that changed.
+    Approve {
+        key: String,
+        verb: String,
+        commit: String,
+        op: String,
+    },
+    /// `vision promote VERB`: one step up the ladder.
+    Promote { verb: String },
+    /// `vision model set AGENT MODEL --effort E`.
+    ModelSet {
+        agent: String,
+        model: String,
+        effort: String,
+    },
+    /// `vision model reset AGENT`.
+    ModelReset { agent: String },
+}
+
+/// The answer of `vision answer`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Given {
+    /// The number of a choice, from 1, as `vision needs` shows it.
+    Choice(usize),
+    /// An answer in the words of the person.
+    Text(String),
+    /// The card was needless: where the answer already was (`code`, `ticket`, `memory`, or
+    /// `no-matter`).
+    Needless(String),
 }
 
 impl Action {
-    /// The arguments of the command.
+    /// The arguments of the command. A text goes as `--text=T` and a reason as `--why=W`, so
+    /// that a text that starts with `-` never looks like an option.
     pub fn args(&self) -> Vec<String> {
         match self {
             Action::Take { key } => vec!["take".into(), key.clone()],
@@ -163,6 +248,51 @@ impl Action {
             Action::Tell { key, text } => {
                 vec!["tell".into(), key.clone(), "--".into(), text.clone()]
             }
+            Action::Answer { id, given, why } => {
+                let mut args = vec!["answer".to_string(), id.clone()];
+                match given {
+                    Given::Choice(n) => args.extend(["--choice".to_string(), n.to_string()]),
+                    Given::Text(text) => args.push(format!("--text={text}")),
+                    Given::Needless(place) => {
+                        args.extend(["--needless".to_string(), place.clone()]);
+                        return args;
+                    }
+                }
+                if !why.trim().is_empty() {
+                    args.push(format!("--why={}", why.trim()));
+                }
+                args
+            }
+            Action::ApprovePlan { key, hash } => {
+                vec!["approve-plan".into(), key.clone(), hash.clone()]
+            }
+            Action::Approve {
+                key,
+                verb,
+                commit,
+                op,
+            } => vec![
+                "approve".into(),
+                key.clone(),
+                verb.clone(),
+                commit.clone(),
+                "--op".into(),
+                op.clone(),
+            ],
+            Action::Promote { verb } => vec!["promote".into(), verb.clone()],
+            Action::ModelSet {
+                agent,
+                model,
+                effort,
+            } => vec![
+                "model".into(),
+                "set".into(),
+                agent.clone(),
+                model.clone(),
+                "--effort".into(),
+                effort.clone(),
+            ],
+            Action::ModelReset { agent } => vec!["model".into(), "reset".into(), agent.clone()],
         }
     }
 
@@ -175,6 +305,34 @@ impl Action {
             Action::Stop { key } => format!("The stop of {key}"),
             Action::Retry { key } => format!("The retry of {key}"),
             Action::Tell { key, .. } => format!("The message to {key}"),
+            Action::Answer { id, .. } => format!("The answer to {id}"),
+            Action::ApprovePlan { key, .. } => format!("The approval of the plan of {key}"),
+            Action::Approve { key, verb, .. } => format!("The approval of {verb} of {key}"),
+            Action::Promote { verb } => format!("The promote of {verb}"),
+            Action::ModelSet { agent, .. } => format!("The pin of the model of {agent}"),
+            Action::ModelReset { agent } => format!("The reset of the model of {agent}"),
+        }
+    }
+}
+
+/// A child that gets the terminal: the session of a ticket, or the review of a proposal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Handoff {
+    Session(String),
+    Review(String),
+}
+
+impl Handoff {
+    /// The arguments of the child.
+    pub fn args(&self) -> Vec<String> {
+        match self {
+            Handoff::Session(key) => vec!["open".into(), key.clone()],
+            Handoff::Review(name) => vec![
+                "memory".into(),
+                "review".into(),
+                "--proposal".into(),
+                name.clone(),
+            ],
         }
     }
 }

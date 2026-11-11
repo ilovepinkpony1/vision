@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROG╭─ DEMO-12 · question · builder asks at the step build ────────────────────────────────────╮is open
+ ╭───────│                                                                                          │───────╮
+ │ ▸ DEMO│  Must the export keep the order of the columns?                                          │   38m │
+ │       │                                                                                          │       │
+ │       │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │       │
+ │   DEMO│  Example       The table shows date, client, total. The file can keep that order or      │2h 10m │
+ │       │                sort the columns by name.                                                 │       │
+ ╰───────│                                                                                          │───────╯
+         │    a  Keep the order  the file has the columns of the table, in the same    recommended  │
+  READY T│                       order                                                              │n start
+ ╭───────│    b  Sort by name    the file sorts the columns by their names                          │───────╮
+ │   DEMO│                                                                                          │ To Do │
+ │   DEMO│  Recommended   a Keep the order: People compare the file with the table.                 │equest │
+ ╰───────│  Evidence      src/export.py:42                                                          │───────╯
+         │  The Judge     was not sure: No decision of the memory covers the order of the columns.  │
+         │                                                                                          │
+         │  Your answer in your own words:                                                          │
+         │  › Keep the order, and put the total last                                                │
+         │                                                                                          │
+         │  enter next    esc back                                                                  │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

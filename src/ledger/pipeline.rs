@@ -79,6 +79,14 @@ pub struct StepCost {
     pub cost_usd: f64,
 }
 
+/// The cost of the turns of one agent for one ticket.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AgentCost {
+    pub ticket: String,
+    pub agent: String,
+    pub cost_usd: f64,
+}
+
 impl Ledger {
     /// Writes the whole row of a ticket: a new one, or one that replaces an ended ticket.
     pub fn put_ticket(&self, row: &TicketRow) -> Result<()> {
@@ -378,6 +386,23 @@ impl Ledger {
                 step: row.get(1)?,
                 turns: row.get(2)?,
                 cost_usd: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The cost of the turns of each agent of each ticket that started at or after `since`.
+    pub fn agent_costs(&self, since: Option<&str>) -> Result<Vec<AgentCost>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT coalesce(ticket, ''), coalesce(agent, ''), coalesce(sum(cost_usd), 0)
+             FROM turns WHERE ?1 IS NULL OR started >= ?1
+             GROUP BY ticket, agent ORDER BY ticket, min(rowid)",
+        )?;
+        let rows = stmt.query_map(params![since], |row| {
+            Ok(AgentCost {
+                ticket: row.get(0)?,
+                agent: row.get(1)?,
+                cost_usd: row.get(2)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

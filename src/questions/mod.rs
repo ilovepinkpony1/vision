@@ -8,7 +8,8 @@
 //!   `questions`, applies the result of each Judge turn, sends the cards of a late Judge to the
 //!   person, starts one Judge turn for the new cards of each asking turn, and resumes each
 //!   asking session whose cards all have a final answer. It is safe to run two times.
-//! - [`needs`] gives the cards that wait for the person, for the snapshot.
+//! - [`needs`] gives the cards that wait for the person, for the snapshot, and [`card_views`]
+//!   gives each of them with its whole card as data, for the app.
 //! - [`run`] is `vision needs`, `answer`, `answers`, and `correct`.
 //! - [`replay`] replays the last answers of the person with a Judge turn against a memory
 //!   folder, for the Curator and for `vision model eval`. It writes nothing.
@@ -52,6 +53,7 @@ pub use replay::{
 };
 pub use rules::{Entry, Outcome, Ruling};
 pub use tick::tick;
+pub use view::{card_views, CardView, ChoiceView, ProposalView};
 
 /// The agent of the Judge.
 pub const JUDGE: &str = "judge";

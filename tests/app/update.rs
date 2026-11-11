@@ -174,7 +174,7 @@ fn enter_on_a_stopped_ticket_asks_to_resume_it_with_take() {
 }
 
 #[test]
-fn n_lists_the_needs_or_says_that_nothing_waits() {
+fn n_opens_the_card_of_the_needs_or_says_that_nothing_waits() {
     let mut app = home(SIZE);
     key(&mut app, 2.0, Key::Char('n'));
     assert_eq!(app.card, None);
@@ -184,8 +184,9 @@ fn n_lists_the_needs_or_says_that_nothing_waits() {
         local(two_tickets(), vec![card_need("DEMO-12")]),
         Some(queue()),
     );
-    key(&mut app, 2.0, Key::Char('n'));
-    assert_eq!(app.card, Some(Card::Needs));
+    let fx = key(&mut app, 2.0, Key::Char('n'));
+    assert!(matches!(app.card, Some(Card::Need(_))));
+    assert!(fx.iter().any(|e| matches!(e, Effect::LoadNeeds(_))));
     key(&mut app, 2.1, Key::Esc);
     assert_eq!(app.card, None);
 }
@@ -412,6 +413,30 @@ fn a_pass_starts_when_a_running_turn_ends() {
     tickets[0].view.works = None;
     tickets[0].view.now = "the next tick tests the end facts of the turn of builder".into();
     let fx = send(&mut app, 5.0, Msg::Local(Ok(local(tickets, Vec::new()))));
+    assert_eq!(runs(&fx), vec![JobKind::Pass]);
+}
+
+#[test]
+fn a_pass_starts_when_a_turn_of_the_judge_ends() {
+    let mut app = home(SIZE);
+    // A turn of the Judge runs too: no ticket shows it as its work, and the count has it.
+    let mut judging = local(two_tickets(), Vec::new());
+    judging.turns += 1;
+    let first = app.engine.queue.len();
+    send(&mut app, 2.0, Msg::Local(Ok(judging.clone())));
+    assert_eq!(
+        app.engine.queue.len(),
+        first,
+        "one more turn starts no pass"
+    );
+    // The same count again starts nothing.
+    assert!(runs(&send(&mut app, 3.0, Msg::Local(Ok(judging)))).is_empty());
+    // The turn of the Judge ended: a pass takes its answers in at once.
+    let fx = send(
+        &mut app,
+        4.0,
+        Msg::Local(Ok(local(two_tickets(), Vec::new()))),
+    );
     assert_eq!(runs(&fx), vec![JobKind::Pass]);
 }
 

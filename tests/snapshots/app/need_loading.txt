@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works · 6 min                                       │
+ │                                                                                                          │
+ │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
+ │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                   │
+ ╰───────╭─ What waits for you ─────────────────────────────────────────────────────────────────────╮───────╯
+         │                                                                                          │
+  READY T│  ⠹ reads what waits for you                                                              │n start
+ ╭───────│                                                                                          │───────╮
+ │   DEMO│  esc close                                                                               │ To Do │
+ │   DEMO│                                                                                          │equest │
+ ╰───────╰──────────────────────────────────────────────────────────────────────────────────────────╯───────╯
+
+
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

@@ -6,13 +6,19 @@
 //! the queue each 5 minutes, a pass each minute) and hands the next job to the worker when the
 //! worker is free.
 
+mod act;
+mod ask;
 mod boot;
 mod cards;
+pub mod chain;
 mod data;
 pub mod engine;
 mod home;
 pub mod live;
+mod models;
+mod needs;
 mod pager;
+mod stats;
 mod tell;
 
 use std::time::Duration;
@@ -45,13 +51,32 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
             app.dirty = true;
             on_key(app, key, &mut fx);
         }
-        Msg::Paste(text) => tell::on_paste(app, &text),
+        Msg::Paste(text) => {
+            tell::on_paste(app, &text);
+            needs::on_paste(app, &text);
+        }
         Msg::Ticket { key, data } => live::on_ticket(app, &key, *data),
         Msg::Stream { key, batch } => live::on_stream(app, &key, &batch),
         Msg::Plan { key, plan } => pager::on_plan(app, &key, plan),
         Msg::Diff { key, diff } => pager::on_diff(app, &key, diff),
         Msg::TurnEvents { key, turn, events } => pager::on_turn(app, &key, &turn, events),
-        Msg::SessionEnded { key, result } => cards::on_session_ended(app, &key, &result),
+        Msg::SessionEnded { key, result } => {
+            if !chain::on_session_ended(app, &key, &result) {
+                cards::on_session_ended(app, &key, &result);
+            }
+        }
+        Msg::ReviewEnded { proposal, result } => {
+            app.dirty = true;
+            chain::on_review_ended(app, &proposal, &result, &mut fx);
+        }
+        Msg::Needs { load, items } => needs::on_needs(app, load, *items),
+        Msg::Checked { chain: id, facts } => chain::on_checked(app, id, *facts, &mut fx),
+        Msg::Models(data) => models::on_models(app, *data, &mut fx),
+        Msg::Stats { week, data } => stats::on_stats(app, week, *data, &mut fx),
+        Msg::Picture(picture) => {
+            app.picture = Some(*picture);
+            app.dirty = true;
+        }
         Msg::Setup(result) => boot::on_setup(app, result, &mut fx),
         Msg::Local(result) => data::on_local(app, result, &mut fx),
         Msg::Queue(result) => data::on_queue(app, result, &mut fx),
@@ -60,13 +85,16 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
     }
     boot::leave_when_ready(app);
     timers(app, &mut fx);
+    chain::advance(app, &mut fx);
     engine::dispatch(app, &mut fx);
     fx
 }
 
 fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
-    // Ctrl-C cancels the line of `t`, and is `q` everywhere else.
-    let telling = app.card.is_none() && app.live.as_ref().is_some_and(|l| l.tell.is_some());
+    // Ctrl-C cancels the line of `t` and the lines of a card, and is `q` everywhere else.
+    let typing = matches!(&app.card, Some(super::model::Card::Need(card)) if card.input != super::needs::Input::None);
+    let telling =
+        typing || app.card.is_none() && app.live.as_ref().is_some_and(|l| l.tell.is_some());
     let key = match key {
         Key::Cancel if telling => Key::Esc,
         Key::Cancel => Key::Char('q'),
@@ -80,6 +108,8 @@ fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         super::model::Screen::Boot => boot::on_key(app, key, fx),
         super::model::Screen::Home => home::on_key(app, key, fx),
         super::model::Screen::Live { .. } => live::on_key(app, key, fx),
+        super::model::Screen::Models => models::on_key(app, key, fx),
+        super::model::Screen::Stats => stats::on_key(app, key, fx),
     }
 }
 

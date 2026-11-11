@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
+ ✓ plan-ready    ╭─ Back from the session of DEMO-12 ───────────────────────────────────────╮               3
+ ⠋ build         │                                                                          │    none to push
+ ○ review        │  You left the session.                                                   │
+ ○ ci            │                                                                          │NS
+ ○ fix-ci        │  DEMO-12 is stopped and paused. The turn of builder that ran is lost,    │               0
+ ○ ready         │  and its session keeps what the agent did.                               │ry             1
+ ○ comments      │                                                                          │Judge          0
+ ○ ci-review     │  Continue: Vision starts DEMO-12 again at its step, then clears the      │
+ ○ ready-to-merge│  pause, so that the next turn of builder resumes the session. Keep it    │
+ ○ done          │  stopped: nothing moves until you press n and continue it there.         │       3f2a1b4 ✓
+                 │                                                                          │               -
+ TEAM            │  ✓ start DEMO-12 again at its step                                       │               -
+ ✓ scout     fabl│  ✗ continue DEMO-12: its next turn resumes the session                   │               -
+ ● builder   opus│                                                                          │
+ · reviewer  opus│  It did not work:                                                        │
+ · tester    opus│  the command failed in the test                                          │━━━━━━ 31% of 60
+ · shepherd  opus│  Now  DEMO-12 is no longer stopped, and it is still paused. Press n      │ts at 18:00
+ · judge     fabl│       to continue it.                                                    │━━━━━━ 71% of 85
+ · curator   fabl│                                                                          │
+                 │  esc close                                                               │
+                 │                                                                          │last pass 0s ago
+                 ╰──────────────────────────────────────────────────────────────────────────╯
+                           │                month next.                             │
+                           │ 14:25:10 tool  lookup: csv                             │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+

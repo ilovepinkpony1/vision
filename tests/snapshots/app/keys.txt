@@ -5,16 +5,17 @@
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
  │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works · 6 min                                       │
- │                                                                                                          │
- │   DEMO-7    Show ╭─ Keys ─────────────────────────────────────────────────────────────╮    $6.12  2h 10m │
- │             ●━●━●│                                                                    │                  │
- ╰──────────────────│  ↑↓  j k      move through the tickets                             │──────────────────╯
-                    │  enter        open a ticket, or start one                          │
-  READY TO START    │  n            what waits for you                                   │cker · 1 can start
- ╭──────────────────│  p            pause the engine, or start it again                  │──────────────────╮
- │   DEMO-15   Keep │  r            load the queue of the tracker again                  │            To Do │
- │   DEMO-9    Fix t│  K            the kill switch: stop each agent now                 │open pull request │
- ╰──────────────────│  ?            this list of keys                                    │──────────────────╯
+ │                  ╭─ Keys ─────────────────────────────────────────────────────────────╮                  │
+ │   DEMO-7    Show │                                                                    │    $6.12  2h 10m │
+ │             ●━●━●│  ↑↓  j k      move through the tickets                             │                  │
+ ╰──────────────────│  enter        open a ticket, or start one                          │──────────────────╯
+                    │  n            answer what waits for you                            │
+  READY TO START    │  m            the model of each agent                              │cker · 1 can start
+ ╭──────────────────│  s            the stats                                            │──────────────────╮
+ │   DEMO-15   Keep │  p            pause the engine, or start it again                  │            To Do │
+ │   DEMO-9    Fix t│  r            load the queue of the tracker again                  │open pull request │
+ ╰──────────────────│  K            the kill switch: stop each agent now                 │──────────────────╯
+                    │  ?            this list of keys                                    │
                     │  esc          go back, or close a card                             │
                     │  q            quit                                                 │
                     │                                                                    │
@@ -24,9 +25,8 @@
 
 
 
-
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
 

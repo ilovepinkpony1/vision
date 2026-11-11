@@ -133,10 +133,14 @@ pub fn draw(app: &App, c: &mut Canvas) {
             ("↑↓", "move"),
             ("enter", "open or start"),
             ("n", "needs"),
+            ("m", "models"),
+            ("s", "stats"),
             ("p", pause),
-            ("r", "reload"),
-            ("K", "kill switch"),
             ("?", "keys"),
+            // A narrow window drops the keys from the end: the kill switch stays longer than
+            // the reload.
+            ("K", "kill switch"),
+            ("r", "reload"),
             ("q", "quit"),
         ],
     );
@@ -152,7 +156,17 @@ fn needs_bar(app: &App, c: &mut Canvas, y: i32) {
         r = c.right(r - 2, y, &format!("+{} more", needs.len() - 1), ink(T.warn));
     }
     let first = &needs[0];
-    let line = need_line(first);
+    // A flag that the mode shadow or hold set is the first write of a verb, not a rule.
+    let first_write = (first.kind == crate::snapshot::NeedKind::Flag)
+        .then(|| {
+            let key = first.ticket.as_deref()?;
+            app.held_ticket(key)?.facts.first_write.as_deref()
+        })
+        .flatten();
+    let line = match first_write {
+        Some(verb) => format!("the first write {verb} waits for your decision"),
+        None => need_line(first),
+    };
     let text = match &first.ticket {
         Some(ticket) => format!("{ticket} · {line}"),
         None => line,

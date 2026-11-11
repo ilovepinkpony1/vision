@@ -14,19 +14,27 @@
 //! threads ([`load`]), and each change of the state through the command of today as a child
 //! process of the same binary ([`worker`]).
 
+pub mod chain;
 pub mod feed;
 pub mod line;
 pub mod live;
 pub mod load;
+pub mod load_needs;
+pub mod load_screens;
 pub mod load_ticket;
 pub mod model;
+pub mod model_table;
 pub mod moments;
 pub mod msg;
+pub mod needs;
 pub mod now;
 pub mod pager;
 pub mod pages;
+pub mod picture;
+pub mod recipes;
 pub mod runtime;
 pub mod session;
+pub mod stats;
 pub mod stderr;
 pub mod tail;
 pub mod terminal;

@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭───────╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮───────╮
+ │ ▸ DEMO│                                                                                          │   38m │
+ │       │  Replaces the description of the ticket in the tracker.                                  │       │
+ │       │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │       │
+ │   DEMO│  The diff touches db/migrate/0042_orders.sql, which the approved plan does not name, so  │2h 10m │
+ │       │  it waits for your approval.                                                             │       │
+ ╰───────│                                                                                          │───────╯
+         │  What it sends                                                                           │
+  READY T│  ╭────────────────────────────────────────────────────────────────────────────────────╮  │n start
+ ╭───────│  │ text  Export the report of the month as a CSV file.                                │  │───────╮
+ │   DEMO│  │                                                                                    │  │ To Do │
+ │   DEMO│  │       The file keeps the order of the columns of the table.                        │  │equest │
+ ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
+         │                                                                                          │
+         │    y  Approve it. Vision sends it now.                                                   │
+         │                                                                                          │
+         │  y approve    esc later                                                                  │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

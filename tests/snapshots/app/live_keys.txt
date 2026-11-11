@@ -7,7 +7,7 @@
  ⠸ build            ╭─ Keys ─────────────────────────────────────────────────────────────╮its    none to push
  ○ review           │                                                                    │
  ○ ci               │  esc          back to Home                                         │TIONS
- ○ fix-ci           │  n            what waits for you                                   │ou                0
+ ○ fix-ci           │  n            answer what waits for this ticket                    │ou                0
  ○ ready            │  t            tell the agent something                             │emory             1
  ○ comments         │  o            open the session and type into it yourself           │he Judge          0
  ○ ci-review        │  l  p  d      the log, the plan, the commits to push               │

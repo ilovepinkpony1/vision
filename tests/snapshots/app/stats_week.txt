@@ -1,0 +1,32 @@
+ ◆ VISION ▸ stats  the last 7 days                          engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ╭───────────────────────╮ ╭───────────────────────╮ ╭───────────────────────╮ ╭───────────────────────╮
+  │ cost this week        │ │ tickets finished      │ │ answered without you  │ │ your minutes          │
+  │ $23.84                │ │ 2                     │ │ 11 of 14 · 79%        │ │ 18.5 min              │
+  ╰───────────────────────╯ ╰───────────────────────╯ ╰───────────────────────╯ ╰───────────────────────╯
+
+  TICKET     TO YOU   BY MEMORY   BY JUDGE   YOUR MIN   COST
+  DEMO-12    2        3           4          9.5        $12.40
+  DEMO-7     1        2           2          9.0        $11.44
+
+  BY STEP, ALL TICKETS
+  refine      ━━━━━━━━━───────────────────────────────────────────────────        9m     $1.10
+  plan        ━━━━━━━━━━━━━━━─────────────────────────────────────────────       15m     $3.20
+  build       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━        1h    $14.80
+  review      ━━━━━━━━━━━━━━━━━━━━────────────────────────────────────────       20m     $4.74
+
+
+
+
+
+
+
+
+  BY AGENT
+  ● scout $1.10    ● builder $18.00    ● reviewer $4.74
+  outside tickets, not in the cost above  ● curator $0.40
+  The measures come from the ledger. Vision keeps them from the first ticket.
+
+ w all time   esc home   ? keys
+

@@ -72,6 +72,17 @@ pub fn queue_action(app: &mut App, action: Action) -> (u64, bool) {
     (id, busy)
 }
 
+/// Puts an action of a chain into the queue, with no notice: its card shows the step. Gives
+/// its job id.
+pub fn queue_quiet(app: &mut App, action: Action) -> u64 {
+    let id = next_id(app);
+    app.engine.queue.push_back(Job {
+        id,
+        kind: JobKind::Action(action),
+    });
+    id
+}
+
 fn pass_waits_or_runs(app: &App) -> bool {
     app.engine.queue.iter().any(|j| j.kind == JobKind::Pass)
         || app
@@ -111,20 +122,22 @@ pub fn after_pass(app: &mut App) {
 }
 
 /// Hands the next job to the worker when it is free: an action first, then a pass unless the
-/// engine is paused.
+/// engine is paused. A chain that waits for a pass gets it while the engine is paused too, and
+/// while the check of a chain runs, no job starts.
 pub fn dispatch(app: &mut App, fx: &mut Vec<Effect>) {
-    if !app.engine.started || app.engine.running.is_some() {
+    if !app.engine.started || app.engine.running.is_some() || super::chain::holds(app) {
         return;
     }
+    let passes = !app.engine.paused || super::chain::wants_pass(app);
     let queue = &app.engine.queue;
     let at = queue
         .iter()
         .position(|j| matches!(j.kind, JobKind::Action(_)))
         .or_else(|| {
-            if app.engine.paused {
-                None
-            } else {
+            if passes {
                 queue.iter().position(|j| j.kind == JobKind::Pass)
+            } else {
+                None
             }
         });
     let Some(at) = at else {
@@ -138,6 +151,7 @@ pub fn dispatch(app: &mut App, fx: &mut Vec<Effect>) {
         app.engine.last_pass_start = Some(now);
         app.engine.before_pass = app.ticket_states().0;
         app.engine.pass_ended = false;
+        super::chain::pass_started(app, job.id);
     }
     if let Some(run) = card_run(app, job.id) {
         *run = Run::Running { job: job.id };
@@ -189,9 +203,15 @@ pub fn on_done(app: &mut App, done: JobDone, fx: &mut Vec<Effect>) {
         app.engine.running = None;
     }
     app.dirty = true;
+    let chain = super::chain::owns(app, done.id);
     match &done.kind {
         JobKind::Pass => pass_done(app, &done.result),
+        // The card of the chain shows the end of its action.
+        JobKind::Action(_) if chain => queue_pass(app),
         JobKind::Action(action) => action_done(app, action, done.id, &done.result, fx),
+    }
+    if chain {
+        super::chain::on_done(app, &done, fx);
     }
     // The local data loads again after each job of the worker.
     data::load_local(app, fx);
@@ -278,6 +298,13 @@ fn action_done(
             notice(app, text, Tone::Ok);
         }
         Action::Tell { key, .. } => super::tell::told(app, key, result),
+        // A chain runs these and shows their end on its card.
+        Action::Answer { .. }
+        | Action::ApprovePlan { .. }
+        | Action::Approve { .. }
+        | Action::Promote { .. }
+        | Action::ModelSet { .. }
+        | Action::ModelReset { .. } => {}
     }
     queue_pass(app);
 }

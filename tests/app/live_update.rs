@@ -170,7 +170,7 @@ fn the_data_loads_again_each_second_while_the_view_is_open() {
 }
 
 #[test]
-fn n_lists_the_needs_or_says_that_nothing_waits() {
+fn n_opens_the_card_of_the_needs_of_the_ticket_or_says_that_nothing_waits() {
     let mut app = working_live(SIZE);
     key(&mut app, 3.0, Key::Char('n'));
     assert_eq!(app.card, None);
@@ -183,7 +183,10 @@ fn n_lists_the_needs_or_says_that_nothing_waits() {
     );
     let mut app = live(SIZE, vec![held], vec![card_need("DEMO-12")], events());
     key(&mut app, 3.0, Key::Char('n'));
-    assert_eq!(app.card, Some(Card::Needs));
+    let Some(Card::Need(card)) = &app.card else {
+        panic!("no card of the needs: {:?}", app.card);
+    };
+    assert_eq!(card.scope.as_deref(), Some("DEMO-12"));
     key(&mut app, 3.1, Key::Esc);
     assert_eq!(app.card, None);
     assert!(matches!(app.screen, Screen::Live { .. }));

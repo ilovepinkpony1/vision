@@ -1,6 +1,7 @@
-//! `o` of the live view, after its card: the app gives the terminal to `vision open KEY`, which
-//! pauses the ticket and starts the interactive session of its last turn, waits for it, and
-//! takes the terminal again.
+//! A child that gets the terminal: `vision open KEY` after the open card of the live view, which
+//! pauses the ticket and starts the interactive session of its last turn, or `vision memory
+//! review --proposal NAME` after the card of a proposal of the Curator. The app gives the
+//! terminal to the child, waits for it, and takes the terminal again.
 //!
 //! Three things hold while the child owns the terminal:
 //!
@@ -29,8 +30,9 @@ use crate::paths::HOME_ENV;
 /// The longest wait for the thread of the keys to confirm its pause.
 pub const PAUSE_LIMIT: Duration = Duration::from_secs(3);
 
-/// Runs `vision open KEY` with the terminal, and gives the terminal back to the app.
-pub fn open(config: &WorkerConfig, key: &str, input: &InputControl) -> ChildResult {
+/// Runs the child with these arguments with the terminal, and gives the terminal back to the
+/// app.
+pub fn open(config: &WorkerConfig, args: &[String], input: &InputControl) -> ChildResult {
     if !input.pause(PAUSE_LIMIT) {
         input.resume();
         return ChildResult {
@@ -46,7 +48,7 @@ pub fn open(config: &WorkerConfig, key: &str, input: &InputControl) -> ChildResu
     let result = {
         let _sigint = terminal::ignore_sigint();
         let _stderr = stderr::lend();
-        run(config, key)
+        run(config, args)
     };
     // A child that crashed can leave the terminal in raw mode, with no echo, or with odd
     // attributes: the settings of before come back first.
@@ -74,9 +76,9 @@ pub fn open(config: &WorkerConfig, key: &str, input: &InputControl) -> ChildResu
 }
 
 /// The child with the terminal as its standard input and output.
-fn run(config: &WorkerConfig, key: &str) -> ChildResult {
+fn run(config: &WorkerConfig, args: &[String]) -> ChildResult {
     let mut command = Command::new(&config.exe);
-    command.args(["open", key]);
+    command.args(args);
     if let Some(env) = &config.env {
         command.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
     }
@@ -96,8 +98,9 @@ fn run(config: &WorkerConfig, key: &str) -> ChildResult {
         },
         Err(e) => ChildResult {
             error: Some(format!(
-                "could not start {} open {key}: {e}",
-                config.exe.display()
+                "could not start {} {}: {e}",
+                config.exe.display(),
+                args.join(" ")
             )),
             ..ChildResult::default()
         },

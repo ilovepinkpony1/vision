@@ -7,19 +7,19 @@
  ⠸ build               6:00│   ▀▀▀▀▀▀▀  ⠸ 6:00 · 5 tool calls                       │ commits    none to push
  ○ review                  │                                                        │
  ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
- ○ fix-ci                  │ 13:56:14 turn  the turn of scout ended: it gave its r… │ to you                0
- ○ ready         ╭─ The session of DEMO-12 ─────────────────────────────────────────────────╮ry             1
- ○ comments      │                                                                          │Judge          0
- ○ ci-review     │  builder works now.                                                      │
- ○ ready-to-merge│                                                                          │
- ○ done          │  Press t to send builder a message: it reads your text at its next       │       3f2a1b4 ✓
-                 │  tool step. The session itself opens here when no turn of the ticket     │               -
- TEAM            │  runs. Press x to stop the ticket and its turn.                          │               -
+ ○ fix-ci        ╭─ The session of DEMO-12 ─────────────────────────────────────────────────╮               0
+ ○ ready         │                                                                          │ry             1
+ ○ comments      │  builder works now.                                                      │Judge          0
+ ○ ci-review     │                                                                          │
+ ○ ready-to-merge│  Press t to send builder a message: it reads your text at its next       │
+ ○ done          │  tool step. Press o to stop the turn of builder and open its session     │       3f2a1b4 ✓
+                 │  here: the turn that runs ends and is lost, and its session keeps        │               -
+ TEAM            │  what the agent did so far. Press x to stop the ticket and its turn.     │               -
  ✓ scout     fabl│                                                                          │               -
  ● builder   opus│  t tell    x stop    esc close                                           │
- · reviewer  opus│                                                                          │
- · tester    opus╰──────────────────────────────────────────────────────────────────────────╯━━━━━━ 31% of 60
- · shepherd  opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I   │    resets at 18:00
+ · reviewer  opus│  o stop the turn of builder and open its session                         │
+ · tester    opus│                                                                          │━━━━━━ 31% of 60
+ · shepherd  opus╰──────────────────────────────────────────────────────────────────────────╯ts at 18:00
  · judge     fable-5-2 high│                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
  · curator   fable-5-2 high│                the columns that the plan names.        │
                            │ 14:24:35 edit  src/report/export.py                    │ ENGINE

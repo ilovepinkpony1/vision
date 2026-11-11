@@ -10,7 +10,8 @@
 //!   gives an [`OperationResult`] whose [`Outcome`] says what happened and whether the person is
 //!   needed ([`Outcome::needs_you`]). [`lookup`] reads the stored operation of a request without
 //!   running anything. [`reconcile`] asks `act` again about each `executing` or `uncertain`
-//!   operation. [`approve`] runs an operation that waits for the person.
+//!   operation. [`approve`] runs an operation that waits for the person, and [`waiting`] gives
+//!   each such operation as data.
 //! - Modes: [`mode_of`] gives the mode of a verb, and [`change_mode`] moves it on the ladder.
 //! - Jobs and reads: [`job`] runs a job and stores its checks and its documents, and
 //!   [`job_passed`] says whether a job passed at a commit. [`read`] serves a read verb that a
@@ -49,7 +50,7 @@ pub use observe::{observe_queue, observe_ticket, CiFacts, PrFacts, QueueTicket, 
 pub use ops::{
     approve, approve_command, args_hash, change_mode, commit_arg, demoted, idempotency_key, lookup,
     mode_of, once_key, operation, operations_of, promoted, reconcile, release_failed, request,
-    OpState, OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
+    waiting, OpState, OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
 };
 pub use scripts::{Answer, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT, PASSED_ENV};
 
@@ -57,9 +58,12 @@ pub use scripts::{Answer, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT,
 pub fn run(ctx: &Ctx, command: ExecutorCommand) -> Result<()> {
     ctx.require_setup()?;
     match command {
-        ExecutorCommand::Approve { key, verb, commit } => {
-            commands::approve(ctx, &key, &verb, &commit)
-        }
+        ExecutorCommand::Approve {
+            key,
+            verb,
+            commit,
+            op,
+        } => commands::approve(ctx, &key, &verb, &commit, op.as_deref()),
         ExecutorCommand::Promote { verb } => commands::ladder(ctx, &verb, true),
         ExecutorCommand::Demote { verb } => commands::ladder(ctx, &verb, false),
     }

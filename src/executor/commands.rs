@@ -15,13 +15,19 @@ use crate::paths::TicketKey;
 /// How long `vision approve` waits for a running tick to release the lock.
 const LOCK_WAIT: Duration = Duration::from_secs(30);
 
-/// `vision approve`: runs the operations that wait at that commit, under the lock of the tick,
-/// and prints one line for each. A refused gate exits with code 2, and a failed or uncertain
+/// `vision approve`: runs the operations that wait at that commit, or only the operation of
+/// `--op`, under the lock of the tick, and prints one line for each. A refused gate exits with code 2, and a failed or uncertain
 /// operation with code 1.
-pub fn approve(ctx: &Ctx, key: &TicketKey, verb: &str, commit: &str) -> Result<()> {
+pub fn approve(
+    ctx: &Ctx,
+    key: &TicketKey,
+    verb: &str,
+    commit: &str,
+    only: Option<&str>,
+) -> Result<()> {
     let _lock = wait_for_lock(ctx)?;
     let ledger = ctx.ledger()?;
-    let results = ops::approve(ctx, &ledger, key, verb, commit)?;
+    let results = ops::approve(ctx, &ledger, key, verb, commit, only)?;
     let mut refused = None;
     let mut failed = 0;
     for result in &results {

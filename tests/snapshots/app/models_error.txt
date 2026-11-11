@@ -1,0 +1,32 @@
+ ◆ VISION ▸ models                                          engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Each agent keeps its model until you change it. A change holds for the next turn of the agent, not for a
+  turn that runs now.
+    The model table did not load: the configuration is not valid TOML
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ↑↓ agent   ←→ model   e effort   enter pin   u back to the default   esc home   ? keys
+

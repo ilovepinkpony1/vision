@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+         ╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮
+  IN PROG│                                                                                          │is open
+ ╭───────│  The write tracker.describe that waits now is not the one that the card showed: its      │───────╮
+ │ ▸ DEMO│  commit or its text changed. Vision did not approve it. Read it, then decide again.      │   38m │
+ │       │                                                                                          │       │
+ │       │  Replaces the description of the ticket in the tracker.                                  │       │
+ │   DEMO│  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │2h 10m │
+ │       │  The verb tracker.describe is in the mode ask, so it waits for your approval.            │       │
+ ╰───────│                                                                                          │───────╯
+         │  What it sends                                                                           │
+  READY T│  ╭────────────────────────────────────────────────────────────────────────────────────╮  │n start
+ ╭───────│  │ text  Another text.                                                                │  │───────╮
+ │   DEMO│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │ To Do │
+ │   DEMO│                                                                                          │equest │
+ ╰───────│    y  Approve it. Vision sends it now.                                                   │───────╯
+         │    a  Approve it, and move tracker.describe to the mode auto, so that Vision never asks  │
+         │       again for tracker.describe.                                                        │
+         │                                                                                          │
+         │  In the mode auto: Vision never asks again for tracker.describe, except for a diff that  │
+         │  touches a sensitive path that the approved plan does not name.                          │
+         │                                                                                          │
+         │  y approve    a approve, then auto    esc later                                          │
+         │                                                                                          │
+  THIS WE╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

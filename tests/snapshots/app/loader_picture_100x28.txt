@@ -1,0 +1,28 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                          V  I  S  I  O  N
+                       from a ticket to a pull request that is ready to merge
+
+                             ✓ home folder   ~/.vision · adapter demo · 12 steps
+                             ⠦ ledger        reads the tickets, the turns, and the needs
+                             ⠦ tracker       asks the tracker for your queue
+                             · engine
+
+                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  1 of 4
+
+                                           any key skips

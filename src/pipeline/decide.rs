@@ -454,6 +454,11 @@ fn ops_next(list: List, entries: &[(String, OpFact)]) -> Option<Next> {
                 Outcome::Waiting { command } => {
                     Next::Nothing(format!("{label} waits for the approval: {command}"))
                 }
+                // The detail of the executor already names the entry and its mode: the reason
+                // does not say it two times.
+                Outcome::Held | Outcome::Shadowed if d.starts_with(label.as_str()) => {
+                    flag(d.clone())
+                }
                 Outcome::Held => flag(format!("{label} is held{}", detail(d))),
                 Outcome::Shadowed => flag(format!("{label} is in the mode shadow{}", detail(d))),
                 Outcome::Refused { gate } => flag(format!(

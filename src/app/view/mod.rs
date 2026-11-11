@@ -3,21 +3,30 @@
 //! design draw on its grid: the loader, Home, and the live view of a ticket with its pagers,
 //! then a card over the screen, then the notice at the bottom.
 //!
-//! Part A3 adds a screen as one more variant of [`Screen`] and one more module here, and a card
-//! as one more variant of [`super::model::Card`] and one more function in [`cards`]: the
-//! header, the footer of keys, the notice, the cards, and the size message stay.
+//! Models and Stats are screens of their own. The card of the things that wait has a frame
+//! ([`need_card`]) and one module for each kind of item: the question, the writes, and the
+//! others. The loader shows the picture of `loader.ans` in place of the android when the home
+//! folder has one.
 
 pub mod android;
+mod ask_card;
 mod boot;
 pub mod canvas;
 mod cards;
+mod chain_rows;
 pub mod face;
 pub mod header;
 pub mod home;
 pub mod live;
 mod live_cards;
+pub mod models;
+pub mod need_card;
+mod other_cards;
 pub mod pager;
+pub mod picture;
+pub mod stats;
 pub mod theme;
+mod write_card;
 
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
@@ -44,6 +53,8 @@ pub fn render(app: &App, buf: &mut Buffer) {
                 Screen::Boot => boot::draw(app, &mut c),
                 Screen::Home => home::draw(app, &mut c),
                 Screen::Live { key } => live::draw(app, &mut c, key),
+                Screen::Models => models::draw(app, &mut c),
+                Screen::Stats => stats::draw(app, &mut c),
             }
             if let Some(card) = &app.card {
                 cards::draw(app, card, &mut c);

@@ -62,6 +62,9 @@ pub struct StateFacts {
     /// The agents that did a turn for the ticket, the Judge too, in the order of their first
     /// turn.
     pub agents: Vec<String>,
+    /// The verb of an entry of the step that the mode shadow or hold kept from running: its
+    /// first write waits for the decision of the person.
+    pub first_write: Option<String>,
 }
 
 /// A turn that runs now.
@@ -304,11 +307,100 @@ fn facts_of(
         if let Some(adapter) = adapter {
             facts.entry = entry_fact(ctx, ledger, ticket, &visit, adapter, &visit_rows)?;
         }
+        facts.first_write = match &facts.entry {
+            Some(EntryFact {
+                label,
+                state: EntryState::Other(text),
+                ..
+            }) if kept_back(text) => Some(label.clone()),
+            _ => None,
+        };
     }
     if visit.kind == "wait" {
         facts.wait = Some(wait_facts(ledger, ticket, &visit, adapter)?);
+        if let Some(step) = adapter.and_then(|a| a.step(&visit.step)) {
+            facts.first_write = op_facts(ctx, ledger, ticket, &step.start, None)?
+                .into_iter()
+                .find(|(_, fact)| {
+                    matches!(fact, OpFact::Known { outcome, .. } if kept_back(&outcome.to_string()))
+                })
+                .map(|(label, _)| label);
+        }
     }
     Ok(facts)
+}
+
+/// True for the outcome of an operation that the mode shadow or hold kept from running.
+fn kept_back(outcome: &str) -> bool {
+    outcome == Outcome::Shadowed.name() || outcome == Outcome::Held.name()
+}
+
+/// The operations of the step of a ticket that the mode shadow or hold kept from running, as
+/// the next pass would ask for them again: each verb entry of the visit of now (the `before`
+/// entries before its first turn, the `after` entries after a turn that held, or the `start`
+/// entries of a wait step) whose stored operation at the commit of now is pending in one of
+/// these modes. The app shows each one on the card of a first write.
+pub fn open_writes(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &str,
+) -> Result<Vec<executor::OperationResult>> {
+    let Some(row) = ledger.ticket(key)? else {
+        return Ok(Vec::new());
+    };
+    let Ok(ticket) = Ticket::of(row) else {
+        return Ok(Vec::new());
+    };
+    let adapter = crate::adapter::load(ctx)?;
+    let visit = ticket.visit();
+    let Some(step) = adapter.step(&visit.step) else {
+        return Ok(Vec::new());
+    };
+    let mut entries: Vec<(&crate::adapter::Entry, Option<String>)> = Vec::new();
+    match &step.kind {
+        StepKind::Turn(_) => {
+            let rows = visit_turns(ledger, &ticket.key, &visit.step, visit.turns)?;
+            match rows.last() {
+                Some(last) => {
+                    let held = last.status.as_deref() == Some(TurnStatus::Done.as_str())
+                        && last.end_fact.as_deref() == Some("held");
+                    if held {
+                        entries.extend(step.after.iter().map(|e| (e, Some(last.id.clone()))));
+                    }
+                }
+                None => entries.extend(
+                    step.before
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, e)| !visit.before_is_done(*i, &e.label()))
+                        .map(|(_, e)| (e, None)),
+                ),
+            }
+        }
+        StepKind::Wait(_) => entries.extend(step.start.iter().map(|e| (e, None))),
+        _ => {}
+    }
+    let mut out = Vec::new();
+    for (entry, turn) in entries {
+        if entry.kind != EntryKind::Verb {
+            continue;
+        }
+        let Ok(args) = super::machine::entry_args(ctx, &ticket.key, entry) else {
+            continue;
+        };
+        let run = crate::tick::OperationRun {
+            ticket: ticket.key.clone(),
+            verb: entry.name.clone(),
+            args,
+            turn,
+        };
+        if let Some(op) = executor::lookup(ctx, ledger, &run)? {
+            if op.state == executor::OpState::Pending && kept_back(op.outcome.name()) {
+                out.push(op);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The first entry of the step that is not done: an `after` entry after a turn that held its

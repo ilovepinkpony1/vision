@@ -1,0 +1,32 @@
+ ◆ VISION ▸ models                                          engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Each agent keeps its model until you change it. A change holds for the next turn of the agent, not for a
+  turn that runs now.
+    AGENT        MODEL                  EFFORT  SOURCE                                              MEASURED
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+    scout        claude-fable-5-2       high    default                               9 turns · $0.12 a turn
+                 A wrong reading of the ticket costs the full build.
+  ▸ builder    ‹ cla╭─ Keys ─────────────────────────────────────────────────────────────╮rns · $0.41 a turn
+                 The│                                                                    │st tokens.
+    reviewer     cla│  ↑↓  j k      select an agent                                      │       no turn yet
+                 The│  ←→           change its model                                     │
+    tester       cla│  e            change its effort                                    │       no turn yet
+                 A f│  enter        pin the values that show                             │
+    shepherd     cla│  u            go back to the default of Vision                     │       no turn yet
+                 It │  esc          drop the changes that are not pinned, then go home   │
+    judge        cla│  ?            this list of keys                                    │       no turn yet
+                 It │  q            quit                                                 │
+    curator      cla│                                                                    │       no turn yet
+                 It │  esc closes this list                                              │
+                    │                                                                    │
+                    ╰────────────────────────────────────────────────────────────────────╯
+
+
+  ╭─ recommendation for builder ───────────────────────────────────────────────────────────────────────────╮
+  │  ✗ go back to the default for builder                                                                  │
+  │  the command failed in the test                                                                        │
+  │  Now  builder keeps its model.                                                                         │
+  ╰────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ↑↓ agent   ←→ model   e effort   enter pin   u back to the default   esc home   ? keys
+

@@ -205,6 +205,10 @@ fn the_live_view_follows_a_running_turn_and_tells_it_something() {
         "no turn started: {:?}",
         rt.app.held_ticket(KEY).map(|h| &h.view.now)
     );
+    // The engine of the app pauses, so that only the ticks of the test move the ticket on.
+    // Its quick passes would otherwise run the plan step before the test sees it.
+    rt.handle(Msg::Key(Key::Char('p')));
+    assert!(rt.app.engine.paused);
     while rt.app.home.selected.as_deref() != Some(KEY) {
         let before = rt.app.home.selected.clone();
         rt.handle(Msg::Key(Key::Down));
@@ -258,13 +262,8 @@ fn the_live_view_follows_a_running_turn_and_tells_it_something() {
         "the feed never showed the answer of the turn"
     );
 
-    // The turn ends. The engine of the app collects it; the ticks of the test move the ticket
-    // on at once, where the engine would wait for its next pass. The view sees each change.
-    assert!(
-        rt.run_until(LIMIT, |app| live_data(app)
-            .is_some_and(|d| d.facts.work.is_none())),
-        "the turn never ended"
-    );
+    // The turn ends. The ticks of the test collect it and move the ticket on, and the view
+    // sees each change.
     world.tick_to("plan");
     assert!(
         rt.run_until(LIMIT, |app| live_data(app).is_some_and(|d| d
@@ -274,6 +273,11 @@ fn the_live_view_follows_a_running_turn_and_tells_it_something() {
             == Some("plan"))),
         "the view did not see the step plan: {:?}",
         live_data(&rt.app).map(|d| &d.view.now)
+    );
+    assert!(
+        rt.run_until(LIMIT, |app| live_data(app)
+            .is_some_and(|d| d.facts.work.is_none())),
+        "the turn never ended"
     );
     assert!(
         rt.run_until(LIMIT, |app| feed_has(app, "the turn of scout ended")),

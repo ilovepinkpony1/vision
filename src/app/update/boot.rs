@@ -1,10 +1,11 @@
 //! The loader in the update: its four stages, and when it leaves for Home.
 //!
-//! The home folder loads first. When it is set up, the ledger and the queue of the tracker load
-//! at the same time. When the ledger stage settles, the engine starts and its first pass goes
-//! into the queue. The loader leaves when the android has appeared and the stages have settled,
-//! when the person presses a key, or when the tracker took more than 10 seconds: the queue then
-//! still loads, and Home shows it when it arrives.
+//! The home folder and the picture of the loader load first. When the home folder is set up,
+//! the ledger and the queue of the tracker load at the same time. When the ledger stage
+//! settles, the engine starts and its first pass goes into the queue. The loader leaves when
+//! the android has appeared and the stages have settled, when the person presses a key, or
+//! when the tracker took more than 10 seconds: the queue then still loads, and Home shows it
+//! when it arrives.
 
 use std::time::Duration;
 
@@ -22,7 +23,12 @@ pub const TRACKER_LIMIT: Duration = Duration::from_secs(10);
 
 pub fn start(app: &mut App) -> Vec<Effect> {
     run_stage(app, STAGE_HOME);
-    vec![Effect::LoadSetup]
+    // With no color, the loader shows no picture, so the file is not read.
+    if app.colors == crate::app::view::theme::ColorMode::Plain {
+        app.picture = Some(None);
+        return vec![Effect::LoadSetup];
+    }
+    vec![Effect::LoadSetup, Effect::LoadPicture]
 }
 
 pub fn run_stage(app: &mut App, stage: usize) {

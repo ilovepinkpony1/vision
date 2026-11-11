@@ -168,7 +168,7 @@ fn cases() -> Vec<Case> {
         title: "the plan waits for you",
         lines: &[
             "Read the plan, then approve it, so that the build can start.",
-            "Press p to read it.",
+            "Press n to read it and approve it.",
         ],
         ..case("the plan waits", v, f)
     });
@@ -205,6 +205,24 @@ fn cases() -> Vec<Case> {
             "Fix the cause, then press r to start the step build again.",
         ],
         ..case("a rule stopped it", v, f)
+    });
+
+    let (mut v, mut f) = base("turn", "describe");
+    v.flags.push(flag(
+        "needs-you",
+        "tracker.describe is in the mode shadow: nothing was sent",
+    ));
+    f.first_write = Some("tracker.describe".into());
+    out.push(Case {
+        kind: Kind::Needs,
+        tone: Tone::Need,
+        short: "needs you: the first write tracker.describe",
+        title: "the first write tracker.describe waits for you",
+        lines: &[
+            "The mode of tracker.describe kept it back, so nothing was sent.",
+            "Press n to read the write, and decide.",
+        ],
+        ..case("the first write waits", v, f)
     });
 
     let (mut v, f) = base("turn", "build");
@@ -440,6 +458,47 @@ fn cases() -> Vec<Case> {
             "No agent works, so this costs nothing.",
         ],
         ..case("a write that waits is not ready", v, f)
+    });
+
+    // The mode shadow kept the write back, and no pass set the flag yet: the next pass does.
+    let (v, mut f) = base("turn", "refine");
+    f.agent = Some("scout".into());
+    f.held = true;
+    f.entry = Some(EntryFact {
+        label: "tracker.describe".into(),
+        before: false,
+        state: EntryState::Other("shadowed".into()),
+    });
+    out.push(Case {
+        kind: Kind::Next,
+        tone: Tone::Wait,
+        short: "the write tracker.describe is shadowed",
+        title: "the write tracker.describe is shadowed",
+        lines: &[
+            "The next pass starts within a minute.",
+            "No agent works, so this costs nothing.",
+        ],
+        ready: true,
+        ..case("a write that a mode kept back is ready for its flag", v, f)
+    });
+
+    // The last turn asked questions, and no turn of the Judge runs: its work is not tested yet.
+    let (v, mut f) = base("turn", "refine");
+    f.agent = Some("scout".into());
+    f.agents = vec!["scout".into()];
+    f.testing = true;
+    f.open_cards = 1;
+    out.push(Case {
+        kind: Kind::Next,
+        tone: Tone::Wait,
+        short: "the next pass goes on with the questions for the Judge",
+        title: "the next pass goes on with the questions for the Judge",
+        lines: &[
+            "The next pass starts within a minute.",
+            "No agent works, so this costs nothing.",
+        ],
+        ready: true,
+        ..case("a turn that asked questions is not tested yet", v, f)
     });
 
     let (mut v, mut f) = base("turn", "build");

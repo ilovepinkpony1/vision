@@ -429,16 +429,27 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
 
 /// The stored operation of this request at the last commit of the ticket, if any. It runs
 /// nothing.
+///
+/// A pending operation that the mode hold or shadow kept back counts as plain pending once its
+/// verb is in another mode, such as after `vision promote`: the caller then requests it again,
+/// and [`request`] judges it from the start in the mode of now.
 pub fn lookup(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Option<OperationResult>> {
     let adapter = adapter::load(ctx)?;
     let verb = adapter.verb(&op.verb)?.clone();
     let args = object_args(&op.args)?;
     let ticket = TicketContext::load(ledger, &adapter, &op.ticket)?;
     let idem = key_of(op.ticket.as_str(), &verb, &ticket.head_text(), &args);
-    ledger
-        .operation_by_idem(&idem)?
-        .map(|row| result_of(&row))
-        .transpose()
+    let Some(row) = ledger.operation_by_idem(&idem)? else {
+        return Ok(None);
+    };
+    let mut result = result_of(&row)?;
+    if matches!(result.outcome, Outcome::Held | Outcome::Shadowed) {
+        let now = mode_of(ctx.config()?, &adapter, &op.verb)?;
+        if now.as_str() != row.mode {
+            result.outcome = Outcome::Pending;
+        }
+    }
+    Ok(Some(result))
 }
 
 /// One operation by its id.
@@ -459,12 +470,18 @@ pub fn operations_of(ledger: &Ledger, ticket: &TicketKey) -> Result<Vec<Operatio
 /// at that commit, if the ticket is still at that commit. The secrets and the size gates run
 /// again; the approval covers the sensitive paths. A stale commit is an error that tells what
 /// changed. The caller holds the lock of the tick.
+///
+/// With `only` (`--op ID`), the approval is for that one operation: no other operation runs,
+/// and an operation that no longer waits at that commit is an error that sends nothing. The app
+/// names the operation of its card in this way, so that a write that changed after the card
+/// showed it never runs on that approval.
 pub fn approve(
     ctx: &Ctx,
     ledger: &Ledger,
     key: &TicketKey,
     verb_name: &str,
     commit: &str,
+    only: Option<&str>,
 ) -> Result<Vec<OperationResult>> {
     let config = ctx.config()?;
     let adapter = adapter::load_with(config, &ctx.paths)?;
@@ -488,10 +505,24 @@ pub fn approve(
             "nothing of {verb_name} waits for your approval on {key}. `vision needs` lists what waits"
         );
     }
-    let matching: Vec<&OperationRow> = waiting
+    let mut matching: Vec<&OperationRow> = waiting
         .iter()
         .filter(|row| commit_matches(&call_of(row).head, commit))
         .collect();
+    if let Some(id) = only {
+        let at_commit = matching.len();
+        matching.retain(|row| row.id == id);
+        if matching.is_empty() {
+            bail!(
+                "the operation {id} of {verb_name} does not wait for your approval on {key} at the commit {commit}, so nothing was sent. {}. Run `vision needs` to see what waits now",
+                if at_commit == 0 {
+                    format!("No {verb_name} waits at that commit")
+                } else {
+                    format!("{at_commit} other operation(s) of {verb_name} wait at that commit: the write changed")
+                }
+            );
+        }
+    }
     if matching.is_empty() {
         let heads: Vec<String> = waiting
             .iter()
@@ -707,6 +738,17 @@ pub fn release_failed(ledger: &Ledger, key: &TicketKey) -> Result<usize> {
          WHERE ticket = ?1 AND state = ?2 AND idem IS NOT NULL AND idem NOT LIKE '%:' || id",
         rusqlite::params![key.as_str(), STATE_FAILED],
     )?)
+}
+
+/// The operations that wait for `vision approve`, oldest first, as data: the mode ask, and the
+/// diffs held for a sensitive path. These are the operations of [`needs`].
+pub fn waiting(ledger: &Ledger) -> Result<Vec<OperationResult>> {
+    ledger
+        .operations_in_states(&[STATE_PENDING])?
+        .iter()
+        .filter(|row| waits_for_person(row))
+        .map(result_of)
+        .collect()
 }
 
 /// The operations that wait for `vision approve`: the mode ask, and the diffs held for a

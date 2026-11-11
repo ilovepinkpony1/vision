@@ -34,12 +34,16 @@ pub fn load_queue(app: &mut App, fx: &mut Vec<Effect>) {
 
 pub fn on_local(app: &mut App, result: Result<Local, String>, fx: &mut Vec<Effect>) {
     let before: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();
+    let needs_before = app.needs().to_vec();
     let working: Vec<String> = app
         .held()
         .iter()
         .filter(|h| h.view.works.is_some())
         .map(|h| h.view.key.clone())
         .collect();
+    // The turns that ran at the last load: the work turns, and the turns of the Judge and the
+    // Curator, which no ticket shows as its work.
+    let turns_before = app.local.data.as_ref().map_or(0, |l| l.turns);
     app.local.since = None;
     app.local.at = Some(app.clock.elapsed);
     match result {
@@ -62,15 +66,19 @@ pub fn on_local(app: &mut App, result: Result<Local, String>, fx: &mut Vec<Effec
                 }
             );
             // A turn that ran before and runs no more: a pass collects it now.
-            let ended = working.iter().any(|key| {
-                local
-                    .tickets
-                    .iter()
-                    .find(|h| &h.view.key == key)
-                    .is_none_or(|h| h.view.works.is_none())
-            });
+            let ended = local.turns < turns_before
+                || working.iter().any(|key| {
+                    local
+                        .tickets
+                        .iter()
+                        .find(|h| &h.view.key == key)
+                        .is_none_or(|h| h.view.works.is_none())
+                });
             app.local.data = Some(local);
             app.local.error = None;
+            if app.needs() != needs_before.as_slice() {
+                super::needs::on_local_changed(app, fx);
+            }
             boot::settle(app, STAGE_LEDGER, StageState::Done(text));
             if ended {
                 engine::queue_pass(app);

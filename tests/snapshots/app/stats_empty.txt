@@ -1,0 +1,32 @@
+ ◆ VISION ▸ stats  all time                                 engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ╭───────────────────────╮ ╭───────────────────────╮ ╭───────────────────────╮ ╭───────────────────────╮
+  │ cost of all time      │ │ tickets finished      │ │ answered without you  │ │ your minutes          │
+  │ $0.00                 │ │ 0                     │ │ no question yet       │ │ 0.0 min               │
+  ╰───────────────────────╯ ╰───────────────────────╯ ╰───────────────────────╯ ╰───────────────────────╯
+
+  No ticket has measures so far.
+
+  BY STEP, ALL TICKETS
+  No step has measures yet.
+
+
+
+
+
+
+
+
+
+
+
+
+
+  BY AGENT
+  No turn cost anything yet.
+
+  The measures come from the ledger. Vision keeps them from the first ticket.
+
+ w the last 7 days   esc home   ? keys
+

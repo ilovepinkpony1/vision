@@ -18,13 +18,13 @@ use ratatui::Terminal;
 use time::OffsetDateTime;
 
 use super::model::{App, Clock};
-use super::msg::{ChildResult, Effect, Job, JobDone, Msg};
+use super::msg::{ChildResult, Effect, Handoff, Job, JobDone, Msg};
 use super::session;
 use super::tail::{self, Follow};
 use super::terminal::InputControl;
 use super::view::theme::ColorMode;
 use super::worker::{self, WorkerConfig};
-use super::{load, load_ticket, update, view};
+use super::{load, load_needs, load_screens, load_ticket, picture, update, view};
 use crate::paths::Paths;
 
 /// The wait for a message while a part of the screen moves.
@@ -43,8 +43,8 @@ pub struct Runtime {
     started: Instant,
     /// The reader of the stream files of the ticket of the live view.
     follow: Option<Follow>,
-    /// The sessions that wait for the terminal: only [`run_terminal`] can give it.
-    opens: Vec<String>,
+    /// The children that wait for the terminal: only [`run_terminal`] can give it.
+    opens: Vec<Handoff>,
 }
 
 /// How the loop ended.
@@ -83,8 +83,8 @@ impl Runtime {
         self.follow.as_ref().map(|f| f.key.as_str())
     }
 
-    /// The next session that waits for the terminal.
-    pub fn take_open(&mut self) -> Option<String> {
+    /// The next child that waits for the terminal.
+    pub fn take_open(&mut self) -> Option<Handoff> {
         if self.opens.is_empty() {
             None
         } else {
@@ -244,7 +244,62 @@ impl Runtime {
                         },
                     );
                 }
-                Effect::OpenSession(key) => self.opens.push(key),
+                Effect::OpenSession(key) => self.opens.push(Handoff::Session(key)),
+                Effect::OpenReview(name) => self.opens.push(Handoff::Review(name)),
+                Effect::LoadNeeds(load) => {
+                    let paths = self.paths.clone();
+                    self.spawn(
+                        move || Msg::Needs {
+                            load,
+                            items: Box::new(load_needs::needs(&paths)),
+                        },
+                        move |e| Msg::Needs {
+                            load,
+                            items: Box::new(Err(e)),
+                        },
+                    );
+                }
+                Effect::LoadCheck { chain, check } => {
+                    let paths = self.paths.clone();
+                    self.spawn(
+                        move || Msg::Checked {
+                            chain,
+                            facts: Box::new(load_needs::check_facts(&paths, &check)),
+                        },
+                        move |e| Msg::Checked {
+                            chain,
+                            facts: Box::new(Err(e)),
+                        },
+                    );
+                }
+                Effect::LoadModels => {
+                    let paths = self.paths.clone();
+                    self.spawn(
+                        move || Msg::Models(Box::new(load_screens::models(&paths))),
+                        |e| Msg::Models(Box::new(Err(e))),
+                    );
+                }
+                Effect::LoadStats { week } => {
+                    let paths = self.paths.clone();
+                    let wall = self.app.clock.wall;
+                    self.spawn(
+                        move || Msg::Stats {
+                            week,
+                            data: Box::new(load_screens::stats(&paths, week, wall)),
+                        },
+                        move |e| Msg::Stats {
+                            week,
+                            data: Box::new(Err(e)),
+                        },
+                    );
+                }
+                Effect::LoadPicture => {
+                    let home = self.paths.home().to_path_buf();
+                    self.spawn(
+                        move || Msg::Picture(Box::new(picture::read(&home))),
+                        |_| Msg::Picture(Box::new(None)),
+                    );
+                }
                 Effect::StartWorker => {
                     if self.jobs.is_none() {
                         self.jobs = worker::spawn(self.worker.clone(), self.tx.clone()).ok();
@@ -353,14 +408,17 @@ pub fn run_terminal(
         if rt.app.quit {
             return Ok(Exit::Normal);
         }
-        while let Some(key) = rt.take_open() {
-            let result = session::open(rt.worker(), &key, input);
+        while let Some(handoff) = rt.take_open() {
+            let result = session::open(rt.worker(), &handoff.args(), input);
             // The child drew on the terminal: the next draw writes each cell again.
             let (width, height) = redraw_all(terminal)?;
             if (width, height) != rt.app.size {
                 rt.handle(Msg::Resize { width, height });
             }
-            rt.handle(Msg::SessionEnded { key, result });
+            rt.handle(match handoff {
+                Handoff::Session(key) => Msg::SessionEnded { key, result },
+                Handoff::Review(proposal) => Msg::ReviewEnded { proposal, result },
+            });
         }
         // The clock of the header shows minutes; the live view also shows seconds.
         let (hour, minute) = rt.app.clock.local_hm();

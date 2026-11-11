@@ -3,6 +3,7 @@
 
 use vision::app::model::{App, Card, SetupError};
 use vision::app::msg::{ChildResult, Effect, JobDone, JobKind, Key, Msg};
+use vision::app::needs::NeedItem;
 
 use super::support::*;
 
@@ -317,11 +318,31 @@ fn the_kill_switch_card() {
     check("kill_off", &app);
 }
 
+/// `n` opens the first thing that waits as its own card, with "1 of 2" in its title.
 #[test]
 fn the_needs_card() {
     let needs = vec![card_need("DEMO-12"), plan_need("DEMO-20")];
     let mut app = home_with(SIZE, local(two_tickets(), needs), Some(queue()));
-    send(&mut app, 2.0, Msg::Key(Key::Char('n')));
+    let fx = send(&mut app, 2.0, Msg::Key(Key::Char('n')));
+    let Some(Effect::LoadNeeds(load)) = fx.first() else {
+        panic!("no load: {fx:?}");
+    };
+    let NeedItem::Plan(mut plan) = super::need_support::plan_item(false) else {
+        unreachable!()
+    };
+    plan.ticket = "DEMO-20".into();
+    let items = vec![
+        NeedItem::Question(super::need_support::question(true)),
+        NeedItem::Plan(plan),
+    ];
+    send(
+        &mut app,
+        2.1,
+        Msg::Needs {
+            load: *load,
+            items: Box::new(Ok(items)),
+        },
+    );
     check("needs", &app);
 }
 

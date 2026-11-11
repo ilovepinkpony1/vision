@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │       ╭─ a proposal of the Curator · P-0003 ─────────────────────────────────────────────────────╮       │
+ │       │                                                                                          │       │
+ │   DEMO│  The Curator proposes 2 changes to the memory.                                           │2h 10m │
+ │       │                                                                                          │       │
+ ╰───────│  Two answers of the person say the same thing as D-0004. The Curator merges them.        │───────╯
+         │                                                                                          │
+  READY T│  Its replays still run, so the review shows their numbers when they end. You can review  │n start
+ ╭───────│  the changes now.                                                                        │───────╮
+ │   DEMO│                                                                                          │ To Do │
+ │   DEMO│  Enter opens the review in this terminal. You accept or reject each change there, and    │equest │
+ ╰───────│  Vision comes back here when you leave it.                                               │───────╯
+         │                                                                                          │
+         │  enter review    esc later                                                               │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

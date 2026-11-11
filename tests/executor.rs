@@ -255,6 +255,55 @@ fn shadow_and_hold_call_nothing_and_a_promotion_lets_the_same_operation_run() {
 }
 
 #[test]
+fn approve_with_an_operation_id_runs_only_that_operation() {
+    let demo = Demo::new();
+    let ctx = demo.ctx();
+    let head = demo.commit_subtract();
+    demo.set_mode("git.push", "ask");
+    let ledger = demo.ledger();
+    // Two writes of one verb wait at one commit: other arguments are another operation.
+    let plain = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    let forced = executor::request(&ctx, &ledger, &op("git.push", json!({"force": true}))).unwrap();
+    assert_ne!(plain.id, forced.id);
+    assert!(matches!(plain.outcome, Outcome::Waiting { .. }));
+    assert!(matches!(forced.outcome, Outcome::Waiting { .. }));
+
+    // An id that does not wait sends nothing, also while other writes wait there.
+    let unknown = demo.run(&["approve", KEY, "git.push", &head, "--op", "no-such-id"]);
+    unknown.expect_code(1);
+    assert!(
+        unknown.stderr.contains("does not wait for your approval")
+            && unknown.stderr.contains("nothing was sent")
+            && unknown.stderr.contains("2 other operation(s)"),
+        "{unknown:?}"
+    );
+    assert_eq!(demo.acts_of("git.push"), 0);
+
+    // The id of one of them runs that one, and the other one still waits.
+    let run = demo.run(&["approve", KEY, "git.push", &head, "--op", &plain.id]);
+    run.expect_code(0);
+    assert_eq!(demo.acts_of("git.push"), 1);
+    let done = executor::operation(&ledger, &plain.id).unwrap().unwrap();
+    assert_eq!(done.outcome, Outcome::Confirmed);
+    let other = executor::operation(&ledger, &forced.id).unwrap().unwrap();
+    assert!(
+        matches!(other.outcome, Outcome::Waiting { .. }),
+        "{other:?}"
+    );
+    assert_eq!(ledger.human_rows(&plain.id).unwrap().len(), 1);
+    assert!(ledger.human_rows(&forced.id).unwrap().is_empty());
+
+    // The same id a second time: it no longer waits, so nothing runs.
+    let again = demo.run(&["approve", KEY, "git.push", &head, "--op", &plain.id]);
+    again.expect_code(1);
+    assert!(
+        again.stderr.contains("1 other operation(s)") && again.stderr.contains("the write changed"),
+        "{again:?}"
+    );
+    assert_eq!(demo.acts_of("git.push"), 1);
+}
+
+#[test]
 fn approve_refuses_a_verb_in_the_mode_hold_or_shadow_and_unknown_verbs() {
     let demo = Demo::new();
     let head = demo.commit_subtract();
@@ -945,7 +994,7 @@ fn a_verb_with_once_runs_one_time_for_a_ticket_at_the_commit_of_its_first_reques
     assert_eq!(needs.len(), 1);
     assert_eq!(needs[0].id, format!("x.move {first}"));
     // The approval of the first commit runs it, though the ticket is at a newer commit now.
-    let ran = executor::approve(&ctx, &ledger, &key(), "x.move", &first).unwrap();
+    let ran = executor::approve(&ctx, &ledger, &key(), "x.move", &first, None).unwrap();
     assert_eq!(ran.len(), 1);
     assert_eq!(ran[0].outcome, Outcome::Confirmed, "{ran:?}");
     let moves: Vec<Value> = probe_calls(&calls)

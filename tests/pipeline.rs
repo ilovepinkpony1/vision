@@ -372,6 +372,37 @@ fn a_verb_in_the_mode_ask_waits_for_vision_approve_and_then_goes_on() {
 }
 
 #[test]
+fn a_write_in_the_mode_shadow_runs_after_promote_retry_and_approve() {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.edit_config(|doc| doc["modes"]["tracker.describe"] = toml_edit::value("shadow"));
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    assert_eq!(world.step().as_deref(), Some("refine"));
+    // With the mode unchanged, a retry asks again, and the write is kept back again.
+    world.run(&["retry", KEY]).expect_code(0);
+    world.tick();
+    assert!(has_flag(&world, "needs-you"));
+    assert_eq!(world.acts_of("tracker.describe"), 0);
+    // After the promote, the next tick asks for the same write again in the mode ask.
+    world.run(&["promote", "tracker.describe"]).expect_code(0);
+    world.run(&["retry", KEY]).expect_code(0);
+    world.tick();
+    assert!(world.flags().is_empty(), "{:?}", world.flags());
+    let needs = status(&world)["needs"].as_array().unwrap().clone();
+    let op = needs
+        .iter()
+        .find(|n| n["kind"] == "operation")
+        .unwrap_or_else(|| panic!("no write waits: {needs:?}"));
+    let (verb, commit) = op["id"].as_str().unwrap().split_once(' ').unwrap();
+    assert_eq!(verb, "tracker.describe");
+    assert_eq!(world.acts_of("tracker.describe"), 0);
+    world.run(&["approve", KEY, verb, commit]).expect_code(0);
+    world.tick_to("plan");
+    assert_eq!(world.acts_of("tracker.describe"), 1);
+}
+
+#[test]
 fn a_refused_gate_needs_you_and_a_retry_runs_the_verb_again() {
     let world = World::new();
     simple_scenarios(&world);

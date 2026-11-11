@@ -294,6 +294,8 @@ fn needs(input: &Input, step: &str) -> Option<Now> {
         .filter(|n| n.kind == NeedKind::Operation)
         .collect();
     let flag = view.flags.iter().find(|f| f.flag == NEEDS_YOU);
+    // A flag that the mode shadow or hold set: the first write of a verb waits.
+    let first = flag.and(input.facts.first_write.as_deref());
     let mut parts = Vec::new();
     if cards > 0 {
         parts.push(count(cards, "question"));
@@ -304,8 +306,10 @@ fn needs(input: &Input, step: &str) -> Option<Now> {
     if !writes.is_empty() {
         parts.push(count(writes.len(), "write"));
     }
-    if let Some(flag) = flag {
-        parts.push(cut_words(&flag.reason, 60));
+    match (first, flag) {
+        (Some(verb), _) => parts.push(format!("the first write {verb}")),
+        (None, Some(flag)) => parts.push(cut_words(&flag.reason, 60)),
+        (None, None) => {}
     }
     if parts.is_empty() {
         return None;
@@ -340,7 +344,7 @@ fn needs(input: &Input, step: &str) -> Option<Now> {
             "the plan waits for you".to_string(),
             vec![
                 "Read the plan, then approve it, so that the build can start.".to_string(),
-                "Press p to read it.".to_string(),
+                "Press n to read it and approve it.".to_string(),
             ],
             ("n", "approve"),
         )
@@ -353,6 +357,15 @@ fn needs(input: &Input, step: &str) -> Option<Now> {
                 cut_words(&writes[0].text, 90),
             ],
             ("n", "approve"),
+        )
+    } else if let Some(verb) = first {
+        (
+            format!("the first write {verb} waits for you"),
+            vec![
+                format!("The mode of {verb} kept it back, so nothing was sent."),
+                "Press n to read the write, and decide.".to_string(),
+            ],
+            ("n", "decide"),
         )
     } else {
         let reason = flag.map(|f| f.reason.clone()).unwrap_or_default();
@@ -531,12 +544,13 @@ fn next(input: &Input, step: &str) -> Now {
     let facts = input.facts;
     let agent = facts.agent.as_deref().unwrap_or("the agent");
     let kind = input.view.kind.as_deref().unwrap_or("");
-    // An entry that waits for the person, for a check, or for a repair is not ready: a pass
-    // each minute is enough for it.
+    // An entry that waits for the approval of the person or for a check is not ready: a pass
+    // each minute is enough for it. An entry that a mode or a gate kept back, or that cannot
+    // run, is ready: the next pass sets the flag that asks the person.
     let mut ready = true;
     let what = if let Some(entry) = &facts.entry {
         let label = entry_words(&entry.label);
-        ready = matches!(entry.state, EntryState::Next | EntryState::Runs);
+        ready = !matches!(entry.state, EntryState::Waits | EntryState::Uncertain);
         match &entry.state {
             EntryState::Next if entry.before => {
                 format!("{label} runs at the next pass, before {agent} starts")
@@ -551,10 +565,11 @@ fn next(input: &Input, step: &str) -> Now {
     } else if facts.held {
         // The turn held its end facts, and each write after it is done.
         "the next pass moves it to its next step".to_string()
+    } else if !facts.agents.is_empty() && facts.open_cards > 0 {
+        // The last turn asked questions: its work is not tested before they have answers.
+        "the next pass goes on with the questions for the Judge".to_string()
     } else if facts.testing {
         format!("the next pass tests the work of {agent}")
-    } else if !facts.agents.is_empty() && facts.open_cards > 0 {
-        "the Judge reads the questions at the next pass".to_string()
     } else {
         match kind {
             "turn" => format!("{agent} starts at the next pass"),

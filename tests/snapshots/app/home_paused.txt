@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   p resume   r reload   K kill switch   ? keys   q quit
+ ↑↓ move   enter open or start   n needs   m models   s stats   p resume   ? keys   K kill switch   q quit
 

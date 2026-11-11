@@ -600,6 +600,9 @@ pub enum ExecutorCommand {
         verb: String,
         /// The commit that the operation acts on
         commit: String,
+        /// Approve only the operation with this id, and nothing if it no longer waits
+        #[arg(long, value_name = "ID")]
+        op: Option<String>,
     },
 
     /// Move a verb one step up the trust ladder: hold, shadow, ask, auto

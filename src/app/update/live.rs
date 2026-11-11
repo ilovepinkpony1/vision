@@ -1,6 +1,7 @@
 //! The keys and the data of the live view of a ticket.
 //!
-//! Esc goes back to Home. `n` lists the needs, `t` opens the line to tell the agent something,
+//! Esc goes back to Home. `n` opens the card of the first thing of the ticket that waits for the
+//! person, `t` opens the line to tell the agent something,
 //! `o` opens the session, `l` the log, `p` the plan, `d` the commits that the forge does not
 //! have, `x` stops the ticket, and `r` retries it when it waits for the person with a flag or
 //! is paused. Enter on a stopped ticket opens the resume card. The arrows, `k`, `j`, PageUp,
@@ -148,11 +149,8 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             }
         }
         Key::Char('n') => {
-            if app.needs().is_empty() {
-                notice(app, "Nothing waits for you.", Tone::Info);
-            } else {
-                app.card = Some(Card::Needs);
-            }
+            let key = live.key.clone();
+            super::needs::open(app, Some(key), fx);
         }
         Key::Char('t') => tell::open(app),
         Key::Char('o') => open_card(app),

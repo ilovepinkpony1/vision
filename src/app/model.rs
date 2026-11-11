@@ -7,8 +7,13 @@ use std::time::Duration;
 
 use time::OffsetDateTime;
 
+use super::chain::Chain;
+use super::model_table::ModelsState;
 use super::msg::{Job, JobKind};
+use super::needs::NeedsCard;
 use super::now::{self, Now, Pass};
+use super::picture::Picture;
+use super::stats::StatsState;
 use super::view::theme::ColorMode;
 use crate::pipeline::commands::PickRow;
 use crate::pipeline::facts::StateFacts;
@@ -68,6 +73,10 @@ pub enum Screen {
     Live {
         key: String,
     },
+    /// The model and the effort of each agent. [`App::models`] holds its state.
+    Models,
+    /// The measures of the ledger. [`App::stats`] holds its state.
+    Stats,
 }
 
 /// A card over the screen.
@@ -78,7 +87,8 @@ pub enum Card {
     Kill(KillCard),
     Quit,
     Help,
-    Needs,
+    /// `n`: the things that wait for the person, one card at a time.
+    Need(NeedsCard),
     /// A long error text. Esc closes it.
     Error {
         title: String,
@@ -122,7 +132,8 @@ pub struct RetryCard {
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpenCard {
     pub key: String,
-    /// The agent whose turn runs now: then the card only says how to reach it.
+    /// The agent whose turn runs now: then the card says how to reach it, or how to stop the
+    /// turn and take over its session.
     pub running: Option<String>,
     /// The agent of the last turn, whose session opens.
     pub last: Option<String>,
@@ -136,6 +147,9 @@ pub struct OpenedCard {
     /// Why it did not start, or the last line of its error text.
     pub error: Option<String>,
     pub run: Run,
+    /// The agent whose running turn the person stopped to take over its session: the ticket
+    /// is stopped and paused, and continuing it runs the take and then the retry.
+    pub took_over: Option<String>,
 }
 
 /// The state of the action of a card.
@@ -458,6 +472,16 @@ pub struct App {
     pub engine: Engine,
     /// The live view, while it is open.
     pub live: Option<super::live::Live>,
+    /// The screen Models.
+    pub models: ModelsState,
+    /// The screen Stats.
+    pub stats: StatsState,
+    /// The chain that runs, or that ended and still shows on its card.
+    pub chain: Option<Chain>,
+    /// The picture of the loader: `None` while it loads, `Some(None)` for the android.
+    pub picture: Option<Option<Picture>>,
+    /// The last number given to a load of the needs or to a chain.
+    pub seq: u64,
     pub notice: Option<Notice>,
     /// The app leaves.
     pub quit: bool,
@@ -480,6 +504,11 @@ impl App {
             home: HomeState::default(),
             engine: Engine::default(),
             live: None,
+            models: ModelsState::default(),
+            stats: StatsState::default(),
+            chain: None,
+            picture: None,
+            seq: 0,
             notice: None,
             quit: false,
             dirty: true,
@@ -559,9 +588,27 @@ impl App {
             Some(Card::Stop(card)) => card.run.job().is_some(),
             Some(Card::Retry(card)) => card.run.job().is_some(),
             Some(Card::Opened(card)) => card.run.job().is_some(),
+            Some(Card::Need(card)) => card.items.is_none(),
             _ => false,
         };
-        card || self.live_moves()
+        let screen = match self.screen {
+            Screen::Models => self.models.data.loading(),
+            Screen::Stats => self.stats.data.loading(),
+            _ => false,
+        };
+        let chain = self.chain.as_ref().is_some_and(Chain::running);
+        card || screen || chain || self.live_moves()
+    }
+
+    /// The chain of this owner, while it runs or after it failed.
+    pub fn chain_of(&self, owner: &super::chain::Owner) -> Option<&Chain> {
+        self.chain.as_ref().filter(|c| c.owner == *owner)
+    }
+
+    /// The next number for a load of the needs or for a chain.
+    pub fn next_seq(&mut self) -> u64 {
+        self.seq += 1;
+        self.seq
     }
 
     /// True when the live view shows something that moves: a working agent, a spinner, a

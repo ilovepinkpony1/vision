@@ -48,6 +48,7 @@ $VISION_HOME/
   running.json           the job or the operation that a pass runs now. It is gone when nothing runs.
   log/vision.log         one line for each tick action
   log/app.err            what library code prints to standard error while the app runs
+  loader.ans             optional: your picture for the loader of the app (section 15.3)
   claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
   sandbox/               optional: <kind>.json replaces the settings file that Vision renders
   skills/                copies of the skills that the role files name
@@ -915,6 +916,7 @@ The key `test_canary` names test files that pass on the base commit. The proof r
 No session can call the executor. It runs after a rule in code, after a typed command of the person, or after a turn whose end fact holds.
 
 - Each verb has a mode: `hold`, `shadow`, `ask`, or `auto`. `hold` sets the flag `needs-you`. `shadow` records what the verb intends, does nothing, and sets the flag. `ask` waits for `vision approve KEY VERB COMMIT`. Only `vision promote` and `vision demote` change a mode.
+- After `vision promote`, the next tick asks again for a write that the mode `hold` or `shadow` kept back. The executor judges it in the mode of now.
 - Each operation gets a row with the state `pending` and an idempotency key before it runs. The key is a hash of the ticket, the verb, the last commit, and the arguments. The key of a verb with `once = true` leaves out the commit, so a newer commit does not end its operation. The states are `pending`, `executing`, `confirmed`, `failed`, and `uncertain`.
 - At each tick, the executor reconciles each operation in the state `executing` or `uncertain`. It calls the script with `reconcile` set to true. An `uncertain` operation never runs again by itself.
 - Before a verb with `leaves` runs, the gates test what leaves the machine. They refuse text or a diff that contains a secret of `[secrets]`, a private key, or a common form of a token. They refuse a diff above `gates.max_diff_lines`. They hold a diff that touches a path of `gates.sensitive` that the approved plan does not name. `vision approve` lets a held diff go.
@@ -923,6 +925,7 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - A new request of a verb at a newer commit ends the older operation of that verb that still waits. Its state becomes `failed`.
 - A human operation names its object with an id that cannot change: `approve-plan KEY HASH`, `answer ID`, `approve KEY VERB COMMIT`. A stale id is an error.
 - After a wrong operation, the person moves its verb down the ladder with `vision demote VERB`. Vision never changes a mode by itself.
+- `vision approve` runs each operation of the verb that waits at that commit. With `--op ID`, it runs only the operation with that id. If that operation no longer waits at that commit, the command sends nothing.
 - `vision approve` exits with code 2 after a gate refuses. It exits with code 1 after an operation fails or stays `uncertain`.
 
 A pass can take minutes, and the ledger says nothing about a script until the script ends. So the executor writes `running.json` right before it runs a script. This holds for a job, an operation, a read verb, and the check of an uncertain operation. The file holds the kind, the name, the ticket, the start time, and the process id of the pass. When the script ends, the executor removes the file. A reader trusts the file only while that process holds the lock of the tick. The next tick removes a file that a crash left. The ledger stays the evidence.
@@ -961,6 +964,8 @@ vision install | uninstall         the timer of the system
 
 A command that is not built yet prints `not built yet: <name>` and exits with code 3.
 
+`vision approve` takes `--op ID`. It then approves only the operation with that id (section 12).
+
 `vision status` names the job or the operation that a pass runs now, in the line `pass     runs <what> for <ticket> since <time>`. `vision status --json` gives it in `running`, or `null`.
 
 `vision report` lists the steps in the order of the step list of the adapter. A step that the adapter no longer has comes after them, by name. `vision report` and `vision status` show a cost above zero and below one cent as `<$0.01`. `vision report --json` gives the order in `steps`.
@@ -992,7 +997,7 @@ If standard input and standard output are both terminals, `vision` with no argum
 
 The app has three layers. The model is plain data. The update takes a message, changes the model, and gives the effects to run. A message is a key, a tick of the clock, or the result of a background thread. The view draws the model. The update and the view read no clock and no file. So each screen has a text snapshot in `tests/snapshots/app/`, and no test needs a terminal.
 
-Each read runs in a thread, in the process, through the functions that the commands use. These are the status view, the rows of `vision pick`, the report, the timeline, the plan, the commit list, the model table, and the adapter. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
+Each read runs in a thread, in the process, through the functions that the commands use. These are the status view, the rows of `vision pick`, the report, the timeline, the plan, the commit list, the model table, and the adapter. The cards read the questions, the operations that wait, and the proposals of the Curator in the same way. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
 
 ### 15.2 The engine
 
@@ -1000,16 +1005,15 @@ The worker is one thread that runs one job at a time. A job is a pass or an acti
 
 - The app starts.
 - An action ends.
-- A running turn ends.
+- A turn ends. This holds for a turn of the Judge and of the Curator too.
 - One minute passed since the last pass.
-
 - A pass changed a ticket, and the next pass has work for a ticket.
 
 One pass does one thing for a ticket: it collects a turn, or moves the ticket to its next step, or starts the next turn. So the last rule starts the next pass at once, and a ticket does not wait a minute between two steps. A pass that changed nothing starts no such pass. At most 12 such passes run in a row, and the pass of the minute starts the count again. So a ticket that cannot move never makes the engine spin.
 
 An action of the person goes before a pass that waits. A pass that finds the lock of a different tick is not an error, so the timer of section 6 can run too. A pass can take minutes, because a job of the adapter runs inside it. The screen stays live in that time. The header shows the pass with its time, and the state of the ticket names the job or the operation from `running.json`.
 
-The person can pause the engine. Then no pass starts, and actions still run. The pause lives only in the memory of the app. The kill switch of section 3 is a different thing: the app shows it and can switch it.
+The person can pause the engine. Then no pass starts, and actions still run. One exception is the pass that a key of a card asks for (section 15.3): it runs while the engine is paused too. The pause lives only in the memory of the app. The kill switch of section 3 is a different thing: the app shows it and can switch it.
 
 If the person quits the app, a running turn finishes by itself. The next step waits for the next start of the app, or for the timer.
 
@@ -1020,6 +1024,8 @@ The loader shows an android while the data loads. Its four stages are real: the 
 - The android appeared, and each stage is done or failed.
 - The person pressed a key.
 - The tracker stage took more than 10 seconds. The load then continues, and Home shows the queue later.
+
+If the home folder has the file `loader.ans`, the loader shows that picture in place of the android. The file is text with color codes, as a tool such as `chafa` writes it. The app reads the file as data. Only the codes of color and bold count. Each other escape sequence and each control character goes away. The picture keeps at most 64 columns and 18 rows. A file that is empty, larger than 256 KB, or not valid UTF-8 counts as no file.
 
 Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or opens the start card for a ticket of the queue. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
 
@@ -1032,6 +1038,7 @@ ACTIVITY joins two sources by time, with the newest line at the bottom. The firs
 These keys act on the ticket of the live view:
 
 - `t` opens a line that sends a text to the running turn, or keeps it for the next turn.
+- `n` opens the first thing of the ticket that waits for the person.
 - `o` opens the session of the last turn in the same terminal.
 - `x` stops the ticket, and Enter starts a stopped ticket again.
 - `r` retries a ticket that waits for the person, or continues a paused ticket.
@@ -1039,12 +1046,45 @@ These keys act on the ticket of the live view:
 
 In the log, Enter on a turn shows the events of that turn. Esc closes a pager, and then the view.
 
+The key `n` opens the first thing that waits for the person as a card. On Home, this is the first thing of all tickets. If more than one thing waits, the title says which one this is, such as `2 of 3`. The left and right arrows go to the other ones. Esc closes the card, and the thing keeps waiting. After an answer, the next card shows, or the card closes with a notice.
+
+Each kind of thing has its card:
+
+- A question takes the letter of a choice. Enter takes the proposal of the Judge, or else the recommended choice. `e` opens a line for an answer in the words of the person. `k` marks a needless question and asks where its answer was. After a choice or a text, a line asks for the reason. Enter saves the answer with the reason, and Tab saves it with no reason.
+- A plan shows its text and its short hash. `a` approves the full hash that the card showed, and `x` stops the ticket.
+- A write in the mode `ask`, or a held diff, shows what it sends. `y` approves it. In the mode `ask`, `a` approves it and moves its verb to the mode `auto`.
+- The first write of a verb in the mode `shadow` or `hold` shows the text that the mode kept back. `y` sends it and moves the verb to the mode `ask`. `a` sends it and moves the verb to the mode `auto`. `n` leaves it.
+- A rule that stopped a ticket shows its reason. `r` tries the step again, `o` opens the session, and `x` stops the ticket.
+- A paused ticket takes Enter to continue.
+- A proposal of the Curator takes Enter. The app then gives the terminal to `vision memory review --proposal NAME`.
+
+A key of a card can start a chain. A chain is a list of steps that run one after the other. A step is a command, a pass of the engine, or a check. A check reads the ledger and the configuration while no job runs, and no job starts during the read. The card shows each step with its mark. If a step fails, the chain stops, and the card says why and what is true for the ticket now. If the person quits the app, the rest of the chain does not run.
+
+The app acts only on the exact thing that the card showed. The approval of a plan names its full hash. The approval of a write names its operation with `--op`. Before it, a check reads that the same operation still waits, with the same commit and the same arguments. If the thing changed, the app approves nothing, and the card shows the new thing with a note.
+
+The key `y` of a first write runs this chain:
+
+1. A check of the mode of the verb and of the step of the ticket.
+2. `vision promote`, one or two times, with a check of the mode between them.
+3. `vision retry`.
+4. A pass.
+5. A check that the same write waits.
+6. `vision approve`.
+
+If the pass did not ask for the write yet, one more pass runs, up to three passes. The key `a` promotes up to the mode `auto`. Its last check reads that the write ran.
+
+While a turn runs, the card of `o` has a second `o`. It stops the turn with `vision stop` and gives the terminal to `vision open`. The turn that ran is lost, and its session keeps what the agent did. After the session, the card says that the ticket is stopped and paused. Enter continues it with `vision take` and then `vision retry`. The next turn then resumes the session of the person.
+
+`m` on Home opens Models. It has one row for each agent: its model, its effort, pinned or the default, and its measured turns with their mean cost. The left and right arrows change the model, and `e` changes the effort. Enter runs `vision model set`, and `u` runs `vision model reset`. A change that is not pinned has a mark, and Esc drops it. A change holds for the next turn of the agent, not for a turn that runs now.
+
+`s` on Home opens Stats. It shows the cost, the tickets that finished, the questions that got an answer without the person, and the minutes of the person. A table lists the tickets. Bars show the time and the cost of each step, in the order of the adapter. A last line gives the cost of each agent. The cost of a turn with no ticket, such as a turn of the Curator, shows apart, because the report does not count it. `w` switches between the last 7 days and all time.
+
 ### 15.4 The terminal
 
-While the app owns the terminal, standard error goes to `log/app.err`. The terminal comes back on each way out: the normal end, an error, a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is the key `q`. In the line of `t`, it cancels the line as Esc does. A paste arrives as one piece, and only the line of `t` takes it.
+While the app owns the terminal, standard error goes to `log/app.err`. The terminal comes back on each way out: the normal end, an error, a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is the key `q`. In the line of `t`, it cancels the line as Esc does. A paste arrives as one piece, and only the line of `t` and the lines of a card take it.
 
-For `o`, the app gives the terminal to the child `vision open`. The thread of the keys stops first, and the app waits for that stop. So the app reads no key of the session. The app ignores SIGINT in that time, so a Ctrl-C ends only the session. Standard error goes back to the terminal for the session. When the session ends, the app puts back the terminal modes of before and drops the input that nobody read. Then it takes the terminal and draws the whole screen again.
+For `o`, and for the review of a proposal, the app gives the terminal to a child: `vision open` or `vision memory review`. The thread of the keys stops first, and the app waits for that stop. So the app reads no key of the session. The app ignores SIGINT in that time, so a Ctrl-C ends only the session. Standard error goes back to the terminal for the session. When the session ends, the app puts back the terminal modes of before and drops the input that nobody read. Then it takes the terminal and draws the whole screen again.
 
-The app needs 100 columns and 28 rows. In a smaller window, it shows the size that it needs. If `COLORTERM` says `truecolor` or `24bit`, the app uses 24-bit color. If not, it uses the nearest of the 256 colors. With `NO_COLOR`, it uses no color, and it does not draw the android.
+The app needs 100 columns and 28 rows. In a smaller window, it shows the size that it needs. If `COLORTERM` says `truecolor` or `24bit`, the app uses 24-bit color. If not, it uses the nearest of the 256 colors. With `NO_COLOR`, it uses no color, and it draws no android and no picture.
 
 Text from outside is data. A ticket title, a status of the tracker, and the error text of a command lose each control character before they reach the screen. A cut goes by the display width of the text.

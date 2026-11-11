@@ -1,7 +1,8 @@
 //! The loader (`drawBoot` of the design): the android, the name, the line of the tool, the four
-//! real stages, the bar, and the hint. With no color, the android stays away, because its
-//! picture needs color. When the home folder is not set up, the loader says what is missing
-//! and which command makes it.
+//! real stages, the bar, and the hint. When the home folder has `loader.ans`, its picture shows
+//! in place of the android, cut to the rows that fit the window. With no color, no picture and
+//! no android show, because a picture needs color. When the home folder is not set up, the
+//! loader says what is missing and which command makes it.
 
 use super::android;
 use super::canvas::{ink, Canvas};
@@ -25,19 +26,34 @@ const BAR: i32 = 42;
 pub fn draw(app: &App, c: &mut Canvas) {
     let t = app.clock.seconds();
     let plain = app.colors == ColorMode::Plain;
-    // The rows of each part, from the top of the block.
-    let (art, title, stages) = if plain {
-        (0, 0, 3)
-    } else {
-        (android::ROWS, 17, 20)
+    let picture = match &app.picture {
+        Some(Some(picture)) if !plain => Some(picture),
+        _ => None,
     };
+    // The rows below the art: the title, the stages, the bar, and the hint.
+    let below = if c.h >= 31 { 13 } else { 12 };
+    let art = if plain {
+        0
+    } else if let Some(picture) = picture {
+        (picture.height() as i32).min(c.h - below).max(0)
+    } else {
+        android::ROWS
+    };
+    // The rows of each part, from the top of the block.
+    let (title, stages) = if plain { (0, 3) } else { (art + 1, art + 4) };
     let bar = stages + 5;
     let hint = if plain || c.h >= 31 { bar + 3 } else { bar + 2 };
     let height = hint + 1;
     let top = ((c.h - height + 1) / 2).max(0);
-    if !plain && art > 0 {
-        let x = (c.w - android::WIDTH + 1) / 2;
-        android::draw(c, x, top, t);
+    match picture {
+        Some(picture) => super::picture::draw(c, picture, top, art as usize),
+        // While the file is read, the android starts to appear: the read takes a few
+        // milliseconds, and the android shows almost no pixel in that time.
+        None if !plain => {
+            let x = (c.w - android::WIDTH + 1) / 2;
+            android::draw(c, x, top, t);
+        }
+        None => {}
     }
     if plain || t > 0.5 {
         c.center(top + title, "V  I  S  I  O  N", ink(T.accent).bold());

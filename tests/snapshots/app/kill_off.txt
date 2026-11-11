@@ -13,8 +13,8 @@
   READY TO START  │                                                                        │er · 1 can start
  ╭────────────────│  Vision is off.                                                        │────────────────╮
  │   DEMO-15   Kee│                                                                        │          To Do │
- │   DEMO-9    Fix│  No action runs now. Enter runs vision on, and the next pass acts      │en pull request │
- ╰────────────────│  again.                                                                │────────────────╯
+ │   DEMO-9    Fix│  No action runs now. Press Enter to turn Vision on, and the next pass  │en pull request │
+ ╰────────────────│  acts again.                                                           │────────────────╯
                   │                                                                        │
                   │  enter turn on    esc cancel                                           │
                   │                                                                        │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
 

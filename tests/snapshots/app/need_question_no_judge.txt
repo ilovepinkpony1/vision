@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭───────╭─ DEMO-12 · question · builder asks at the step build ────────────────────────────────────╮───────╮
+ │ ▸ DEMO│                                                                                          │   38m │
+ │       │  Must the export keep the order of the columns?                                          │       │
+ │       │                                                                                          │       │
+ │   DEMO│  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │2h 10m │
+ │       │  Example       The table shows date, client, total. The file can keep that order or      │       │
+ ╰───────│                sort the columns by name.                                                 │───────╯
+         │                                                                                          │
+  READY T│  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │n start
+ ╭───────│                       order                                                              │───────╮
+ │   DEMO│    b  Sort by name    the file sorts the columns by their names                          │ To Do │
+ │   DEMO│                                                                                          │equest │
+ ╰───────│  Recommended   a Keep the order: People compare the file with the table.                 │───────╯
+         │  Evidence      src/export.py:42                                                          │
+         │  The Judge     was not sure: No decision of the memory covers the order of the columns.  │
+         │                                                                                          │
+         │  a b answer    enter take the recommended    e your words    k needless    esc later     │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+
