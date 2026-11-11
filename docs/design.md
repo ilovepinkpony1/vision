@@ -312,6 +312,10 @@ The key `claude.attribution` controls the lines that Claude Code adds about itse
 
 Claude Code adds the tool `StructuredOutput` by itself, because each turn has a result schema. The contract of 7.4 expects that tool next to the tools of the kind. A test with a real session showed this.
 
+A worker and a tester get the file `worker.gitconfig` of the home as `GIT_CONFIG_GLOBAL`. It gives a neutral name and a no-reply address for commits, and it turns signing off. It also names an empty global ignore file and an empty global attributes file. Without these two keys, git looks for both files in the home folder of the person. The sandbox does not let git read them, so each git command prints a warning.
+
+Claude Code asks for an approval for some commands also in the sandbox. One example is a git command with the option `-c`. A turn has nobody who can approve, so Claude Code denies such a command, and a session that passes `-c` cannot commit. `agents/common.md` tells each agent the form of a commit that works. The message after a failed fact `clean` or `commits` says it again. A test with a real session showed this too.
+
 ### 7.4 The supervisor
 
 `vision turn-run <turn-id>` is a hidden command. The tick writes the `turns` row first, and then it starts the supervisor as a detached process in its own session and process group. The supervisor finds the ticket of the turn in that row. It lives as long as the turn. It does these things:
@@ -952,7 +956,7 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 - Each command that prints a table also takes `--json`.
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` must pass.
 - A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder.
-- Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`.
+- Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`. `tests/real_claude.rs` also runs four forms of a commit command in one worker turn.
 - No name of a company, a person, or a private project goes into the repo.
 
 ```

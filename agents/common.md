@@ -43,6 +43,12 @@ The facts file lists under `requests` each fact that you can ask for. Each entry
 - If you see a rule that helps later tickets, add it to `candidates`.
 - Write the summary for the person in two or three sentences. Say what you did and what is left.
 
+## Commits
+
+- Commit with `git add <files>` and `git commit -m "<message>"`. The runner gave the session its name and its address for commits.
+- Never pass `-c` to git, and never set a user name or an address. A git command with `-c` needs an approval, and nobody can approve in a turn, so it is denied.
+- If a command is denied, run its plain form. One denied command does not mean that each commit is denied.
+
 ## Limits
 
 - You cannot push, open a pull request, deploy, or change the tracker. The runner does these things after your turn.

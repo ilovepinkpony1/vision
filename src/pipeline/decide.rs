@@ -381,10 +381,18 @@ fn turn_next(
     }
 }
 
-/// The message of the resume after a failed end fact.
+/// The message of the resume after a failed end fact. For a fact about commits, it names the
+/// form of a commit that a session can run: Claude Code asks for an approval for a git command
+/// with `-c`, and a turn has nobody who can approve, so a session that passes `-c` cannot commit.
 pub fn resume_message(fact: &str, found: &str) -> String {
+    let how = match fact {
+        "clean" | "commits" => {
+            " Commit with `git add` and `git commit -m`, and pass no `-c` option to git: a git command with `-c` needs an approval that nobody can give in a turn."
+        }
+        _ => "",
+    };
     format!(
-        "The end fact {fact} does not hold: {found}. Make it hold, then end the turn with the kind result again, with each document of the step."
+        "The end fact {fact} does not hold: {found}.{how} Make it hold, then end the turn with the kind result again, with each document of the step."
     )
 }
 
@@ -601,6 +609,21 @@ pub fn ci_result(state: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_resume_after_a_fact_about_commits_names_the_form_of_a_commit() {
+        for fact in ["clean", "commits"] {
+            let message = resume_message(fact, "the work tree has changes");
+            assert!(
+                message.contains("Commit with `git add` and `git commit -m`")
+                    && message.contains("pass no `-c` option to git"),
+                "{message}"
+            );
+            assert!(message.contains("Make it hold"), "{message}");
+        }
+        let other = resume_message("doc:plan.md", "the result has no document plan.md");
+        assert!(!other.contains("git"), "{other}");
+    }
 
     fn turn(status: TurnStatus, kind: Option<&str>, end_fact: Option<&str>) -> LastTurn {
         LastTurn {

@@ -165,6 +165,10 @@ pub fn gitconfig_path(paths: &Paths) -> PathBuf {
 }
 
 /// The git configuration of a worker: a neutral name and a no-reply address from `user`.
+///
+/// It also names an empty global ignore file and an empty global attributes file. Without
+/// them, git looks for both in the home folder of the person, which the sandbox does not let
+/// it read, so each git command of a session prints a warning.
 pub fn gitconfig_text(user: &str) -> String {
     let local: String = user
         .chars()
@@ -190,7 +194,8 @@ pub fn gitconfig_text(user: &str) -> String {
     format!(
         "# Written by vision for its sessions. A session cannot read the git configuration of the person.\n\
          [user]\n\tname = \"{name} (vision)\"\n\temail = {local}@noreply.invalid\n\
-         [commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n"
+         [commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n\
+         [core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n"
     )
 }
 
@@ -418,5 +423,8 @@ mod tests {
         assert!(text.contains("name = \"Some One (vision)\""), "{text}");
         assert!(text.contains("email = some-one@noreply.invalid"), "{text}");
         assert!(gitconfig_text("\"<>").contains("email = user@noreply.invalid"));
+        // No look into the home folder of the person for an ignore file or an attributes file.
+        assert!(text.contains("excludesFile = /dev/null"), "{text}");
+        assert!(text.contains("attributesFile = /dev/null"), "{text}");
     }
 }
