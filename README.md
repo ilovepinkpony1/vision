@@ -124,7 +124,9 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
 
    If a command cannot read a folder, add that folder to `sandbox.allow_read`. If your tests need a variable, set it in `claude.env`. `VISION_PROBE_ALLOW_READ` and `VISION_PROBE_ENV` let you try both values first.
 
-8. Take one ticket with `vision take KEY`. A verb in the mode `shadow` stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
+8. Write the standing rules of your project to `~/.vision/agents/project.md`. One example is the command that runs one test file. Each work agent gets this text.
+
+9. Take one ticket with `vision take KEY`. A verb in the mode `shadow` stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
 
 The timer of `vision install` gets the `PATH` of your shell and none of its other variables. For the timer, give each secret as a command.
 

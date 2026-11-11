@@ -49,6 +49,8 @@ $VISION_HOME/
   claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
   sandbox/               optional: <kind>.json replaces the settings file that Vision renders
   skills/                copies of the skills that the role files name
+  agents/                optional: a file here replaces the role file or the schema of that name
+    project.md           optional: the standing rules of the project, for each work agent
   memory/                a git repo (section 9)
     decisions/D-0001.md
     principles/P-001.md
@@ -68,6 +70,8 @@ $VISION_HOME/
       inbox/             messages that wait for the session
       inbox/sent/        messages that the session got
 ```
+
+The file `agents/project.md` holds the standing rules of the project, such as the command that runs one test file. The person writes it. Each work agent gets its text after the common rules of `agents/common.md`. The Judge and the Curator do not get it.
 
 A turn id has the form `<UTC time>-<KEY>-<step>-<n>`, for example `20261116T143000Z-DEMO-12-build-1`. It is safe as a folder name, and it is unique in the ledger. A turn with no ticket uses one of the reserved keys `curator` and `eval`. `vision take` refuses a reserved key.
 

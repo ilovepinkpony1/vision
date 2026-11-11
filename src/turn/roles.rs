@@ -70,9 +70,14 @@ pub fn agents_file(paths: &Paths, name: &str) -> Result<String> {
     )
 }
 
+/// `$VISION_HOME/agents/project.md`: the standing rules of the project of this home, such as
+/// the command that runs one test file. The person writes it, and the repo has no such file.
+pub const PROJECT_FILE: &str = "project.md";
+
 /// The system prompt of a turn of `agent`: `common.md` followed by the role file for a work
 /// agent, or only the role file for the Judge and the Curator. `role_file` replaces the role
-/// file of `agents/`, such as a role file of an adapter.
+/// file of `agents/`, such as a role file of an adapter. When the home has the file
+/// [`PROJECT_FILE`], a work agent gets its text between the two.
 pub fn compose_role(paths: &Paths, agent: &str, role_file: Option<&Path>) -> Result<String> {
     let own = match role_file {
         Some(path) => std::fs::read_to_string(path)
@@ -84,7 +89,13 @@ pub fn compose_role(paths: &Paths, agent: &str, role_file: Option<&Path>) -> Res
         return Ok(own);
     }
     let common = agents_file(paths, "common.md")?;
-    Ok(format!("{}\n\n{}", common.trim_end(), own))
+    let project = read_optional(&agents_dir(paths).join(PROJECT_FILE))?;
+    Ok(
+        match project.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            Some(project) => format!("{}\n\n{}\n\n{}", common.trim_end(), project, own),
+            None => format!("{}\n\n{}", common.trim_end(), own),
+        },
+    )
 }
 
 /// The name of the result schema of `agent` in `agents/`.
@@ -138,6 +149,25 @@ mod tests {
         std::fs::write(agents_dir(&paths).join("scout.md"), "# My scout\n").unwrap();
         let scout = compose_role(&paths, "scout", None).unwrap();
         assert!(scout.ends_with("# My scout\n"), "{scout}");
+        // The rules of the project go between the common rules and the role, for a work agent.
+        std::fs::write(
+            agents_dir(&paths).join(PROJECT_FILE),
+            "# Rules of this project\n\n- Run one test file with `bin/test <file>`.\n",
+        )
+        .unwrap();
+        let scout = compose_role(&paths, "scout", None).unwrap();
+        let common = scout.find("# Rules for each work turn").unwrap();
+        let project = scout.find("# Rules of this project").unwrap();
+        let own = scout.find("# My scout").unwrap();
+        assert!(common < project && project < own, "{scout}");
+        let judge = compose_role(&paths, "judge", None).unwrap();
+        assert!(!judge.contains("# Rules of this project"), "{judge}");
+        std::fs::write(agents_dir(&paths).join(PROJECT_FILE), "\n").unwrap();
+        let scout = compose_role(&paths, "scout", None).unwrap();
+        assert!(
+            !scout.contains("\n\n\n\n"),
+            "an empty file adds nothing: {scout}"
+        );
         let err = compose_role(&paths, "planner", None)
             .unwrap_err()
             .to_string();
