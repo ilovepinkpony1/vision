@@ -377,7 +377,12 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     if let Some(effort) = request.effort {
         choice.effort = effort;
     }
+    // The supervisor starts the binary with the environment of the session, and `claude.env`
+    // can give that session a `PATH` of its own. So a plain name is resolved here, with the
+    // `PATH` of this process. A name that is not found stays, and the start names the problem.
     let program = ctx.claude_bin()?;
+    let program = crate::util::process::find_program(&program)
+        .map_or(program, |path| path.display().to_string());
     let session = request.resumes.clone().unwrap_or_else(ids::new_session_id);
     let now = time::now();
     let first_n = ledger.count_turns(request.ticket.as_str(), &request.step)? + 1;

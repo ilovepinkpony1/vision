@@ -68,8 +68,9 @@ pub fn sandboxed(kind: TurnKind) -> bool {
 
 /// The `settings.json` of a session. A worker and a tester get the sandbox: reads of the home
 /// folder are denied, and the working folder, the extra folders, the folders of
-/// `sandbox.allow_read`, and the git configuration of the worker are allowed. A reader has no
-/// Bash tool, so its file only denies the tools that it must never have.
+/// `sandbox.allow_read`, and the git configuration of the worker are allowed. They also get a
+/// rule that allows each Bash command, because each command runs in that sandbox. A reader has
+/// no Bash tool, so its file only denies the tools that it must never have.
 pub fn render(
     kind: TurnKind,
     workdir: &Path,
@@ -90,7 +91,15 @@ pub fn render(
         allow_read.push(path.display().to_string());
     }
     allow_read.push(gitconfig.display().to_string());
+    // The rule that allows each Bash command belongs to the strict sandbox below. Claude Code
+    // asks for an approval for some commands also in the sandbox, such as a git command with
+    // `-c` or a command with a variable in front of it, and a turn has nobody who can approve.
+    // With the rule, such a command runs, and it still runs in the sandbox:
+    // `allowUnsandboxedCommands` is false, so a call that asks for no sandbox is ignored. The
+    // real test `a_real_worker_turn_stays_in_its_sandbox` shows both. Never keep the rule
+    // without the strict sandbox.
     Ok(json!({
+        "permissions": {"allow": ["Bash"]},
         "sandbox": {
             "enabled": true,
             "autoAllowBashIfSandboxed": true,
@@ -346,7 +355,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             value,
-            json!({"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
+            json!({"permissions":{"allow":["Bash"]},
+                "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
                 "failIfUnavailable":true,"filesystem":{"denyRead":["~/"],
                 "allowRead":["/clones/one","/opt/tool chain","/v/worker.gitconfig"]},
                 "network":{"allowedDomains":["localhost","127.0.0.1"],"allowLocalBinding":true,"allowUnixSockets":[]}}})
@@ -359,7 +369,14 @@ mod tests {
             Path::new("/g"),
         )
         .unwrap();
+        // The rule that allows each Bash command is only safe with the strict sandbox: no run
+        // outside it, and no start when the sandbox is not there.
+        assert_eq!(value["permissions"]["allow"], json!(["Bash"]));
+        assert_eq!(value["sandbox"]["enabled"], true);
+        assert_eq!(value["sandbox"]["allowUnsandboxedCommands"], false);
+        assert_eq!(value["sandbox"]["failIfUnavailable"], true);
         assert!(reader.get("sandbox").is_none());
+        assert!(reader["permissions"].get("allow").is_none());
         assert_eq!(tools(TurnKind::Reader), READER_TOOLS);
         assert_eq!(tools(TurnKind::Tester).len(), 7);
         assert_eq!(permission_mode(TurnKind::Tester), "acceptEdits");

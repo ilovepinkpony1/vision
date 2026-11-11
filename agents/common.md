@@ -45,9 +45,9 @@ The facts file lists under `requests` each fact that you can ask for. Each entry
 
 ## Commits
 
-- Commit with `git add <files>` and `git commit -m "<message>"`. The runner gave the session its name and its address for commits.
-- Never pass `-c` to git, and never set a user name or an address. A git command with `-c` needs an approval, and nobody can approve in a turn, so it is denied.
-- If a command is denied, run its plain form. One denied command does not mean that each commit is denied.
+- Commit with `git add <files>` and `git commit -m "<message>"`.
+- The runner gave the session its name and its address for commits. Never set a user name or an address.
+- Nobody can approve a command in a turn. If a command is denied, run a plain form of it, and go on. One denied command does not mean that each later command is denied.
 
 ## Limits
 

@@ -382,12 +382,12 @@ fn turn_next(
 }
 
 /// The message of the resume after a failed end fact. For a fact about commits, it names the
-/// form of a commit that a session can run: Claude Code asks for an approval for a git command
-/// with `-c`, and a turn has nobody who can approve, so a session that passes `-c` cannot commit.
+/// plain form of a commit: a real session stopped after one denied commit command, and it
+/// did not try this form.
 pub fn resume_message(fact: &str, found: &str) -> String {
     let how = match fact {
         "clean" | "commits" => {
-            " Commit with `git add` and `git commit -m`, and pass no `-c` option to git: a git command with `-c` needs an approval that nobody can give in a turn."
+            " Commit with `git add` and `git commit -m`. If a command is denied, run a plain form of it."
         }
         _ => "",
     };
@@ -616,7 +616,7 @@ mod tests {
             let message = resume_message(fact, "the work tree has changes");
             assert!(
                 message.contains("Commit with `git add` and `git commit -m`")
-                    && message.contains("pass no `-c` option to git"),
+                    && message.contains("run a plain form of it"),
                 "{message}"
             );
             assert!(message.contains("Make it hold"), "{message}");

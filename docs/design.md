@@ -317,7 +317,9 @@ Claude Code adds the tool `StructuredOutput` by itself, because each turn has a 
 
 A worker and a tester get the file `worker.gitconfig` of the home as `GIT_CONFIG_GLOBAL`. It gives a neutral name and a no-reply address for commits, and it turns signing off. It also names an empty global ignore file and an empty global attributes file. Without these two keys, git looks for both files in the home folder of the person. The sandbox does not let git read them, so each git command prints a warning.
 
-Claude Code asks for an approval for some commands also in the sandbox. One example is a git command with the option `-c`. A turn has nobody who can approve, so Claude Code denies such a command, and a session that passes `-c` cannot commit. `agents/common.md` tells each agent the form of a commit that works. The message after a failed fact `clean` or `commits` says it again. A test with a real session showed this too.
+Claude Code asks for an approval for some commands also in the sandbox. Two examples are a git command with the option `-c` and a command with a variable in front of it. A turn has nobody who can approve, so Claude Code denies such a command. So the `settings.json` of a worker and of a tester also has a rule that allows each Bash command. The sandbox stays the limit, because that file refuses each run outside it.
+
+A real test in `tests/real_claude.rs` shows both facts. Each of its calls asks for a run with no sandbox. The session still cannot read the home folder, write there, or reach an outside site. `agents/common.md` tells each agent the plain form of a commit, and the message after a failed fact `clean` or `commits` says it again.
 
 ### 7.4 The supervisor
 
@@ -959,7 +961,7 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 - Each command that prints a table also takes `--json`.
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` must pass.
 - A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder.
-- Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`. `tests/real_claude.rs` also runs four forms of a commit command in one worker turn.
+- Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`. `tests/real_claude.rs` also has a test for the commit of a worker, a test that the sandbox holds, and a probe. The probe runs the commands of `VISION_PROBE_COMMANDS` in the sandbox of a worker, in the folder of `VISION_PROBE_DIR`.
 - No name of a company, a person, or a private project goes into the repo.
 
 ```

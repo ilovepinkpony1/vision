@@ -159,7 +159,8 @@ fn a_worker_turn_gets_the_sandbox_and_the_worker_git_configuration() {
         serde_json::from_str(&home.turn_file(&launched, "settings.json")).unwrap();
     assert_eq!(
         settings,
-        json!({"sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true,
+        json!({"permissions": {"allow": ["Bash"]},
+            "sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true,
             "allowUnsandboxedCommands": false, "failIfUnavailable": true,
             "filesystem": {"denyRead": ["~/"], "allowRead": [
                 home.work.display().to_string(), "/opt/tool chain", gitconfig.display().to_string()]},

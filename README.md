@@ -114,7 +114,17 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
 
 6. Run `vision doctor`, and then run `vision pick`. `vision pick` only reads. It lists the tickets of your queue.
 
-7. Take one ticket with `vision take KEY`. A verb in the mode `shadow` stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
+7. Find out what the tests of your project need in the sandbox of a worker. The probe test runs your commands in one real session, and it prints each result.
+
+   ```sh
+   VISION_REAL_CLAUDE=1 VISION_PROBE_DIR=~/clones/myproject \
+     VISION_PROBE_COMMANDS="bin/test tests/one_test.py" \
+     cargo test --test real_claude probe -- --ignored --nocapture
+   ```
+
+   If a command cannot read a folder, add that folder to `sandbox.allow_read`. If your tests need a variable, set it in `claude.env`. `VISION_PROBE_ALLOW_READ` and `VISION_PROBE_ENV` let you try both values first.
+
+8. Take one ticket with `vision take KEY`. A verb in the mode `shadow` stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
 
 The timer of `vision install` gets the `PATH` of your shell and none of its other variables. For the timer, give each secret as a command.
 
