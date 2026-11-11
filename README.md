@@ -87,6 +87,37 @@ The demo adapter needs no network. Its tracker is a JSON file, and its forge is 
 
 Vision starts no new turn above the values of `[limits]` in `config.toml`. They are parts of your Claude subscription windows. If the status shows the flag `waits-for-limit`, wait for the reset or raise the value.
 
+## Use it with Jira and GitHub
+
+The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The comment block at the top of its `adapter.toml` documents each key. The tests drive it against a fake server, and no test calls the real services. So start in small steps.
+
+1. Make one clone of your repo that only Vision uses. Add its path to `clones` in `~/.vision/config.toml`.
+
+2. Make your own adapter folder in the home of Vision.
+
+   ```sh
+   mkdir -p ~/.vision/adapters/myproject
+   cp adapters/jira-github/adapter.toml ~/.vision/adapters/myproject/adapter.toml
+   ```
+
+3. Edit the copy. Set `name = "myproject"`, and set `base` to your main branch, such as `origin/main`. Add the line `scripts = "<the path of this repo>/adapters/jira-github"` after `base`. Remove each step that your project does not need, such as `qa`.
+
+4. In the copy, set the mode of each verb that writes to `shadow`. A verb in this mode records what it intends, and it calls nothing.
+
+5. Set `project = "myproject"` in `config.toml`. Fill the tables `[adapter]` and `[secrets]`. A secret is a command or the name of an environment variable, and never a value.
+
+   ```toml
+   [secrets]
+   JIRA_TOKEN = { env = "JIRA_API_TOKEN" }
+   FORGE_TOKEN = { cmd = "gh auth token" }
+   ```
+
+6. Run `vision doctor`, and then run `vision pick`. `vision pick` only reads. It lists the tickets of your queue.
+
+7. Take one ticket with `vision take KEY`. A verb in the mode `shadow` stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
+
+The timer of `vision install` gets the `PATH` of your shell and none of its other variables. For the timer, give each secret as a command.
+
 ## Credits
 
 The idea of permanent agents with names and areas comes from the article "How I Built the Most AI-Pilled Company in the World". The question card and the rule form "When X, make sure that Y, because Z" follow ideas of the public project `zhuravel/magnum`.
