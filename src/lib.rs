@@ -4,6 +4,7 @@
 //! parses the command line and calls [`run`].
 
 pub mod adapter;
+pub mod app;
 pub mod cli;
 pub mod config;
 pub mod ctx;

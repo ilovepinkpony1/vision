@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Export the report of the month as a CSV file
+
+  ●━●━●━◉─○─○─○─○─○─○─○─○  build
+
+  step          build (a step of the kind turn)
+  now           builder works (6 min)
+  flag          needs-you: the proof did not pass at 1a2b3c4d5e6f
+                Clears it: vision retry DEMO-12
+  marks         -
+  plan          approved, hash 3f2a1b4c5d6e
+  cost          $1.03
+  taken         38m ago, at 2026-11-16T13:52:00Z
+  branch        vision/DEMO-12
+  clone         ~/clones/demo-1
+  pull request  none yet
+
+
+
+
+
+
+
+
+
+
+
+
+ esc home   n needs   ? keys   q quit
+

@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │   DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works (6 min)                                       │
+ │                                                                                                          │
+ │   DEMO-7    ╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮6.12  2h 10m │
+ │             │                                                                              │             │
+ ╰─────────────│  Keep the filter of the list when the page loads again                       │─────────────╯
+               │                                                                              │
+  READY TO STAR│  clone     ~/clones/demo-2 is free                                           │· 1 can start
+ ╭─────────────│  branch    vision/DEMO-15 from origin/main                                   │─────────────╮
+ │ ▸ DEMO-15   │  path      12 steps: refine, plan, plan-ready, build, review, ci, fix-ci, …  │       To Do │
+ │   DEMO-9    │  first     refine: scout · claude-fable-5-2 · high                           │pull request │
+ ╰─────────────│  writes    Of 5 write verbs, 4 in the mode auto and 1 in the mode ask.       │─────────────╯
+               │            Vision asks you before each write that is not in the mode auto.   │
+               │                                                                              │
+               │  Nothing goes to the tracker or the forge at the start.                      │
+               │                                                                              │
+               │  enter start    esc cancel                                                   │
+               │                                                                              │
+               ╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+

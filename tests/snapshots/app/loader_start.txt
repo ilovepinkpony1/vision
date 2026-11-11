@@ -1,0 +1,32 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                  ⠋ home folder   reads the configuration and the adapter
+                                  · ledger
+                                  · tracker
+                                  · engine
+
+                                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  0 of 4
+
+
+                                                any key skips
+

@@ -29,6 +29,9 @@ pub fn plan_hash(bytes: &[u8]) -> String {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct TicketView {
     pub key: String,
+    /// The title that the queue of the tracker gave at the take, or `None` for a ticket that was
+    /// taken before the ledger kept titles.
+    pub title: Option<String>,
     pub step: Option<String>,
     /// The kind of the step: turn, job, human, wait, or end.
     pub kind: Option<String>,
@@ -217,6 +220,7 @@ pub fn rows(ctx: &Ctx, ledger: &Ledger, all_needs: &[Need]) -> Result<Vec<Ticket
         let now_text = now_line(ctx, ledger, &ticket, &works, judging, &needs, &flags)?;
         out.push(TicketView {
             key: key.clone(),
+            title: row.title.clone(),
             step: row.state.clone(),
             kind: (!visit.kind.is_empty()).then(|| visit.kind.clone()),
             now: now_text,

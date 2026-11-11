@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works (6 min)                                       │
+ │                                                                                                          │
+ │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
+ │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits: the watched value is none                               │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  READY TO STAR╭─ The kill switch failed ─────────────────────────────────────────────────────╮· 1 can start
+ ╭─────────────│                                                                              │─────────────╮
+ │   DEMO-15   │  Vision is not set up at /work/home. Run `vision init` first                 │       To Do │
+ │   DEMO-9    │  warning: a second line of text                                              │pull request │
+ ╰─────────────│                                                                              │─────────────╯
+               │  esc close                                                                   │
+               │                                                                              │
+               ╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+

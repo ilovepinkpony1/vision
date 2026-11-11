@@ -1,0 +1,32 @@
+
+
+                                                   ▀▀▀▀▀▀▀▀▀
+                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                   ▀▀▀▀▀▀▀▀▀
+                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                          ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+                                               V  I  S  I  O  N
+                            from a ticket to a pull request that is ready to merge
+
+                                  ✗ home folder   not set up
+                                  · ledger
+                                  · tracker
+                                  · engine
+
+                          Vision is not set up at ~/.vision: config.toml is missing.
+                       Run vision init to make the home folder, then open Vision again.
+
+                                                   q leaves
+

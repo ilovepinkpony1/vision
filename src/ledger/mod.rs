@@ -299,6 +299,35 @@ mod tests {
     }
 
     #[test]
+    fn migration_3_gives_each_ticket_a_title_that_is_empty_before_it() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.version <= 2) {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn.execute_batch("INSERT INTO tickets (key, state) VALUES ('DEMO-1', 'build')")
+            .unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), Some(2));
+        let ledger = Ledger {
+            conn,
+            migrated_from: Some(2),
+        };
+        let old = ledger.ticket("DEMO-1").unwrap().unwrap();
+        assert_eq!(old.title, None, "a ticket of before has no title");
+        assert_eq!(old.state.as_deref(), Some("build"));
+        ledger
+            .put_ticket(&TicketRow {
+                key: "DEMO-12".into(),
+                state: Some("refine".into()),
+                title: Some("Export the report".into()),
+                ..TicketRow::default()
+            })
+            .unwrap();
+        let rows = ledger.tickets().unwrap();
+        assert_eq!(rows[1].title.as_deref(), Some("Export the report"));
+    }
+
+    #[test]
     fn a_failed_migration_changes_nothing() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE tickets (key TEXT)")

@@ -251,7 +251,7 @@ impl Ledger {
         Ok(self
             .conn()
             .query_row(
-                "SELECT key, state, flags, clone, branch, pr, head, taken, updated, counts FROM tickets WHERE key = ?1",
+                "SELECT key, state, flags, clone, branch, pr, head, taken, updated, counts, title FROM tickets WHERE key = ?1",
                 [key],
                 |row| {
                     Ok(TicketRow {
@@ -265,6 +265,7 @@ impl Ledger {
                         taken: row.get(7)?,
                         updated: row.get(8)?,
                         counts: row.get(9)?,
+                        title: row.get(10)?,
                     })
                 },
             )

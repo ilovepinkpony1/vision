@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?     +1 more  n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works (6 min)                                       │
+ │       ╭─ 2 things wait for you ──────────────────────────────────────────────────────────────────╮       │
+ │   DEMO│                                                                                          │2h 10m │
+ │       │  DEMO-12    question   builder asks: Must the export keep the order of the columns?      │       │
+ ╰───────│             run        vision answer Q-0002 --choice N                                   │───────╯
+         │                                                                                          │
+  READY T│  DEMO-20    plan       the plan of DEMO-20 waits for your approval at the step plan-rea… │n start
+ ╭───────│             run        vision approve-plan DEMO-20 3f2a1b4c5d6e                          │───────╮
+ │   DEMO│                                                                                          │ To Do │
+ │   DEMO│  Run the command in a shell. vision needs shows each question with its choices.          │equest │
+ ╰───────│                                                                                          │───────╯
+         │  esc close                                                                               │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+

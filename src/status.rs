@@ -343,6 +343,7 @@ mod tests {
     fn view(key: &str, step: Option<&str>, now: &str) -> TicketView {
         TicketView {
             key: key.into(),
+            title: None,
             step: step.map(str::to_string),
             kind: None,
             now: now.into(),

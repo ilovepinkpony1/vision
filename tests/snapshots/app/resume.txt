@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                           1 ticket · Vision moves it while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-3    Rename the setting of the weekly email                                         $2.50   5h 0m │
+ │             ●━●━●━●━◉─○─○─○─○─○─○─○  review · stopped: you stopped it with vision stop                   │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  READY TO STAR╭─ Resume DEMO-3 ──────────────────────────────────────────────────────────────╮· 1 can start
+ ╭─────────────│                                                                              │─────────────╮
+ │   DEMO-15   │  Rename the setting of the weekly email                                      │       To Do │
+ │   DEMO-9    │                                                                              │pull request │
+ ╰─────────────│  DEMO-3 is stopped at the step review.                                       │─────────────╯
+               │  Its branch vision/DEMO-3 stays in the clone ~/clones/demo-1.                │
+               │                                                                              │
+               │  Enter runs vision take DEMO-3, and the ticket starts again at the same      │
+               │  step.                                                                       │
+               │                                                                              │
+               │  enter resume    esc cancel                                                  │
+               │                                                                              │
+               ╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+

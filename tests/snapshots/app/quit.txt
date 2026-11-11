@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works (6 min)                                       │
+ │                                                                                                          │
+ │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
+ │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits: the watched value is none                               │
+ ╰────────────────╭─ Quit Vision? ─────────────────────────────────────────────────────────╮────────────────╯
+                  │                                                                        │
+  READY TO START  │  2 tickets are in progress.                                            │er · 1 can start
+ ╭────────────────│                                                                        │────────────────╮
+ │   DEMO-15   Kee│  The running turn of builder finishes by itself. The next step of      │          To Do │
+ │   DEMO-9    Fix│  each ticket waits until you open Vision again.                        │en pull request │
+ ╰────────────────│                                                                        │────────────────╯
+                  │  To let the work continue without this window, run vision install.     │
+                  │                                                                        │
+                  │  enter quit    esc stay                                                │
+                  │                                                                        │
+                  ╰────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   p pause   r reload   K kill switch   ? keys   q quit
+

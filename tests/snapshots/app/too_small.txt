@@ -1,0 +1,24 @@
+
+
+
+
+
+
+
+
+
+           Vision needs a window of at least 100 columns and 28 rows.
+
+                    This window has 80 columns and 24 rows.
+
+               Make the window larger, or make the font smaller.
+
+
+
+
+
+
+
+
+
+

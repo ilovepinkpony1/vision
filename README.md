@@ -87,6 +87,22 @@ The demo adapter needs no network. Its tracker is a JSON file, and its forge is 
 
 Vision starts no new turn above the values of `[limits]` in `config.toml`. They are parts of your Claude subscription windows. If the status shows the flag `waits-for-limit`, wait for the reset or raise the value.
 
+## Use the app
+
+Type `vision` in a terminal, and press Enter. A loader shows while Vision reads the home folder, the ledger, and the queue of the tracker. Then Home lists the tickets in progress and the tickets that can start.
+
+Press Enter on a ticket to open it or to start it. These keys work on Home:
+
+- `n` shows what waits for you.
+- `p` pauses the engine, or starts it again.
+- `K` opens the kill switch.
+- `?` shows each key.
+- `q` quits.
+
+While the window is open, the app runs `vision tick` each minute and after each action. If you quit, a running turn finishes by itself. The next step waits until you open Vision again, or until the timer of `vision install` runs.
+
+The app needs a window of 100 columns by 28 rows. Each command of the sections below still works in a shell.
+
 ## Use it with Jira and GitHub
 
 The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The comment block at the top of its `adapter.toml` documents each key. The tests drive it against a fake server, and no test calls the real services. So start in small steps.

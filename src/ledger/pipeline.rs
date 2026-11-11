@@ -83,12 +83,12 @@ impl Ledger {
     /// Writes the whole row of a ticket: a new one, or one that replaces an ended ticket.
     pub fn put_ticket(&self, row: &TicketRow) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO tickets (key, state, flags, clone, branch, pr, head, taken, updated, counts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO tickets (key, state, flags, clone, branch, pr, head, taken, updated, counts, title)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT (key) DO UPDATE SET state = excluded.state, flags = excluded.flags,
                  clone = excluded.clone, branch = excluded.branch, pr = excluded.pr,
                  head = excluded.head, taken = excluded.taken, updated = excluded.updated,
-                 counts = excluded.counts",
+                 counts = excluded.counts, title = excluded.title",
             params![
                 row.key,
                 row.state,
@@ -99,7 +99,8 @@ impl Ledger {
                 row.head,
                 row.taken,
                 row.updated,
-                row.counts
+                row.counts,
+                row.title
             ],
         )?;
         Ok(())

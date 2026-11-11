@@ -18,13 +18,16 @@ pub struct TicketRow {
     pub taken: Option<String>,
     pub updated: Option<String>,
     pub counts: Option<String>,
+    /// The title that the queue of the tracker gave at the take. `None` for a ticket that was
+    /// taken before migration 3.
+    pub title: Option<String>,
 }
 
 impl Ledger {
     /// Each ticket, by key.
     pub fn tickets(&self) -> Result<Vec<TicketRow>> {
         let mut stmt = self.conn().prepare(
-            "SELECT key, state, flags, clone, branch, pr, head, taken, updated, counts FROM tickets ORDER BY key",
+            "SELECT key, state, flags, clone, branch, pr, head, taken, updated, counts, title FROM tickets ORDER BY key",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(TicketRow {
@@ -38,6 +41,7 @@ impl Ledger {
                 taken: row.get(7)?,
                 updated: row.get(8)?,
                 counts: row.get(9)?,
+                title: row.get(10)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

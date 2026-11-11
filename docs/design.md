@@ -46,6 +46,7 @@ $VISION_HOME/
   lock                   the lock file of the tick
   off                    the kill switch. Its presence stops each action.
   log/vision.log         one line for each tick action
+  log/app.err            what library code prints to standard error while the app runs
   claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
   sandbox/               optional: <kind>.json replaces the settings file that Vision renders
   skills/                copies of the skills that the role files name
@@ -93,6 +94,7 @@ src/
   curator/                       signals, proposals, replay, review
   pipeline/                      steps, states, end facts
   executor/                      verbs, modes, operations, gates
+  app/                           the app: model, update, view, loader, worker, terminal
 agents/                          role files and result schemas
 adapters/demo/                   an adapter that needs no network
 adapters/jira-github/            an adapter for Jira and GitHub
@@ -218,6 +220,8 @@ CREATE TABLE health     (at TEXT, test TEXT, ok INTEGER, detail TEXT);
 ```
 
 Migration 2 adds `five_hour_resets` and `seven_day_resets` to `turns`. They hold the reset time of each limit reading. The limit gate ignores a reading after its reset time, so that an old reading never blocks new turns.
+
+Migration 3 adds `title` to `tickets`. `vision take` writes the title that the queue of the tracker gives, so the status view keeps the title after the ticket leaves the queue. A ticket from before migration 3 has no title. The app then shows the title of the queue while the queue lists the ticket.
 
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
@@ -923,6 +927,7 @@ No session can call the executor. It runs after a rule in code, after a typed co
 ## 13. Commands
 
 ```
+vision                             in a terminal: the app (section 15). If not: the help
 vision init                        write the home folder and the configuration
 vision config                      print the configuration in use
 vision status [--json]             each ticket, its state, its marks, and the limits
@@ -971,4 +976,48 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 ```
 clap  serde  serde_json  toml  toml_edit  rusqlite (feature "bundled")
 anyhow  thiserror  time  uuid  sha2  libc  fs2
+ratatui (with its crossterm backend, for the app)
 ```
+
+## 15. The app
+
+If standard input and standard output are both terminals, `vision` with no arguments opens a full-screen program. Each command of section 13 stays, for scripts and for the timer.
+
+### 15.1 The layers
+
+The app has three layers. The model is plain data. The update takes a message, changes the model, and gives the effects to run. A message is a key, a tick of the clock, or the result of a background thread. The view draws the model. The update and the view read no clock and no file. So each screen has a text snapshot in `tests/snapshots/app/`, and no test needs a terminal.
+
+Each read runs in a thread, in the process, through the functions that the commands use: the status view, the rows of `vision pick`, the report, the model table, and the adapter. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
+
+### 15.2 The engine
+
+The worker is one thread that runs one job at a time. A job is a pass or an action. A pass is the child `vision tick`. A pass starts at these times:
+
+- The app starts.
+- An action ends.
+- A running turn ends.
+- One minute passed since the last pass.
+
+An action of the person goes before a pass that waits. A pass that finds the lock of a different tick is not an error, so the timer of section 6 can run too. A pass can take minutes, because a job of the adapter runs inside it. The screen stays live in that time, and the header shows the pass with its time.
+
+The person can pause the engine. Then no pass starts, and actions still run. The pause lives only in the memory of the app. The kill switch of section 3 is a different thing: the app shows it and can switch it.
+
+If the person quits the app, a running turn finishes by itself. The next step waits for the next start of the app, or for the timer.
+
+### 15.3 The screens
+
+The loader shows an android while the data loads. Its four stages are real: the home folder, the ledger, the tracker, and the engine. The loader leaves at the first of these events:
+
+- The android appeared, and each stage is done or failed.
+- The person pressed a key.
+- The tracker stage took more than 10 seconds. The load then continues, and Home shows the queue later.
+
+Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens a ticket in progress, or opens the start card for a ticket of the queue. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
+
+### 15.4 The terminal
+
+While the app owns the terminal, standard error goes to `log/app.err`. The terminal comes back on each way out: the normal end, an error, a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is the key `q`.
+
+The app needs 100 columns and 28 rows. In a smaller window, it shows the size that it needs. If `COLORTERM` says `truecolor` or `24bit`, the app uses 24-bit color. If not, it uses the nearest of the 256 colors. With `NO_COLOR`, it uses no color, and it does not draw the android.
+
+Text from outside is data. A ticket title, a status of the tracker, and the error text of a command lose each control character before they reach the screen. A cut goes by the display width of the text.

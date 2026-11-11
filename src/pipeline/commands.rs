@@ -67,7 +67,7 @@ fn seconds_since(at: &str) -> Option<i64> {
 // ----- pick ------------------------------------------------------------------------------
 
 /// One ticket of `vision pick`.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PickRow {
     pub key: String,
     pub title: String,
@@ -78,13 +78,14 @@ pub struct PickRow {
     pub taken: Option<String>,
 }
 
-/// `vision pick [--json]`.
-pub fn pick(ctx: &Ctx, json: bool) -> Result<()> {
+/// The rows of `vision pick`: the queue of the tracker, with the step of each ticket that
+/// Vision already holds. It only reads.
+pub fn pick_rows(ctx: &Ctx) -> Result<Vec<PickRow>> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
     let queue = executor::observe_queue(ctx)?;
     let held = held_tickets(&ledger)?;
-    let rows: Vec<PickRow> = queue
+    Ok(queue
         .into_iter()
         .map(|t| PickRow {
             taken: held.get(t.key.as_str()).cloned(),
@@ -94,7 +95,12 @@ pub fn pick(ctx: &Ctx, json: bool) -> Result<()> {
             eligible: t.eligible,
             reason: t.reason,
         })
-        .collect();
+        .collect())
+}
+
+/// `vision pick [--json]`.
+pub fn pick(ctx: &Ctx, json: bool) -> Result<()> {
+    let rows = pick_rows(ctx)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
@@ -254,8 +260,10 @@ fn take_one(
     let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &entry.id)?.len())?;
     let mut counts = Counts::default();
     let visit = counts.enter(&entry, "take", &now, turns, Some(head.clone()), true);
+    let title = Some(found.title.trim().to_string()).filter(|t| !t.is_empty());
     let row = TicketRow {
         key: key.to_string(),
+        title,
         state: Some(entry.id.clone()),
         flags: Some(flags_text(&[])),
         clone: Some(clone_text.clone()),
@@ -311,6 +319,14 @@ fn same_dir(a: &Path, b: &Path) -> bool {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
         }
+}
+
+/// The clone that `vision take` would use now: the first clone of `clones` that no ticket
+/// holds and whose work tree is clean. It only reads; the error says why no clone is free.
+pub fn next_clone(ctx: &Ctx) -> Result<PathBuf> {
+    ctx.require_setup()?;
+    let ledger = ctx.ledger()?;
+    free_clone(&ledger, ctx.config()?)
 }
 
 /// The first clone of `clones` that no ticket holds and whose work tree is clean.
