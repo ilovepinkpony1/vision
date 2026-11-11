@@ -92,7 +92,7 @@ pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
         check_config(ctx),
         ledger_check,
         check_heartbeat(ctx),
-        check_git(),
+        check_git(ctx),
         check_claude(ctx),
         check_memory(ctx),
         check_adapter(ctx),
@@ -256,9 +256,20 @@ fn check_heartbeat(ctx: &Ctx) -> Check {
     }
 }
 
-fn check_git() -> Check {
+/// git runs. The detail also names the author of each commit of a session.
+fn check_git(ctx: &Ctx) -> Check {
     match git::version() {
-        Ok(version) => Check::new("git", Level::Ok, version),
+        Ok(version) => {
+            let commits = ctx.config().ok().map(|config| {
+                let (name, email) = crate::turn::identity(&config.user, &config.git);
+                format!("; sessions commit as {name} <{email}>")
+            });
+            Check::new(
+                "git",
+                Level::Ok,
+                format!("{version}{}", commits.unwrap_or_default()),
+            )
+        }
         Err(e) => Check::new("git", Level::Fail, format!("{e:#}")),
     }
 }

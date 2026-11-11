@@ -39,6 +39,7 @@ pub struct Config {
     pub curator: Curator,
     pub sandbox: Sandbox,
     pub gates: Gates,
+    pub git: Git,
     /// Verb -> mode. Only `vision promote` and `vision demote` change them.
     pub modes: BTreeMap<String, Mode>,
     /// Name -> how the executor gets it. A session never gets one.
@@ -64,6 +65,7 @@ impl Default for Config {
             curator: Curator::default(),
             sandbox: Sandbox::default(),
             gates: Gates::default(),
+            git: Git::default(),
             modes: BTreeMap::new(),
             secrets: BTreeMap::new(),
             adapter: toml::Table::new(),
@@ -102,6 +104,17 @@ impl Default for Claude {
             attribution: true,
         }
     }
+}
+
+/// The author and the committer of each commit of a session. Empty values give the name of
+/// `user` with "(vision)" and an address that names nobody. A GitHub App bot has the name
+/// `<app>[bot]` and the address `<id>+<app>[bot]@users.noreply.github.com`, so that GitHub
+/// links each commit to the bot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Git {
+    pub name: String,
+    pub email: String,
 }
 
 /// Dollars at list price, as Claude Code reports them.
@@ -454,6 +467,23 @@ impl Config {
                 bail!("claude.env.{name} must be one line of text");
             }
         }
+        let (name, email) = (self.git.name.trim(), self.git.email.trim());
+        if name.is_empty() != email.is_empty() {
+            bail!("git.name and git.email go together: set both, or leave both empty");
+        }
+        if name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '"' | '\\' | '<' | '>'))
+        {
+            bail!("git.name must be one line with no quote, backslash, `<`, or `>`");
+        }
+        if !email.is_empty()
+            && (email.chars().any(|c| {
+                c.is_control() || c.is_whitespace() || matches!(c, '"' | '\\' | '<' | '>')
+            }) || !email.contains('@'))
+        {
+            bail!("git.email must be one address with `@` and no space, such as 7+app[bot]@users.noreply.github.com");
+        }
         Ok(())
     }
 }
@@ -529,6 +559,26 @@ mod tests {
         let off = Config::parse("[claude]\nattribution = false\n").unwrap();
         assert!(!off.claude.attribution);
         assert!(Config::parse("[claude]\nattribution = \"no\"\n").is_err());
+    }
+
+    #[test]
+    fn the_git_identity_needs_both_values_and_safe_text() {
+        assert_eq!(Config::default().git, Git::default());
+        let bot = Config::parse(
+            "[git]\nname = \"app[bot]\"\nemail = \"7+app[bot]@users.noreply.github.com\"\n",
+        )
+        .unwrap();
+        assert_eq!(bot.git.name, "app[bot]");
+        for (text, part) in [
+            ("[git]\nname = \"app[bot]\"\n", "go together"),
+            ("[git]\nemail = \"a@b\"\n", "go together"),
+            ("[git]\nname = \"a<b\"\nemail = \"a@b\"\n", "git.name"),
+            ("[git]\nname = \"a\"\nemail = \"a b@c\"\n", "git.email"),
+            ("[git]\nname = \"a\"\nemail = \"nobody\"\n", "git.email"),
+        ] {
+            let error = Config::parse(text).unwrap_err().to_string();
+            assert!(error.contains(part), "{text}: {error}");
+        }
     }
 
     #[test]

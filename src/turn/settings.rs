@@ -178,7 +178,22 @@ pub fn gitconfig_path(paths: &Paths) -> PathBuf {
 /// It also names an empty global ignore file and an empty global attributes file. Without
 /// them, git looks for both in the home folder of the person, which the sandbox does not let
 /// it read, so each git command of a session prints a warning.
-pub fn gitconfig_text(user: &str) -> String {
+pub fn gitconfig_text(user: &str, git: &crate::config::Git) -> String {
+    let (name, email) = identity(user, git);
+    format!(
+        "# Written by vision for its sessions. A session cannot read the git configuration of the person.\n\
+         [user]\n\tname = \"{name}\"\n\temail = {email}\n\
+         [commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n\
+         [core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n"
+    )
+}
+
+/// The name and the address of each commit of a session: `[git]` of the configuration, else
+/// the name of `user` with "(vision)" and an address that names nobody.
+pub fn identity(user: &str, git: &crate::config::Git) -> (String, String) {
+    if !git.name.trim().is_empty() && !git.email.trim().is_empty() {
+        return (git.name.trim().to_string(), git.email.trim().to_string());
+    }
     let local: String = user
         .chars()
         .map(|c| {
@@ -200,18 +215,16 @@ pub fn gitconfig_text(user: &str) -> String {
     } else {
         name.trim()
     };
-    format!(
-        "# Written by vision for its sessions. A session cannot read the git configuration of the person.\n\
-         [user]\n\tname = \"{name} (vision)\"\n\temail = {local}@noreply.invalid\n\
-         [commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n\
-         [core]\n\texcludesFile = /dev/null\n\tattributesFile = /dev/null\n"
+    (
+        format!("{name} (vision)"),
+        format!("{local}@noreply.invalid"),
     )
 }
 
 /// Writes the git configuration of a worker when its text changed.
-pub fn write_gitconfig(paths: &Paths, user: &str) -> Result<PathBuf> {
+pub fn write_gitconfig(paths: &Paths, user: &str, git: &crate::config::Git) -> Result<PathBuf> {
     let path = gitconfig_path(paths);
-    let text = gitconfig_text(user);
+    let text = gitconfig_text(user, git);
     if read_optional(&path)?.as_deref() != Some(text.as_str()) {
         atomic_write(&path, text.as_bytes())?;
     }
@@ -436,10 +449,22 @@ mod tests {
 
     #[test]
     fn the_git_configuration_is_neutral() {
-        let text = gitconfig_text("Some One");
+        let text = gitconfig_text("Some One", &crate::config::Git::default());
         assert!(text.contains("name = \"Some One (vision)\""), "{text}");
         assert!(text.contains("email = some-one@noreply.invalid"), "{text}");
-        assert!(gitconfig_text("\"<>").contains("email = user@noreply.invalid"));
+        assert!(gitconfig_text("\"<>", &crate::config::Git::default())
+            .contains("email = user@noreply.invalid"));
+        let bot = crate::config::Git {
+            name: "app[bot]".into(),
+            email: "7+app[bot]@users.noreply.github.com".into(),
+        };
+        let text = gitconfig_text("Some One", &bot);
+        assert!(text.contains("name = \"app[bot]\""), "{text}");
+        assert!(
+            text.contains("email = 7+app[bot]@users.noreply.github.com"),
+            "{text}"
+        );
+        assert!(!text.contains("(vision)"), "{text}");
         // No look into the home folder of the person for an ignore file or an attributes file.
         assert!(text.contains("excludesFile = /dev/null"), "{text}");
         assert!(text.contains("attributesFile = /dev/null"), "{text}");

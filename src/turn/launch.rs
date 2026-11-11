@@ -389,7 +389,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     let (id, turn) = allocate(ctx, &request.ticket, &request.step, now, first_n)?;
 
     let written = (|| -> Result<Plan> {
-        let gitconfig = settings::write_gitconfig(paths, &config.user)?;
+        let gitconfig = settings::write_gitconfig(paths, &config.user, &config.git)?;
         let rendered = settings::render(
             request.kind,
             &workdir,

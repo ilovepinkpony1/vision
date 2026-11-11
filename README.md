@@ -152,6 +152,20 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
    FORGE_TOKEN = { cmd = "gh auth token" }
    ```
 
+   `gh auth token` is your own GitHub login. If your login can bypass the rules of the main branch, a GitHub App is safer. Leave the App out of the bypass list of those rules, so that GitHub refuses each push of the App to that branch. Then push and act as the App, and open each pull request with your login, so that you are its author:
+
+   ```toml
+   [git]
+   name = "my-app[bot]"
+   email = "123456+my-app[bot]@users.noreply.github.com"
+
+   [secrets]
+   FORGE_TOKEN = { cmd = "<the path of this repo>/adapters/jira-github/bin/app-token --app-id <client id> --installation-id <id> --key-command 'security find-generic-password -s my-app-key -w'" }
+   PR_TOKEN = { cmd = "gh auth token" }
+   ```
+
+   The Keychain item holds the private key of the App as a PEM file. If the item holds the PEM file as one base64 line, end the key command with `| base64 -d`. `gh api users/my-app%5Bbot%5D --jq .id` gives the number of the address. Add the bot to `own_logins` in `[adapter]`, so that the comment step never answers a reply of the bot.
+
 6. Run `vision doctor`, and then run `vision pick`. `vision pick` only reads. It lists the tickets of your queue.
 
 7. Find out what the tests of your project need in the sandbox of a worker. The probe test runs your commands in one real session, and it prints each result.

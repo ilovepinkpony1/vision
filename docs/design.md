@@ -120,6 +120,10 @@ env_pass = []                     # more environment names that a session gets
 env = {}                          # more variables with a fixed value that a session gets. Never a secret.
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 
+[git]                         # the author and committer of each commit of a session
+name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
+email = ""                    # "" means: an address that names nobody. A bot: "<id>+<app>[bot]@users.noreply.github.com"
+
 [budget]                      # dollars at list price, as Claude Code reports them
 reader = 3
 worker = 25
@@ -325,7 +329,7 @@ The key `claude.attribution` controls the lines that Claude Code adds about itse
 
 Claude Code adds the tool `StructuredOutput` by itself, because each turn has a result schema. The contract of 7.4 expects that tool next to the tools of the kind. A test with a real session showed this.
 
-A worker and a tester get the file `worker.gitconfig` of the home as `GIT_CONFIG_GLOBAL`. It gives a neutral name and a no-reply address for commits, and it turns signing off. It also names an empty global ignore file and an empty global attributes file. Without these two keys, git looks for both files in the home folder of the person. The sandbox does not let git read them, so each git command prints a warning.
+A worker and a tester get the file `worker.gitconfig` of the home as `GIT_CONFIG_GLOBAL`. It gives the name and the address of each commit, and it turns signing off. These come from `[git]` of the configuration. If `[git]` is empty, the name is the value of `user` with "(vision)", and the address names nobody. For a GitHub App bot, the name is `<app>[bot]`, and the address is `<id>+<app>[bot]@users.noreply.github.com`. GitHub then links each commit to the bot. `vision doctor` names the author in its line `git`. It also names an empty global ignore file and an empty global attributes file. Without these two keys, git looks for both files in the home folder of the person. The sandbox does not let git read them, so each git command prints a warning.
 
 Claude Code asks for an approval for some commands also in the sandbox. Two examples are a git command with the option `-c` and a command with a variable in front of it. A turn has nobody who can approve, so Claude Code denies such a command. So the `settings.json` of a worker and of a tester also has a rule that allows each Bash command. The sandbox stays the limit, because that file refuses each run outside it.
 

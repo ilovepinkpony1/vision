@@ -69,6 +69,27 @@ fn doctor_writes_each_result_to_the_health_table() {
 }
 
 #[test]
+fn doctor_names_the_author_of_the_commits_of_a_session() {
+    let home = Home::init();
+    let run = home.run(&["doctor"]);
+    run.expect_code(0);
+    assert!(run.stdout.contains("(vision) <"), "{run:?}");
+    let config = home.path("config.toml");
+    let mut doc: toml_edit::DocumentMut =
+        std::fs::read_to_string(&config).unwrap().parse().unwrap();
+    doc["git"]["name"] = toml_edit::value("app[bot]");
+    doc["git"]["email"] = toml_edit::value("7+app[bot]@users.noreply.github.com");
+    std::fs::write(&config, doc.to_string()).unwrap();
+    let run = home.run(&["doctor"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout
+            .contains("sessions commit as app[bot] <7+app[bot]@users.noreply.github.com>"),
+        "{run:?}"
+    );
+}
+
+#[test]
 fn doctor_json_and_a_fresh_heartbeat() {
     let home = Home::init();
     home.run(&["tick"]).expect_code(0);

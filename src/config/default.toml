@@ -9,6 +9,10 @@ env_pass = []                     # more environment names that a session gets
 env = {}                          # more variables with a fixed value that a session gets. Never a secret.
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 
+[git]                         # the author and committer of each commit of a session
+name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
+email = ""                    # "" means: an address that names nobody. A bot: "<id>+<app>[bot]@users.noreply.github.com"
+
 [budget]                      # dollars at list price, as Claude Code reports them
 reader = 3
 worker = 25

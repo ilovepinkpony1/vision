@@ -43,7 +43,7 @@ pub use launch::{
 };
 pub use roles::{agents_dir, agents_file, compose_role, embedded_names, schema_name};
 pub use schema::problems as schema_problems;
-pub use settings::{gitconfig_path, permission_mode, session_env, tools, ALLOWED_ENV};
+pub use settings::{gitconfig_path, identity, permission_mode, session_env, tools, ALLOWED_ENV};
 pub use state::{Phase, Reason, TurnState};
 pub use stream::{
     parse_value as parse_stream_value, Event as StreamEvent, ResultEvent, ToolCall, Usage,
