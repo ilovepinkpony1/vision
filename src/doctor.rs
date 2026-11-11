@@ -108,12 +108,6 @@ fn check_adapter(ctx: &Ctx) -> Check {
         Ok(adapter) => adapter,
         Err(e) => return Check::new("adapter", Level::Fail, format!("{e:#}")),
     };
-    let missing: Vec<String> = ["observe", "act", "job"]
-        .iter()
-        .map(|name| adapter.script_path(name))
-        .filter(|path| find_program(&path.display().to_string()).is_none())
-        .map(|path| path.display().to_string())
-        .collect();
     let summary = format!(
         "{} from {}: {} steps, {} verbs, {} jobs",
         adapter.name,
@@ -122,6 +116,23 @@ fn check_adapter(ctx: &Ctx) -> Check {
         adapter.verbs.len(),
         adapter.jobs.len()
     );
+    if let Some(name) = &adapter.builtin {
+        // The loader accepts only a known name, and this binary answers the calls.
+        return Check::new(
+            "adapter",
+            Level::Ok,
+            format!(
+                "{summary}, with the built-in scripts {}{name}",
+                crate::adapters::PREFIX
+            ),
+        );
+    }
+    let missing: Vec<String> = ["observe", "act", "job"]
+        .iter()
+        .map(|name| adapter.script_path(name))
+        .filter(|path| find_program(&path.display().to_string()).is_none())
+        .map(|path| path.display().to_string())
+        .collect();
     if missing.is_empty() {
         Check::new("adapter", Level::Ok, summary)
     } else {

@@ -116,6 +116,59 @@ pub enum Command {
         #[arg(long)]
         print: bool,
     },
+
+    /// Print an installation token of a GitHub App, as the command of a secret
+    // A repeated option takes its last value.
+    #[command(display_order = 34, long_about = APP_TOKEN_ABOUT, args_override_self = true)]
+    AppToken(AppTokenArgs),
+
+    /// Run one call of a built-in adapter: JSON on standard input, JSON on standard output
+    #[command(hide = true)]
+    AdapterScript {
+        /// The built-in adapter, such as jira-github
+        name: String,
+        /// The call: observe, act, or job
+        #[arg(value_parser = ["observe", "act", "job"])]
+        script: String,
+    },
+}
+
+const APP_TOKEN_ABOUT: &str = "\
+Print an installation token of a GitHub App, and nothing else.
+
+The command makes a JWT signed with RS256 by the openssl program, and asks GitHub for an
+installation token. The private key comes from a file (--key-file) or from the standard output
+of a shell command (--key-command). A key from a command goes to openssl through a pipe: it
+never goes into a file, and it is never printed. A command can print the PEM file as it is, or
+as one base64 line, as a keychain item can hold it.
+
+Use it as the command of a secret in config.toml:
+
+  [secrets]
+  FORGE_TOKEN = { cmd = \"vision app-token --app-id 123 --installation-id 456 --key-file ~/.keys/app.pem\" }";
+
+/// The arguments of `vision app-token`.
+#[derive(Debug, Args)]
+#[command(group(ArgGroup::new("key").required(true).args(["key_file", "key_command"])))]
+pub struct AppTokenArgs {
+    /// The app id (or the client id) of the GitHub App
+    #[arg(long, value_name = "ID")]
+    pub app_id: String,
+    /// The id of the installation
+    #[arg(long, value_name = "ID")]
+    pub installation_id: i64,
+    /// The file of the private key (PEM)
+    #[arg(long, value_name = "PATH")]
+    pub key_file: Option<String>,
+    /// A shell command that prints the private key: the PEM text, or the PEM text as base64
+    #[arg(long, value_name = "CMD")]
+    pub key_command: Option<String>,
+    /// The REST address of GitHub
+    #[arg(long, value_name = "URL", default_value = "https://api.github.com")]
+    pub api: String,
+    /// Seconds for each step: the key command, openssl, and the call to GitHub
+    #[arg(long, value_name = "S", default_value_t = 30.0)]
+    pub timeout: f64,
 }
 
 /// The commands of the pipeline (section 11).
@@ -809,6 +862,51 @@ mod tests {
         };
         assert_eq!(args.reject, Some(Pick::Change(3)));
         assert_eq!(args.why.as_deref(), Some("W"));
+    }
+
+    #[test]
+    fn app_token_is_visible_and_adapter_script_is_hidden() {
+        let cli = parse(&[
+            "app-token",
+            "--app-id",
+            "123",
+            "--installation-id",
+            "456",
+            "--key-command",
+            "cat key.pem",
+        ])
+        .unwrap();
+        let Command::AppToken(args) = cli.command else {
+            panic!("app-token")
+        };
+        assert_eq!(
+            (args.app_id.as_str(), args.installation_id, args.timeout),
+            ("123", 456, 30.0)
+        );
+        assert_eq!(args.api, "https://api.github.com");
+        assert!(parse(&["app-token", "--app-id", "1", "--installation-id", "2"]).is_err());
+        assert!(parse(&[
+            "app-token",
+            "--app-id",
+            "1",
+            "--installation-id",
+            "2",
+            "--key-file",
+            "a",
+            "--key-command",
+            "b"
+        ])
+        .is_err());
+        assert!(matches!(
+            parse(&["adapter-script", "jira-github", "act"])
+                .unwrap()
+                .command,
+            Command::AdapterScript { .. }
+        ));
+        assert!(parse(&["adapter-script", "jira-github", "other"]).is_err());
+        let help = Cli::command().render_help().to_string();
+        assert!(help.contains("app-token"), "{help}");
+        assert!(!help.contains("adapter-script"), "{help}");
     }
 
     #[test]

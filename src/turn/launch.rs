@@ -625,7 +625,8 @@ pub fn set_vision_bin(path: impl Into<PathBuf>) {
     let _ = VISION_BIN.set(path.into());
 }
 
-fn vision_bin() -> Result<PathBuf> {
+/// The `vision` binary: the one of [`set_vision_bin`], else this program when it is `vision`.
+pub fn vision_bin() -> Result<PathBuf> {
     if let Some(path) = VISION_BIN.get() {
         return Ok(path.clone());
     }

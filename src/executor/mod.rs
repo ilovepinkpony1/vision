@@ -52,7 +52,9 @@ pub use ops::{
     mode_of, once_key, operation, operations_of, promoted, reconcile, release_failed, request,
     waiting, OpState, OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
 };
-pub use scripts::{Answer, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT, PASSED_ENV};
+pub use scripts::{
+    Answer, Builtin, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT, PASSED_ENV,
+};
 
 /// `vision approve`, `promote`, and `demote`.
 pub fn run(ctx: &Ctx, command: ExecutorCommand) -> Result<()> {

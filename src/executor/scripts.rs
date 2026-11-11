@@ -1,5 +1,6 @@
 //! The script runner (section 11.1): the only code that starts `bin/observe`, `bin/act`, and
-//! `bin/job` of an adapter.
+//! `bin/job` of an adapter. For a built-in adapter (`scripts = "builtin:<name>"`), it starts
+//! this binary as `vision adapter-script <name> <observe|act|job>`, with the same contract.
 //!
 //! A call writes one JSON object to standard input (always with `config`, the `[adapter]` table
 //! of the configuration, and `base_ref`, the `base` of `adapter.toml`) and reads one JSON object
@@ -263,11 +264,35 @@ impl ScriptError {
     }
 }
 
+/// A built-in adapter (`scripts = "builtin:<name>"`): this binary answers its calls as
+/// `<exe> adapter-script <name> <observe|act|job>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Builtin {
+    /// The name after `builtin:`, such as `jira-github`.
+    pub name: String,
+    /// The `vision` binary, or why this program cannot name it.
+    pub exe: Result<PathBuf, String>,
+}
+
+impl Builtin {
+    /// The built-in adapter `name`, answered by the `vision` binary of
+    /// [`crate::turn::vision_bin`].
+    pub fn new(name: &str) -> Builtin {
+        Builtin {
+            name: name.to_string(),
+            exe: crate::turn::vision_bin().map_err(|e| format!("{e:#}")),
+        }
+    }
+}
+
 /// Runs the scripts of one adapter with one set of secrets.
 #[derive(Clone, Debug)]
 pub struct Runner<'a> {
-    /// The folder whose `bin/` holds the scripts.
+    /// The folder whose `bin/` holds the scripts. For a built-in adapter, the adapter folder.
+    /// Each call runs in this folder.
     pub scripts: PathBuf,
+    /// A built-in adapter: the calls go to this binary, and `bin/` takes no part.
+    pub builtin: Option<Builtin>,
     /// The `[adapter]` table of the configuration, as JSON.
     pub config: Value,
     /// The `base` of `adapter.toml`, such as `origin/main`: the one place of the base branch.
@@ -279,20 +304,30 @@ impl<'a> Runner<'a> {
     pub fn new(adapter: &Adapter, config: &Config, secrets: &'a Secrets) -> Runner<'a> {
         Runner {
             scripts: adapter.scripts.clone(),
+            builtin: adapter.builtin.as_deref().map(Builtin::new),
             config: Value::Object(table_to_json(&config.adapter)),
             base_ref: adapter.base.clone(),
             secrets,
         }
     }
 
-    /// The path of a script.
+    /// The path of a script: `bin/<script>`, or the binary of a built-in adapter.
     pub fn path(&self, script: Script) -> PathBuf {
-        self.scripts.join("bin").join(script.file_name())
+        match &self.builtin {
+            Some(builtin) => builtin
+                .exe
+                .clone()
+                .unwrap_or_else(|_| PathBuf::from("vision")),
+            None => self.scripts.join("bin").join(script.file_name()),
+        }
     }
 
     /// True when the script exists and is executable.
     pub fn has(&self, script: Script) -> bool {
-        is_executable(&self.path(script))
+        match &self.builtin {
+            Some(builtin) => builtin.exe.as_ref().is_ok_and(|exe| is_executable(exe)),
+            None => is_executable(&self.path(script)),
+        }
     }
 
     /// `bin/observe` with the default time limit.
@@ -328,6 +363,16 @@ impl<'a> Runner<'a> {
         timeout: Duration,
         with_secrets: bool,
     ) -> Result<Answer, ScriptError> {
+        if let Some(Builtin {
+            name,
+            exe: Err(why),
+        }) = &self.builtin
+        {
+            return Err(ScriptError::Start {
+                path: format!("the built-in adapter {name}"),
+                why: why.clone(),
+            });
+        }
         let path = self.path(script);
         let path_text = path.display().to_string();
         if !is_executable(&path) {
@@ -341,6 +386,9 @@ impl<'a> Runner<'a> {
         input.insert("base_ref".into(), Value::String(self.base_ref.clone()));
         let bytes = serde_json::to_vec(&Value::Object(input)).unwrap_or_default();
         let mut command = Command::new(&path);
+        if let Some(builtin) = &self.builtin {
+            command.args(["adapter-script", &builtin.name, script.file_name()]);
+        }
         command.current_dir(&self.scripts).env_clear();
         for name in PASSED_ENV {
             if let Some(value) = std::env::var_os(name) {
@@ -628,6 +676,7 @@ mod tests {
     fn runner<'a>(dir: &Path, secrets: &'a Secrets) -> Runner<'a> {
         Runner {
             scripts: dir.to_path_buf(),
+            builtin: None,
             config: json!({"root": "/world"}),
             base_ref: "origin/trunk".into(),
             secrets,

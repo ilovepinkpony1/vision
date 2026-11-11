@@ -1,10 +1,29 @@
 //! The adapter jira-github: its `adapter.toml` loads through the loader of the core, and the
-//! Python tests of its scripts pass. Those tests run against a fake HTTP server on a free
-//! localhost port and against temporary git repos: no test reaches the network.
+//! built-in adapter (`vision adapter-script jira-github`) passes the tests of each verb, read
+//! verb, job, and observe call. The tests run against a fake HTTP server on a free localhost
+//! port and against temporary git repos: no test reaches the network, and no test needs Python.
+
+mod jira_github_support;
+
+#[path = "adapter_jira_github/act.rs"]
+mod act;
+#[path = "adapter_jira_github/adf.rs"]
+mod adf;
+#[path = "adapter_jira_github/app_token.rs"]
+mod app_token;
+#[path = "adapter_jira_github/builtin.rs"]
+mod builtin;
+#[path = "adapter_jira_github/fixtures.rs"]
+mod fixtures;
+#[path = "adapter_jira_github/jobs.rs"]
+mod jobs;
+#[path = "adapter_jira_github/observe.rs"]
+mod observe;
+#[path = "adapter_jira_github/world.rs"]
+mod world;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use vision::adapter::{self, EntryKind, Expect, Origin, StepKind};
 use vision::config::{Config, Mode};
@@ -22,6 +41,16 @@ fn load() -> adapter::Adapter {
     adapter::load_with(&config, &paths).unwrap()
 }
 
+/// The app of the tests of app-start: a small HTTP server on the port of
+/// `VISION_TEST_APP_PORT`, which prints one line when it listens and `PORT-TAKEN` when its port
+/// is taken. The test binary runs it as `<test binary> test_app --exact --ignored`. With no
+/// port it does nothing.
+#[test]
+#[ignore]
+fn test_app() {
+    jobs::serve_test_app();
+}
+
 #[test]
 fn the_adapter_loads_through_the_loader_of_the_core() {
     let adapter = load();
@@ -29,6 +58,7 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
     assert_eq!(adapter.name, "jira-github");
     assert_eq!(adapter.dir, adapter_dir());
     assert_eq!(adapter.scripts, adapter_dir());
+    assert_eq!(adapter.builtin.as_deref(), Some("jira-github"));
     let key = TicketKey::parse("DEMO-12").unwrap();
     assert_eq!(adapter.branch_for(&key), "vision/DEMO-12");
     let ids: Vec<&str> = adapter.steps.iter().map(|s| s.id.as_str()).collect();
@@ -55,11 +85,13 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
     );
     assert_eq!(adapter.entry().id, "refine");
     assert_eq!(adapter.end().id, "done");
-    for script in ["observe", "act", "job", "app-token"] {
-        let path = adapter.script_path(script);
-        let mode = std::os::unix::fs::PermissionsExt::mode(&path.metadata().unwrap().permissions());
-        assert!(mode & 0o111 != 0, "{} is executable", path.display());
-    }
+    // The binary answers the calls: the folder holds only the documented template.
+    let files: Vec<String> = std::fs::read_dir(adapter_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(files, ["adapter.toml"]);
 }
 
 #[test]
@@ -244,33 +276,4 @@ fn the_steps_name_their_documents_and_their_evidence() {
     };
     assert_eq!(ready.watch, "pr.draft");
     assert_eq!(step("ready").on["false"], "in-review");
-}
-
-#[test]
-fn the_python_tests_of_the_adapter_pass() {
-    let dir = adapter_dir();
-    let home = tempfile::tempdir().unwrap();
-    // A plain environment: no token of this machine can reach the tests.
-    let mut command = Command::new("python3");
-    command
-        .args([
-            "-B", "-m", "unittest", "discover", "-s", "tests", "-t", "tests",
-        ])
-        .current_dir(&dir)
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", home.path())
-        .env("LANG", "C.UTF-8")
-        .env("PYTHONDONTWRITEBYTECODE", "1");
-    if let Some(tmp) = std::env::var_os("TMPDIR") {
-        command.env("TMPDIR", tmp);
-    }
-    let output = command.output().expect("run python3");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "the Python tests of adapters/jira-github failed:\n{}\n{stderr}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    assert!(stderr.contains("OK"), "{stderr}");
 }

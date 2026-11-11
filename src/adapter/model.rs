@@ -34,8 +34,12 @@ pub struct Adapter {
     pub name: String,
     /// The adapter folder: it holds `adapter.toml` and `roles/`.
     pub dir: PathBuf,
-    /// The folder whose `bin/` answers the calls: `scripts`, or the adapter folder.
+    /// The folder whose `bin/` answers the calls: `scripts`, or the adapter folder. For a
+    /// built-in adapter, the adapter folder: it is the working folder of each call.
     pub scripts: PathBuf,
+    /// The name of a built-in adapter, from `scripts = "builtin:<name>"`. `None` for scripts
+    /// in `bin/`.
+    pub builtin: Option<String>,
     /// The branch of a ticket, with `{key}` for the ticket key.
     pub branch: String,
     /// The ref that a new branch starts from, such as `origin/main`.
@@ -357,7 +361,7 @@ impl Adapter {
         self.branch.replace("{key}", key.as_str())
     }
 
-    /// The path of a script, such as `<scripts>/bin/act`.
+    /// The path of a script, such as `<scripts>/bin/act`. A built-in adapter has no such file.
     pub fn script_path(&self, name: &str) -> PathBuf {
         self.scripts.join("bin").join(name)
     }
@@ -441,9 +445,27 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
             "it must be a git ref with no space, such as origin/main",
         );
     }
-    let scripts = match string(table.remove("scripts"), "the key `scripts`", problems) {
-        Some(path) => scripts_dir(&path, dir, problems),
-        None => dir.to_path_buf(),
+    let (scripts, builtin) = match string(table.remove("scripts"), "the key `scripts`", problems) {
+        Some(text) => match text.strip_prefix(crate::adapters::PREFIX) {
+            Some(name) => {
+                if !crate::adapters::is_builtin(name) {
+                    problems.add(
+                        "the key `scripts`",
+                        format!(
+                            "`{text}` names no built-in adapter. The built-in adapters: {}",
+                            crate::adapters::NAMES
+                                .iter()
+                                .map(|n| format!("{}{n}", crate::adapters::PREFIX))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    );
+                }
+                (dir.to_path_buf(), Some(name.to_string()))
+            }
+            None => (scripts_dir(&text, dir, problems), None),
+        },
+        None => (dir.to_path_buf(), None),
     };
     let verbs = parse_verbs(table.remove("verbs"), problems);
     let jobs = parse_jobs(table.remove("jobs"), problems);
@@ -462,6 +484,7 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
         name,
         dir: dir.to_path_buf(),
         scripts,
+        builtin,
         branch,
         base,
         steps,
@@ -1533,6 +1556,32 @@ url = "http://localhost:3000"
         );
         let text = with("base = \"origin/trunk\"", "scripts = \"/srv/public\"");
         assert_eq!(parse(&text).unwrap().scripts, Path::new("/srv/public"));
+        assert_eq!(parse(&text).unwrap().builtin, None);
+    }
+
+    #[test]
+    fn scripts_can_name_a_built_in_adapter() {
+        let text = with(
+            "base = \"origin/trunk\"",
+            "scripts = \"builtin:jira-github\"",
+        );
+        let adapter = parse(&text).unwrap();
+        assert_eq!(adapter.builtin.as_deref(), Some("jira-github"));
+        assert_eq!(
+            adapter.scripts,
+            Path::new("/adapters/toy"),
+            "the adapter folder"
+        );
+        assert_eq!(parse(GOOD).unwrap().builtin, None);
+        let text = with(
+            "base = \"origin/trunk\"",
+            "scripts = \"builtin:jira-gitlab\"",
+        );
+        let err = error(&text);
+        assert!(
+            err.contains("the key `scripts`: `builtin:jira-gitlab` names no built-in adapter. The built-in adapters: builtin:jira-github"),
+            "{err}"
+        );
     }
 
     #[test]

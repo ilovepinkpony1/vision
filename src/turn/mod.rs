@@ -38,7 +38,7 @@ pub use control::{kill_all, kill_turn, running_turn_of, running_turns, tell, Run
 pub use inbox::MessageFile;
 pub use launch::{
     first_message, launch, prepare, refusal, request_of, resume, set_vision_bin, start_supervisor,
-    turn_paths, Contract, LaunchFile, LaunchRequest, Launched, Plan, Refusal, ViewFile,
+    turn_paths, vision_bin, Contract, LaunchFile, LaunchRequest, Launched, Plan, Refusal, ViewFile,
     TURN_PLACEHOLDER,
 };
 pub use roles::{agents_dir, agents_file, compose_role, embedded_names, schema_name};

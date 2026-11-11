@@ -4,6 +4,7 @@
 //! parses the command line and calls [`run`].
 
 pub mod adapter;
+pub mod adapters;
 pub mod app;
 pub mod cli;
 pub mod config;
@@ -35,6 +36,13 @@ use ctx::Ctx;
 
 /// Runs one parsed command line.
 pub fn run(cli: Cli) -> Result<()> {
+    // A call of a built-in adapter and `vision app-token` need no home of Vision: the executor
+    // starts the first one with a plain environment, and a secret command runs the second one.
+    match &cli.command {
+        Command::AdapterScript { name, script } => return adapter_script(name, script),
+        Command::AppToken(args) => return adapters::jira_github::app_token::command(args),
+        _ => {}
+    }
     let ctx = Ctx::from_env();
     if let Command::Prompt = cli.command {
         // The shell prompt must never fail loudly, even without a home.
@@ -42,6 +50,15 @@ pub fn run(cli: Cli) -> Result<()> {
         return Ok(());
     }
     dispatch(&ctx?, cli.command)
+}
+
+/// `vision adapter-script NAME SCRIPT`: the call wrote its own output, so only its exit code
+/// is left.
+fn adapter_script(name: &str, script: &str) -> Result<()> {
+    match adapters::run_script(name, script) {
+        0 => Ok(()),
+        code => Err(exit::Stop::Exit(code).into()),
+    }
 }
 
 fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
@@ -67,5 +84,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Executor(command) => executor::run(ctx, command),
         Command::Install { print } => install::install(ctx, print),
         Command::Uninstall { print } => install::uninstall(ctx, print),
+        Command::AdapterScript { name, script } => adapter_script(&name, &script),
+        Command::AppToken(args) => adapters::jira_github::app_token::command(&args),
     }
 }

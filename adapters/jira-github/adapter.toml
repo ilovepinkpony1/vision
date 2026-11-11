@@ -2,8 +2,10 @@
 #
 # It reads tickets from Jira Cloud (REST v3), pushes the branch of a ticket and opens a draft pull
 # request on GitHub, starts and reads GitHub Actions runs, merges a commit into the branch of a
-# staging env, and reads and answers review comments. The scripts are Python 3.9+ with the
-# standard library only. Each HTTP call has a time limit; a token goes only over https.
+# staging env, and reads and answers review comments. The vision binary answers the calls
+# observe, act, and job of this adapter (`scripts = "builtin:jira-github"` below), so it needs
+# no Python and no bin/ folder. It runs git, and `vision app-token` runs openssl. Each HTTP call
+# has a time limit; a token goes only over https.
 #
 # ---------------------------------------------------------------------------------------------
 # The [adapter] table of config.toml. A key with no default is needed by the calls that name it;
@@ -107,7 +109,7 @@
 #                          Default 64.
 #   http_timeout           Seconds for one HTTP call. Default 30.
 #
-# The secrets of [secrets] in config.toml. The executor gives them to bin/observe and bin/act,
+# The secrets of [secrets] in config.toml. The executor gives them to the calls observe and act,
 # and to the jobs ci-log and comments. A child process that runs code of the project never gets
 # one. A token never goes into a file, a remote address, or the git configuration of a clone:
 # git.push gives FORGE_TOKEN to one git call as a header for git_remote_url only.
@@ -121,9 +123,11 @@
 # Such as:
 #   [secrets]
 #   JIRA_TOKEN  = { cmd = "security find-generic-password -s vision-jira -w" }
-#   FORGE_TOKEN = { cmd = "/path/to/adapters/jira-github/bin/app-token --app-id 123 --installation-id 456 --key-file ~/.keys/app.pem" }
+#   FORGE_TOKEN = { cmd = "vision app-token --app-id 123 --installation-id 456 --key-file ~/.keys/app.pem" }
 #
-# bin/app-token prints an installation token of a GitHub App (see `bin/app-token --help`).
+# `vision app-token` prints an installation token of a GitHub App (see `vision app-token
+# --help`). With --key-command in place of --key-file, the key comes from the standard output of
+# a command (the PEM text, or the PEM text as one base64 line), and it never goes into a file.
 #
 # ---------------------------------------------------------------------------------------------
 # The path of a ticket. A wait step moves on a fact of observe, and the step qa moves on its
@@ -162,8 +166,9 @@
 #
 # ---------------------------------------------------------------------------------------------
 # A project with staging envs writes its own adapter.toml in $VISION_HOME/adapters/<name>/,
-# with `scripts = "<the path of this folder>"`, so that it uses these scripts. It copies the
-# steps below and adds three steps for each env, such as staging, with
+# with `scripts = "builtin:jira-github"`, so that the vision binary answers its calls. Its
+# folder needs no other file. It copies the steps below and adds three steps for each env, such
+# as staging, with
 # envs = [{ name = "staging", branch = "staging", deployment = "staging" }] in the [adapter]
 # table:
 #
@@ -208,6 +213,7 @@
 name = "jira-github"
 branch = "vision/{key}"
 base = "origin/main"
+scripts = "builtin:jira-github"   # the vision binary answers observe, act, and job
 
 [[step]]
 id = "refine"

@@ -140,7 +140,7 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
    cp adapters/jira-github/adapter.toml ~/.vision/adapters/myproject/adapter.toml
    ```
 
-3. Edit the copy. Set `name = "myproject"`, and set `base` to your main branch, such as `origin/main`. Add the line `scripts = "<the path of this repo>/adapters/jira-github"` after `base`. Remove each step that your project does not need, such as `qa`.
+3. Edit the copy. Set `name = "myproject"`, and set `base` to your main branch, such as `origin/main`. Keep the line `scripts = "builtin:jira-github"` of the copy. The vision binary answers the calls of the adapter, so your folder needs no other file. Remove each step that your project does not need, such as `qa`.
 
 4. In the copy, set the mode of each verb that writes to `shadow`. A verb in this mode records what it intends, and it calls nothing.
 
@@ -160,11 +160,11 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
    email = "123456+my-app[bot]@users.noreply.github.com"
 
    [secrets]
-   FORGE_TOKEN = { cmd = "<the path of this repo>/adapters/jira-github/bin/app-token --app-id <client id> --installation-id <id> --key-command 'security find-generic-password -s my-app-key -w'" }
+   FORGE_TOKEN = { cmd = "vision app-token --app-id <client id> --installation-id <id> --key-command 'security find-generic-password -s my-app-key -w'" }
    PR_TOKEN = { cmd = "gh auth token" }
    ```
 
-   The Keychain item holds the private key of the App as a PEM file. If the item holds the PEM file as one base64 line, end the key command with `| base64 -d`. `gh api users/my-app%5Bbot%5D --jq .id` gives the number of the address. Add the bot to `own_logins` in `[adapter]`, so that the comment step never answers a reply of the bot.
+   The Keychain item holds the private key of the App as a PEM file, or as the PEM file in one base64 line. `vision app-token` decodes that line by itself. If the timer does not find `vision` in its PATH, give the full path of the binary. `gh api users/my-app%5Bbot%5D --jq .id` gives the number of the address. Add the bot to `own_logins` in `[adapter]`, so that the comment step never answers a reply of the bot.
 
 6. Run `vision doctor`, and then run `vision pick`. `vision pick` only reads. It lists the tickets of your queue.
 

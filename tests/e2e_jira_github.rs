@@ -1,10 +1,13 @@
 //! The whole path of one ticket with the adapter for Jira and GitHub (design section 11.3): a
 //! temporary home, the fake `claude`, a clone of a toy project, and a fake Jira and GitHub with
-//! state (`adapters/jira-github/tests/serve_world.py`) on a free localhost port. `vision take
-//! DEMO-12` and then `vision tick` in a loop carry the ticket from the tracker to a merged pull
-//! request, through each step of the `adapter.toml` of the repo. The test plays the person (it
-//! approves the plan and the operations in the mode ask) and the team (it marks the pull
-//! request ready, reviews, comments, approves, and merges with the control calls of the world).
+//! state (tests/jira_github_support/world.rs) on a free localhost port, in this test process.
+//! `vision take DEMO-12` and then `vision tick` in a loop carry the ticket from the tracker to a
+//! merged pull request, through each step of the `adapter.toml` of the repo, whose calls the
+//! built-in adapter of the binary answers (`scripts = "builtin:jira-github"`). The test plays
+//! the person (it approves the plan and the operations in the mode ask) and the team (it marks
+//! the pull request ready, reviews, comments, approves, and merges with the control calls of the
+//! world). The toy project and its tests are shell scripts, so no part of the path needs Python
+//! (the fake `claude` is a separate program).
 //!
 //! Nothing here reaches the network: each address of `[adapter]` points at the fake server, and
 //! git pushes to a local bare repo.
@@ -12,15 +15,18 @@
 //! To look into a run, set `VISION_E2E_DUMP` to a file: the test writes the step, the turns, and
 //! the log there before each stage and at the end. A failed stage prints the same report.
 
+mod jira_github_support;
 mod pipeline_support;
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use jira_github_support::server::call;
+use jira_github_support::world::{install, World};
+use jira_github_support::FakeServer;
 use pipeline_support::{ends_with, fake_claude, git, plan_hash_of, result, runs_then, KEY};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -37,118 +43,46 @@ const JIRA_USER: &str = "bot@example.invalid";
 /// time of a stage on a slow machine.
 const STAGE: Duration = Duration::from_secs(180);
 
-const TOY_CALC: &str = "\"\"\"A tiny calculator.\"\"\"\n\n\ndef add(a, b):\n    \"\"\"Gives a plus b.\"\"\"\n    return a + b\n";
-const TOY_TEST: &str = "import unittest\n\nfrom calc import add\n\n\nclass AddTest(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n";
-const TOY_CI: &str = "#!/bin/sh\n# The CI of the toy project: each test must pass.\nset -e\npython3 -B -m unittest discover -q\n";
+/// The toy project: shell functions, and tests that are shell scripts (`sh <file>` passes when
+/// the script exits with 0).
+const TOY_CALC: &str = "# A tiny calculator.\n\n# Gives a plus b.\nadd() { echo $(($1 + $2)); }\n";
+const TOY_TEST: &str = ". ./calc.sh\n[ \"$(add 2 3)\" = 5 ]\n";
+const TOY_CI: &str = "#!/bin/sh\n# The CI of the toy project: each test must pass.\nset -e\nfor test in test_*.sh; do sh \"$test\"; done\n";
 
 /// The build: subtract with its test, one more test of add (it passes on the base too, so the
 /// plan declares it green), and a ci.sh that fails while TODO.txt exists.
-const BUILD: &str = "printf '\\n\\ndef subtract(a, b):\\n    \"\"\"Gives a minus b.\"\"\"\\n    return a - b\\n' >> calc.py && printf 'import unittest\\n\\nfrom calc import subtract\\n\\n\\nclass SubtractTest(unittest.TestCase):\\n    def test_subtract(self):\\n        self.assertEqual(subtract(5, 3), 2)\\n' > test_subtract.py && printf '\\n\\nclass ZeroTest(unittest.TestCase):\\n    def test_zero(self):\\n        self.assertEqual(add(0, 0), 0)\\n' >> test_calc.py && printf 'test ! -f TODO.txt\\n' >> ci.sh && echo 'Name subtract in the README.' > TODO.txt && git add -A && git commit -q -m 'Add subtract'";
+const BUILD: &str = "printf '\\n# Gives a minus b.\\nsubtract() { echo $(($1 - $2)); }\\n' >> calc.sh && printf '. ./calc.sh\\n[ \"$(subtract 5 3)\" = 2 ]\\n' > test_subtract.sh && printf '[ \"$(add 0 0)\" = 0 ]\\n' >> test_calc.sh && printf 'test ! -f TODO.txt\\n' >> ci.sh && echo 'Name subtract in the README.' > TODO.txt && git add -A && git commit -q -m 'Add subtract'";
 
-const PLAN: &str = "# Plan of DEMO-12\n\n## Decisions\n\n- subtract goes next to add in calc.py.\n\n## Proof\n\n- test_subtract.py fails on the base and passes after the change.\n- **Proof:** green test_calc.py\n";
+const PLAN: &str = "# Plan of DEMO-12\n\n## Decisions\n\n- subtract goes next to add in calc.sh.\n\n## Proof\n\n- test_subtract.sh fails on the base and passes after the change.\n- **Proof:** green test_calc.sh\n";
 
-/// The fake Jira and GitHub as a child process. Its standard input stays open while the test
-/// runs; the end of the test closes it, and the world ends.
+/// The fake Jira and GitHub with state, served on a free localhost port by a thread of this
+/// test process.
 struct Server {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    port: u16,
-    dir: PathBuf,
+    fake: FakeServer,
+    world: Arc<Mutex<World>>,
 }
 
 impl Server {
-    fn start(dir: &Path, remote: &Path) -> Server {
-        std::fs::create_dir_all(dir).unwrap();
-        let script =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/jira-github/tests/serve_world.py");
-        let mut command = Command::new("python3");
-        command
-            .arg("-B")
-            .arg(&script)
-            .arg("--dir")
-            .arg(dir)
-            .arg("--remote")
-            .arg(remote)
-            .args([
-                "--issue",
-                KEY,
-                "--title",
-                "Add subtract to the calculator",
-                "--description",
-                "The calculator can only add. Add a function subtract(a, b) that gives a minus b, with a test.",
-            ])
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", dir)
-            .env("LANG", "C.UTF-8")
-            .env("FAKE_JIRA_TOKEN", JIRA_TOKEN)
-            .env("FAKE_FORGE_TOKEN", FORGE_TOKEN)
-            .env("FAKE_JIRA_USER", JIRA_USER)
-            .stdin(Stdio::piped())
-            .stdout(std::fs::File::create(dir.join("stdout.log")).unwrap())
-            .stderr(std::fs::File::create(dir.join("stderr.log")).unwrap());
-        if let Some(tmp) = std::env::var_os("TMPDIR") {
-            command.env("TMPDIR", tmp);
-        }
-        let mut child = command.spawn().expect("start python3 serve_world.py");
-        let stdin = child.stdin.take();
-        // Wait for a fact: the port file, which the world writes once it listens.
-        let port_file = dir.join("port");
-        let until = Instant::now() + Duration::from_secs(60);
-        let port = loop {
-            if let Ok(text) = std::fs::read_to_string(&port_file) {
-                if let Ok(port) = text.trim().parse::<u16>() {
-                    break port;
-                }
-            }
-            if let Ok(Some(status)) = child.try_wait() {
-                panic!(
-                    "the world ended with {status} before it listened: {}",
-                    std::fs::read_to_string(dir.join("stderr.log")).unwrap_or_default()
-                );
-            }
-            assert!(Instant::now() < until, "the world never wrote its port");
-            std::thread::sleep(Duration::from_millis(50));
-        };
-        Server {
-            child,
-            stdin,
-            port,
-            dir: dir.to_path_buf(),
-        }
+    fn start(remote: &Path) -> Server {
+        let mut world = World::new(remote, Some(JIRA_TOKEN), Some(FORGE_TOKEN), Some(JIRA_USER));
+        world.add_issue(
+            KEY,
+            "Add subtract to the calculator",
+            "The calculator can only add. Add a function subtract(a, b) that gives a minus b, with a test.",
+        );
+        let world = Arc::new(Mutex::new(world));
+        let fake = FakeServer::start();
+        install(&fake, Arc::clone(&world));
+        Server { fake, world }
     }
 
     fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
+        self.fake.url.clone()
     }
 
     /// One HTTP call to the world, for the control calls of the team.
     fn call(&self, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
-        let mut stream =
-            TcpStream::connect(("127.0.0.1", self.port)).expect("connect to the world");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(120)))
-            .unwrap();
-        let text = body.map(|b| b.to_string()).unwrap_or_default();
-        write!(
-            stream,
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
-            self.port,
-            text.len()
-        )
-        .unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        let status = response
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let body = response
-            .split_once("\r\n\r\n")
-            .map(|(_, b)| b)
-            .unwrap_or("");
-        (status, serde_json::from_str(body).unwrap_or(Value::Null))
+        call(self.fake.port, method, path, body.as_ref(), &[])
     }
 
     /// A control call of the team, which must succeed.
@@ -164,26 +98,7 @@ impl Server {
 
     /// Each call of the adapter that the world recorded, oldest first.
     fn requests(&self) -> Vec<Value> {
-        std::fs::read_to_string(self.dir.join("requests.jsonl"))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
-    }
-}
-
-impl Drop for Server {
-    fn drop(&mut self) {
-        drop(self.stdin.take());
-        let until = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < until {
-            if let Ok(Some(_)) = self.child.try_wait() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.world.lock().unwrap().log.clone()
     }
 }
 
@@ -199,7 +114,13 @@ struct Project {
 }
 
 impl Project {
+    /// The project with a private copy of the adapter of the repo, with short waits.
     fn new() -> Project {
+        Project::with_adapter(fast_adapter())
+    }
+
+    /// The project with this text as the private adapter.toml of `jira-github`.
+    fn with_adapter(adapter: String) -> Project {
         if let Some(bin) = std::env::var_os("VISION_CLAUDE_BIN") {
             assert_eq!(
                 PathBuf::from(&bin),
@@ -218,10 +139,9 @@ impl Project {
         let work = root.join("work");
         std::fs::create_dir_all(&work).unwrap();
         for (name, text) in [
-            ("calc.py", TOY_CALC),
-            ("test_calc.py", TOY_TEST),
+            ("calc.sh", TOY_CALC),
+            ("test_calc.sh", TOY_TEST),
             ("ci.sh", TOY_CI),
-            (".gitignore", "__pycache__/\n*.pyc\n"),
         ] {
             std::fs::write(work.join(name), text).unwrap();
         }
@@ -256,7 +176,7 @@ impl Project {
         );
         git(&clone, &["config", "user.name", "vision"]);
         git(&clone, &["config", "user.email", "vision@example.invalid"]);
-        let server = Server::start(&root.join("world"), &remote);
+        let server = Server::start(&remote);
         let path = Project {
             server,
             vision,
@@ -266,14 +186,14 @@ impl Project {
             _dir: dir,
         };
         path.run(&["init"]).expect_code(0);
-        path.configure();
+        path.configure(&adapter);
         path
     }
 
     /// The configuration: the project, the fake claude, the clone, the `[adapter]` keys that
     /// point at the world, and the secrets from the environment of the `vision` process. And
-    /// a private copy of the adapter of the repo with short waits and the scripts of the repo.
-    fn configure(&self) {
+    /// the private adapter.toml.
+    fn configure(&self, adapter_toml: &str) {
         let url = self.server.url();
         let clone = self.clone.display().to_string();
         let remote = self.remote.display().to_string();
@@ -299,8 +219,8 @@ ci_poll_seconds = 0.2
 approvers = ["lead"]
 own_logins = ["vision-bot", "person"]
 statuses = {{ in_progress = "In Progress", in_review = "In Review" }}
-test_command = "python3 -B -m unittest -q"
-test_glob = ["test_*.py"]
+test_command = "sh"
+test_glob = ["test_*.sh"]
 app_start_command = "exit 1"
 app_health_url = "{url}/health"
 http_timeout = 20
@@ -319,23 +239,10 @@ http_timeout = 20
         doc["secrets"] = toml_edit::Item::Table(secrets);
         std::fs::write(&path, doc.to_string()).unwrap();
 
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/jira-github");
-        let mut text = std::fs::read_to_string(repo.join("adapter.toml")).unwrap();
-        for every in ["every = 30", "every = 60", "every = 120"] {
-            text = text.replace(every, "every = 1");
-        }
-        assert!(!text.contains("every = 30") && text.contains("every = 1"));
-        let text = text.replacen(
-            "base = \"origin/main\"",
-            &format!(
-                "base = \"origin/main\"\nscripts = {}",
-                serde_json::to_string(&repo.display().to_string()).unwrap()
-            ),
-            1,
-        );
+        // A private adapter folder holds only its adapter.toml: the binary answers its calls.
         let dir = self.vision.join("adapters/jira-github");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("adapter.toml"), text).unwrap();
+        std::fs::write(dir.join("adapter.toml"), adapter_toml).unwrap();
     }
 
     fn run(&self, args: &[&str]) -> pipeline_support::Run {
@@ -550,6 +457,21 @@ http_timeout = 20
     }
 }
 
+/// The adapter.toml of the repo with short waits. It keeps `scripts = "builtin:jira-github"`.
+fn fast_adapter() -> String {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/jira-github");
+    let mut text = std::fs::read_to_string(repo.join("adapter.toml")).unwrap();
+    for every in ["every = 30", "every = 60", "every = 120"] {
+        text = text.replace(every, "every = 1");
+    }
+    assert!(!text.contains("every = 30") && text.contains("every = 1"));
+    assert!(
+        text.contains("\nscripts = \"builtin:jira-github\""),
+        "the adapter of the repo uses the built-in scripts"
+    );
+    text
+}
+
 /// Each file under `dir`, as bytes, for the search of a token.
 fn files_under(dir: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -581,7 +503,7 @@ fn scenarios(p: &Project) {
         json!([ends_with(result(
             "Refined.",
             &[
-                ("refine.md", "# Refine\n\nsubtract goes next to add in calc.py.\n"),
+                ("refine.md", "# Refine\n\nsubtract goes next to add in calc.sh.\n"),
                 (
                     "description.md",
                     "Add a function subtract(a, b) to the calculator that gives a minus b, with a test."
@@ -651,7 +573,7 @@ fn scenarios(p: &Project) {
         "builder",
         "fix-qa",
         json!([runs_then(
-            "printf '\\n# subtract keeps the sign of a minus b.\\n' >> calc.py && git commit -q -am 'Keep the sign of subtract'",
+            "printf '\\n# subtract keeps the sign of a minus b.\\n' >> calc.sh && git commit -q -am 'Keep the sign of subtract'",
             result(
                 "Fixed B1.",
                 &[("fix-notes.md", "# Fix notes\n\nB1 is fixed in the last commit.\n")]
@@ -659,8 +581,8 @@ fn scenarios(p: &Project) {
         )]),
     );
     let verdicts = json!([
-        {"comment_id": 501, "kind": "inline", "verdict": "valid", "fix_commit": "", "reply": "Renamed to test_calc_subtract.py."},
-        {"comment_id": 601, "kind": "review", "verdict": "valid", "fix_commit": "", "reply": "Done: the test file is test_calc_subtract.py now."},
+        {"comment_id": 501, "kind": "inline", "verdict": "valid", "fix_commit": "", "reply": "Renamed to test_calc_subtract.sh."},
+        {"comment_id": 601, "kind": "review", "verdict": "valid", "fix_commit": "", "reply": "Done: the test file is test_calc_subtract.sh now."},
         {"comment_id": 701, "kind": "conversation", "verdict": "out-of-scope", "fix_commit": "", "reply": "Division belongs to a different ticket."}
     ])
     .to_string();
@@ -668,7 +590,7 @@ fn scenarios(p: &Project) {
         "shepherd",
         "comments",
         json!([runs_then(
-            "git mv test_subtract.py test_calc_subtract.py && git commit -q -m 'Name the test of subtract like the others'",
+            "git mv test_subtract.sh test_calc_subtract.sh && git commit -q -m 'Name the test of subtract like the others'",
             result("Answered three comments.", &[("verdicts.json", &verdicts)])
         )]),
     );
@@ -745,7 +667,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     );
     assert_eq!(p.row().unwrap().pr, Some(7));
     assert!(
-        p.doc("proof.txt").unwrap().contains("test_subtract.py"),
+        p.doc("proof.txt").unwrap().contains("test_subtract.sh"),
         "the proof ran the new test"
     );
     let proof = p
@@ -758,8 +680,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .collect::<Vec<_>>();
     assert_eq!(
         proof,
-        ["python3 -B -m unittest -q test_subtract.py"],
-        "the plan declares test_calc.py green, so only test_subtract.py runs on the base"
+        ["sh test_subtract.sh"],
+        "the plan declares test_calc.sh green, so only test_subtract.sh runs on the base"
     );
 
     // review: no second reviewer is set, so the review turn gets null for its document.
@@ -849,8 +771,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     assert_eq!(p.step().as_deref(), Some("in-review"), "nothing waits yet");
     p.server.team(
         "comment",
-        json!({"number": 7, "id": 501, "login": "lead", "path": "test_subtract.py", "line": 1,
-               "body": "Name this file test_calc_subtract.py."}),
+        json!({"number": 7, "id": 501, "login": "lead", "path": "test_subtract.sh", "line": 1,
+               "body": "Name this file test_calc_subtract.sh."}),
     );
     p.server.team(
         "review",
@@ -890,7 +812,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .filter(|c| c["in_reply_to_id"] == 501)
         .collect();
     assert_eq!(inline.len(), 1);
-    assert_eq!(inline[0]["body"], "Renamed to test_calc_subtract.py.");
+    assert_eq!(inline[0]["body"], "Renamed to test_calc_subtract.sh.");
     let talk: Vec<String> = state["issue_comments"]["7"]
         .as_array()
         .unwrap()
@@ -901,7 +823,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     assert_eq!(
         talk,
         [
-            "> Please follow the names of the other tests.\n\nDone: the test file is test_calc_subtract.py now.\n\n<!-- vision-reply review 601 -->",
+            "> Please follow the names of the other tests.\n\nDone: the test file is test_calc_subtract.sh now.\n\n<!-- vision-reply review 601 -->",
             "> Can the calculator also divide?\n\nDivision belongs to a different ticket.\n\n<!-- vision-reply conversation 701 -->"
         ]
     );
@@ -1136,4 +1058,110 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     // The path takes about 50 s on a laptop. The time is printed, not asserted: a busy machine
     // makes each process slower, and that says nothing about the code.
     eprintln!("the whole path took {:?}", started.elapsed());
+}
+
+/// A private adapter as a project starts with one: the built-in scripts, a shorter path with no
+/// qa step and no deploy verb, and each write verb in the mode shadow.
+fn shadow_adapter() -> String {
+    let mut doc: DocumentMut = fast_adapter().parse().unwrap();
+    let steps = doc["step"].as_array_of_tables_mut().unwrap();
+    steps.retain(|step| !matches!(step["id"].as_str(), Some("qa" | "fix-qa")));
+    for step in steps.iter_mut() {
+        if matches!(step["id"].as_str(), Some("ci" | "ci-rerun")) {
+            step["on"]["green"] = toml_edit::value("ready");
+        }
+    }
+    let verbs = doc["verbs"].as_table_mut().unwrap();
+    verbs.remove("deploy");
+    for (_, verb) in verbs.iter_mut() {
+        if verb.get("mode").is_some() {
+            verb["mode"] = toml_edit::value("shadow");
+        }
+    }
+    doc.to_string()
+}
+
+#[test]
+fn a_private_adapter_with_the_built_in_scripts_keeps_each_write_in_shadow() {
+    let adapter = shadow_adapter();
+    assert!(adapter.contains("\nscripts = \"builtin:jira-github\""));
+    assert!(!adapter.contains("id = \"qa\"") && !adapter.contains("[verbs.deploy]"));
+    assert!(!adapter.contains("mode = \"auto\"") && !adapter.contains("mode = \"ask\""));
+    let p = Project::with_adapter(adapter);
+    scenarios(&p);
+
+    // doctor finds the private adapter and names its built-in scripts.
+    let doctor = p.run(&["doctor", "--json"]);
+    let tests = doctor.json()["tests"].clone();
+    let check = tests
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["test"] == "adapter")
+        .expect("the adapter test of doctor")
+        .clone();
+    assert_eq!(check["result"], "ok", "{check}");
+    let text = check.to_string();
+    assert!(
+        text.contains(&p.vision.join("adapters/jira-github").display().to_string())
+            && text.contains("14 steps")
+            && text.contains("with the built-in scripts builtin:jira-github"),
+        "{text}"
+    );
+
+    // pick reads the queue through observe of the built-in adapter.
+    let pick = p.run(&["pick", "--json"]);
+    pick.expect_code(0);
+    assert_eq!(pick.json()[0]["key"], KEY, "{pick:?}");
+    assert_eq!(pick.json()[0]["eligible"], true);
+    p.run(&["take", KEY]).expect_code(0);
+
+    // refine: the turn ends, and tracker.describe in the mode shadow records its text, sends
+    // nothing, and asks for the person.
+    p.tick_until_flag("needs-you");
+    assert_eq!(p.step().as_deref(), Some("refine"));
+    let reason = p.counts()["reasons"]["needs-you"]["reason"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        reason.contains("tracker.describe is in the mode shadow"),
+        "{reason}"
+    );
+    let ops = p.ledger().operations_of(KEY, None).unwrap();
+    let states: Vec<(&str, &str)> = ops
+        .iter()
+        .map(|o| (o.verb.as_str(), o.state.as_str()))
+        .collect();
+    assert_eq!(
+        states,
+        [("tracker.describe", "pending")],
+        "the mode shadow keeps the write back until a promote"
+    );
+    let issue = p.server.state()["issues"][KEY].clone();
+    assert_eq!(
+        issue["description"]["content"][0]["content"][0]["text"],
+        "The calculator can only add. Add a function subtract(a, b) that gives a minus b, with a test.",
+        "the description in Jira stays as it was"
+    );
+    let writes = p.writes();
+    assert!(
+        writes.keys().all(|w| w == "POST /rest/api/3/search/jql"),
+        "only reads reached the world: {writes:?}"
+    );
+    for r in p.server.requests() {
+        let line = r.to_string();
+        for token in [JIRA_TOKEN, FORGE_TOKEN] {
+            assert!(!line.contains(token), "a token in a request: {line}");
+        }
+    }
+    let mut files = Vec::new();
+    for dir in [&p.vision, &p.clone, &p.remote, &p.user_home] {
+        files_under(dir, &mut files);
+    }
+    for (path, bytes) in &files {
+        for token in [JIRA_TOKEN, FORGE_TOKEN] {
+            assert!(!holds(bytes, token), "a token in {}", path.display());
+        }
+    }
 }

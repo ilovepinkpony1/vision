@@ -19,6 +19,10 @@ pub enum Stop {
     /// The command already printed what went wrong. Exit code 1 with no more text.
     #[error("{0}")]
     Reported(String),
+    /// The command already printed its whole output, such as a call of a built-in adapter.
+    /// Exit with this code and no more text.
+    #[error("exit code {0}")]
+    Exit(u8),
 }
 
 /// The error of a command that is not built yet, such as `not_built("memory show")`.
@@ -31,6 +35,7 @@ pub fn code(err: &anyhow::Error) -> u8 {
     match err.downcast_ref::<Stop>() {
         Some(Stop::NotBuilt(_)) => NOT_BUILT,
         Some(Stop::GateRefused(_)) => GATE_REFUSED,
+        Some(Stop::Exit(code)) => *code,
         Some(Stop::Reported(_)) | None => ERROR,
     }
 }
@@ -39,7 +44,7 @@ pub fn code(err: &anyhow::Error) -> u8 {
 pub fn report(err: &anyhow::Error) -> ExitCode {
     match err.downcast_ref::<Stop>() {
         Some(Stop::NotBuilt(name)) => eprintln!("not built yet: {name}"),
-        Some(Stop::Reported(_)) => {}
+        Some(Stop::Reported(_)) | Some(Stop::Exit(_)) => {}
         Some(Stop::GateRefused(_)) | None => eprintln!("error: {err:#}"),
     }
     ExitCode::from(code(err))
@@ -58,6 +63,7 @@ mod tests {
         );
         assert_eq!(code(&anyhow::anyhow!("boom")), ERROR);
         assert_eq!(code(&Stop::Reported("doctor".into()).into()), ERROR);
+        assert_eq!(code(&Stop::Exit(2).into()), 2);
         assert_eq!(DONE, 0);
     }
 }

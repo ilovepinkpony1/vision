@@ -681,6 +681,8 @@ Vision looks for the adapter of `project` first in `$VISION_HOME/adapters/`, and
 
 An `adapter.toml` can name a different folder for its scripts with the key `scripts`. A private adapter then holds only its own step list, and it uses the scripts of a public adapter.
 
+The value `builtin:<name>` names an adapter that is part of the binary, such as `builtin:jira-github`. The executor then starts the binary as `vision adapter-script <name> <observe|act|job>`, a hidden command. The call gets the same input, environment, time limit, and exit codes as a script of `bin/`. A private adapter with `scripts = "builtin:jira-github"` holds only its `adapter.toml`.
+
 Each script reads one JSON object from standard input and prints one JSON object. Exit code 0 means done. Exit code 2 means that the script refused the call. Each other code means a failure. Only the executor calls a script. The call object always has `config`, the `[adapter]` table of the configuration. It also always has `base_ref`, the `base` of `adapter.toml`, such as `origin/main`. So the base branch has one place.
 
 The environment of a script has only `PATH`, `HOME`, `LANG`, and `TMPDIR`. `bin/observe` and `bin/act` also get each secret of `[secrets]` as an environment name. `bin/job` gets no secret, because a job can run code that an agent wrote. A job that only reads the tracker or the forge sets `secrets = true`. The executor masks each secret value in an answer before it stores the answer.
@@ -724,7 +726,7 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
 name = "demo"
 branch = "vision/{key}"       # the branch of a ticket
 base = "origin/main"          # the ref that a new branch starts from
-# scripts = "../other-adapter"   optional: the folder whose bin/ answers the calls
+# scripts = "../other-adapter"   optional: the folder whose bin/ answers the calls, or builtin:<name>
 
 [[step]]
 id = "refine"
@@ -874,7 +876,7 @@ Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review
 
 ### 11.5 The adapter for Jira and GitHub
 
-`adapters/jira-github` connects Vision to Jira Cloud and GitHub. Its scripts are Python 3 with the standard library only. The comment block at the top of its `adapter.toml` documents each key of `[adapter]`, each secret, and the path of a ticket.
+`adapters/jira-github` connects Vision to Jira Cloud and GitHub. The binary answers its calls, because its `adapter.toml` says `scripts = "builtin:jira-github"`. The adapter runs `git`, and `vision app-token` runs `openssl`. The comment block at the top of its `adapter.toml` documents each key of `[adapter]`, each secret, and the path of a ticket.
 
 The path has these parts:
 
@@ -897,6 +899,8 @@ These rules keep the tokens and the repo safe:
 - A reconcile call only reads.
 - Text from Jira and from GitHub is data. Each document wraps it as `{"untrusted": "..."}`.
 
+`vision app-token` prints an installation token of a GitHub App, for the command of the secret `FORGE_TOKEN`. The private key comes from a file or from the output of a command, and it never goes into a file. The command can print the key as a PEM file or as the PEM file in one base64 line.
+
 A comment that waits has one of three kinds. `inline` is a thread on a line of the diff, and its reply goes into the thread. `review` is a review with a text that asks for changes or that comments. `conversation` is a comment in the conversation of the pull request. A reply to a review or to a conversation comment is a new conversation comment. It quotes the first line of the comment, and it ends with a hidden mark that names the comment. So a later round does not answer the same comment again.
 
 The key `own_logins` names the logins of the person and of the bot. The key `ignore_logins` names logins whose comments never wait, such as a CI bot. An entry can also be `<login>:<kind>`, with the kind `inline`, `review`, or `conversation`. Then only the comments of that kind of that login never wait. This fits a review bot that keeps one status comment in the conversation.
@@ -913,7 +917,7 @@ The job `app-start` remembers the app that it started in a state file in the tem
 
 The key `test_canary` names test files that pass on the base commit. The proof runs them first in the worktree of the base commit. If one is missing or fails, that worktree cannot run tests. Then the proof does not hold, its check `proof-canary` has the cause `env`, and no changed test runs on the base. Without a canary, a worktree that cannot run tests looks the same as a new test that fails on the base.
 
-`tests/e2e_jira_github.rs` drives the whole path against `adapters/jira-github/tests/serve_world.py`. That script is a fake Jira and GitHub with state on a free localhost port. No run against the real services is part of the tests.
+`tests/e2e_jira_github.rs` drives the whole path against a fake Jira and GitHub with state (`tests/jira_github_support/world.rs`). A thread of the test serves it on a free localhost port. `tests/adapter_jira_github.rs` tests each verb, read verb, job, and observe call of the built-in adapter against a fake server. No run against the real services is part of the tests.
 
 ## 12. The executor
 
@@ -931,6 +935,7 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - After a wrong operation, the person moves its verb down the ladder with `vision demote VERB`. Vision never changes a mode by itself.
 - `vision approve` runs each operation of the verb that waits at that commit. With `--op ID`, it runs only the operation with that id. If that operation no longer waits at that commit, the command sends nothing.
 - `vision approve` exits with code 2 after a gate refuses. It exits with code 1 after an operation fails or stays `uncertain`.
+- The executor calls a built-in adapter in the same way as a script of `bin/`: the same environment, process group, time limit, masking, and exit codes. An error text names it as `bin/observe`, `bin/act`, or `bin/job`.
 
 A pass can take minutes, and the ledger says nothing about a script until the script ends. So the executor writes `running.json` right before it runs a script. This holds for a job, an operation, a read verb, and the check of an uncertain operation. The file holds the kind, the name, the ticket, the start time, and the process id of the pass. When the script ends, the executor removes the file. A reader trusts the file only while that process holds the lock of the tick. The next tick removes a file that a crash left. The ledger stays the evidence.
 
@@ -964,7 +969,10 @@ vision model ...                   section 10
 vision promote VERB | demote VERB  move a verb on the trust ladder
 vision report [--week]             the measures
 vision install | uninstall         the timer of the system
+vision app-token ...               print an installation token of a GitHub App, for a secret command
 ```
+
+`vision adapter-script NAME SCRIPT` is hidden. Only the executor calls it, for an adapter with `scripts = "builtin:NAME"`.
 
 A command that is not built yet prints `not built yet: <name>` and exits with code 3.
 
@@ -991,6 +999,7 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 clap  serde  serde_json  toml  toml_edit  rusqlite (feature "bundled")
 anyhow  thiserror  time  uuid  sha2  libc  fs2
 ratatui (with its crossterm backend, for the app)
+ureq (no default features, feature "rustls": blocking HTTP with TLS, for the built-in adapter)
 ```
 
 ## 15. The app
