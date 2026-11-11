@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  plan 3f2a1b4c5d6e                      engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  hash 3f2a1b4c5d6e  It does not wait for an approval now.
+
+  # Plan of DEMO-12
+
+  ## Steps
+
+  1. Add a CSV writer to the export.
+  2. Keep the order of the columns.
+  3. Test an empty month.
+
+  ## Proof
+
+  tests/test_export.py fails on the base and passes after the change.
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ scroll   pgup pgdn page   g G start end   esc back
+

@@ -6,13 +6,13 @@
   IN PROGRESS                                        3 tickets · Vision moves them while this window is open
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.09     41m │
- │             ●━◉─○─○─○─○─○─○─○─○─○─○  plan · needs you: 1 card. Run `vision needs`                        │
+ │             ●━◉─○─○─○─○─○─○─○─○─○─○  plan · needs you: 1 question                                        │
  │                                                                                                          │
  │   DEMO-3    Rename the setting of the weekly email                                         $2.50   5h 0m │
- │             ●━●━●━●━◉─○─○─○─○─○─○─○  review · stopped: you stopped it with vision stop                   │
+ │             ●━●━●━●━◉─○─○─○─○─○─○─○  review · stopped · Enter starts it again                            │
  │                                                                                                          │
  │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
- │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits: the watched value is none                               │
+ │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                   │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   READY TO START                                                              from the tracker · 1 can start

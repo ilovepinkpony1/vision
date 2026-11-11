@@ -14,11 +14,21 @@
 //! threads ([`load`]), and each change of the state through the command of today as a child
 //! process of the same binary ([`worker`]).
 
+pub mod feed;
+pub mod line;
+pub mod live;
 pub mod load;
+pub mod load_ticket;
 pub mod model;
+pub mod moments;
 pub mod msg;
+pub mod now;
+pub mod pager;
+pub mod pages;
 pub mod runtime;
+pub mod session;
 pub mod stderr;
+pub mod tail;
 pub mod terminal;
 pub mod text;
 pub mod update;
@@ -53,8 +63,9 @@ pub fn run() -> Result<()> {
         };
         let mut rt = Runtime::new(paths, worker, (size.width, size.height), colors);
         terminal::watch_signals(rt.sender())?;
-        terminal::watch_input(rt.sender())?;
-        runtime::run_terminal(&mut rt, &mut screen)
+        let input = terminal::InputControl::default();
+        terminal::watch_input(rt.sender(), input.clone())?;
+        runtime::run_terminal(&mut rt, &mut screen, &input)
     })();
     drop(session);
     drop(redirect);

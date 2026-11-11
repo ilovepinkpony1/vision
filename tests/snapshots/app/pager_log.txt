@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  log                                    engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  TIME      WHO       WHAT      DETAIL
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+  13:52:00  you       take      took the ticket
+  13:52:04  scout     started   scout starts a turn at the step refine · claude-fable-5-2 high
+  13:56:14  scout     ended     the turn of scout ended: it gave its result · $0.21 · its end facts held
+  13:56:15  vision    write     tracker.describe is confirmed
+  13:56:16  vision    step      moves from refine to plan
+  13:56:30  builder   started   builder starts a turn at the step plan · claude-opus-5-5 xhigh
+  14:05:30  builder   ended     the turn of builder ended: it gave its result · $0.88 · its end facts held
+  14:05:31  vision    step      moves from plan to plan-ready
+  14:20:00  you       approve   approved the plan
+  14:20:01  vision    step      moves from plan-ready to build
+▸ 14:24:00  builder   started   builder starts a turn at the step build · claude-opus-5-5 xhigh
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move   enter the events of the turn   pgup pgdn page   g G start end   esc back
+

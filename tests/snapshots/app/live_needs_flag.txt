@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│ ╭────────────────────────────────────────────────────╮ │ cost              $1.03
+ ✓ plan            9m $0.88│ │  needs you  a rule stopped the ticket      r retry │ │ time                38m
+ ✓ plan-ready      2m      │ │ the proof did not pass at 1a2b3c4d5e6f             │ │ turns                 3
+ ◉ build                you│ │ Fix the cause, then press r to start the step bui… │ │ commits    none to push
+ ○ review                  │ ╰────────────────────────────────────────────────────╯ │
+ ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ fix-ci                  │ 13:56:14 turn  the turn of scout ended: it gave its r… │ to you                0
+ ○ ready                   │ 13:56:15 write tracker.describe is confirmed           │ by memory             1
+ ○ comments                │ 13:56:16 step  moves from refine to plan               │ by the Judge          0
+ ○ ci-review               │ 13:56:30 turn  builder starts a turn at the step plan… │
+ ○ ready-to-merge          │ 14:05:30 turn  the turn of builder ended: it gave its… │ MARKS
+ ○ done                    │ 14:05:31 step  moves from plan to plan-ready           │ plan          3f2a1b4 ✓
+                           │ 14:20:00 you   approved the plan                       │ proof                 -
+ TEAM                      │ 14:20:01 step  moves from plan-ready to build          │ CI                    -
+ ✓ scout     fable-5-2 high│ 14:24:00 turn  builder starts a turn at the step buil… │ PR                    -
+ ✓ builder   opus-5-5 xhigh│ 14:24:01 start the session starts with claude-opus-5-5 │
+ · reviewer  opus-5-5 max  │ 14:24:05 read  src/report/export.py                    │ LIMITS
+ · tester    opus-5-5 high │ 14:24:12 find  "def export_month" in src               │ 5h ━━━━━━━━━━ 31% of 60
+ · shepherd  opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I   │    resets at 18:00
+ · judge     fable-5-2 high│                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
+ · curator   fable-5-2 high│                the columns that the plan names.        │
+                           │ 14:24:35 edit  src/report/export.py                    │ ENGINE
+                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 2s ago
+                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
+                           │                month next.                             │
+                           │ 14:25:10 tool  lookup: csv                             │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ r retry   t tell the next turn   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+

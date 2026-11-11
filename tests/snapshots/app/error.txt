@@ -4,10 +4,10 @@
   IN PROGRESS                                        2 tickets · Vision moves them while this window is open
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
- │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works (6 min)                                       │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○  build · builder works · 6 min                                       │
  │                                                                                                          │
  │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
- │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits: the watched value is none                               │
+ │             ●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                   │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   READY TO STAR╭─ The kill switch failed ─────────────────────────────────────────────────────╮· 1 can start

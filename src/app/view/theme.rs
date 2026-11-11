@@ -132,6 +132,23 @@ pub fn agent_color(agent: &str) -> Rgb {
     }
 }
 
+/// The color of a hue of the model.
+pub fn hue(hue: &crate::app::model::Hue) -> Rgb {
+    use crate::app::model::Hue;
+    match hue {
+        Hue::Fg => T.fg,
+        Hue::Dim => T.dim,
+        Hue::Faint => T.faint,
+        Hue::Ok => T.ok,
+        Hue::Warn => T.warn,
+        Hue::Bad => T.bad,
+        Hue::Info => T.info,
+        Hue::Accent => T.accent,
+        Hue::Primary => T.primary,
+        Hue::Agent(agent) => agent_color(agent),
+    }
+}
+
 /// What the terminal can show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorMode {

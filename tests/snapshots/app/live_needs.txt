@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│ ╭────────────────────────────────────────────────────╮ │ cost              $1.09
+ ◉ plan                 you│ │  needs you  1 question for you            n answer │ │ time                41m
+ ○ plan-ready              │ │ builder asks: Must the export keep the order of t… │ │ turns                 2
+ ○ build                   │ │ The Judge could not answer it from the memory.     │ │ commits    none to push
+ ○ review                  │ ╰────────────────────────────────────────────────────╯ │
+ ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ fix-ci                  │ 13:52:00 you   took the ticket                         │ to you                1
+ ○ ready                   │ 13:52:04 turn  scout starts a turn at the step refine… │ by memory             1
+ ○ comments                │ 13:56:14 turn  the turn of scout ended: it gave its r… │ by the Judge          0
+ ○ ci-review               │ 13:56:15 write tracker.describe is confirmed           │
+ ○ ready-to-merge          │ 13:56:16 step  moves from refine to plan               │ MARKS
+ ○ done                    │ 13:56:30 turn  builder starts a turn at the step plan… │ plan      3f2a1b4 waits
+                           │ 14:05:30 turn  the turn of builder ended: it gave its… │ proof                 -
+ TEAM                      │ 14:05:31 step  moves from plan to plan-ready           │ CI                    -
+ ✓ scout     fable-5-2 high│ 14:20:00 you   approved the plan                       │ PR                    -
+ ✓ builder   opus-5-5 xhigh│ 14:20:01 step  moves from plan-ready to build          │
+ · reviewer  opus-5-5 max  │ 14:24:00 turn  builder starts a turn at the step buil… │ LIMITS
+ · tester    opus-5-5 high │                                                        │ 5h ━━━━━━━━━━ 31% of 60
+ · shepherd  opus-5-5 high │                                                        │    resets at 18:00
+ ✓ judge     fable-5-2 high│                                                        │ 7d ━━━━━━━━━━ 71% of 85
+ · curator   fable-5-2 high│                                                        │
+                           │                                                        │ ENGINE
+                           │                                                        │ ● on   last pass 2s ago
+                           │                                                        │
+                           │                                                        │
+                           │                                                        │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ n needs (1)   t tell the next turn   o open session   x stop   esc home   l log   p plan   ? keys
+

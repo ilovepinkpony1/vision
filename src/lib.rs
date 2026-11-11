@@ -21,6 +21,7 @@ pub mod models;
 pub mod paths;
 pub mod pipeline;
 pub mod questions;
+pub mod running;
 pub mod snapshot;
 pub mod status;
 pub mod tick;

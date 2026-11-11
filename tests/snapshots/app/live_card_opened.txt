@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder starts at the next pass             │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  The next pass starts within a minute.       │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  No agent works, so this costs nothing.      │ turns                 3
+ ◉ build              waits│   ▀▀▀▀▀▀▀                                              │ commits    none to push
+ ○ review                  │                                                        │
+ ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ fix-ci                  │ 13:56:14 turn  the turn of scout ended: it gave its r… │ to you                0
+ ○ ready         ╭─ Back from the session of DEMO-12 ───────────────────────────────────────╮ry             1
+ ○ comments      │                                                                          │Judge          0
+ ○ ci-review     │  You left the session.                                                   │
+ ○ ready-to-merge│                                                                          │
+ ○ done          │  DEMO-12 stays paused until you continue it. Continue: Vision starts     │       3f2a1b4 ✓
+                 │  the step again, and the next turn resumes your session. Keep it         │               -
+ TEAM            │  paused: nothing moves until you press r.                                │               -
+ ✓ scout     fabl│                                                                          │               -
+ ✓ builder   opus│  enter continue    esc keep it paused                                    │
+ · reviewer  opus│                                                                          │
+ · tester    opus╰──────────────────────────────────────────────────────────────────────────╯━━━━━━ 31% of 60
+ · shepherd  opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I   │    resets at 18:00
+ · judge     fable-5-2 high│                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
+ · curator   fable-5-2 high│                the columns that the plan names.        │
+                           │ 14:24:35 edit  src/report/export.py                    │ ENGINE
+                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 2s ago
+                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
+                           │                month next.                             │
+                           │ 14:25:10 tool  lookup: csv                             │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell the next turn   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+

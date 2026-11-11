@@ -50,12 +50,12 @@ fn a_ticket_that_needs_the_person_has_the_warning_color() {
     );
     let buf = render(&app);
     // The bar "needs you" is on row 3, so the first ticket starts on row 7.
-    let x = column(&buf, 8, "needs you: 1 card");
+    let x = column(&buf, 8, "needs you: 1 question");
     assert_eq!(buf[(x, 8)].fg, T.warn.color());
     let x = column(&buf, 3, "needs you");
     assert_eq!(buf[(x, 3)].bg, T.warn.color());
     // The ticket that waits has the color of waiting.
-    let x = column(&buf, 11, "waits: the watched value");
+    let x = column(&buf, 11, "waits for CI");
     assert_eq!(buf[(x, 11)].fg, T.info.color());
 }
 
@@ -136,7 +136,7 @@ fn text_from_outside_never_controls_the_terminal_and_its_cut_keeps_wide_characte
     let title = format!("Fix \x1b[31mthe\r\nexport\tof the {}", "日本語".repeat(30));
     let mut tickets = two_tickets();
     tickets[0].view.title = Some(title.clone());
-    tickets[0].view.now = "builder works\x1b]0;evil\x07 (6 min)".into();
+    tickets[0].facts.work.as_mut().unwrap().agent = "builder\x1b]0;evil\x07".into();
     let app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
     let buf = render(&app);
     for cell in &buf.content {
@@ -156,7 +156,7 @@ fn text_from_outside_never_controls_the_terminal_and_its_cut_keeps_wide_characte
     assert!(line.contains(&format!(" {expected} ")), "{line}");
     let second = text(&buf).lines().nth(6).unwrap().to_string();
     assert!(
-        second.contains("builder works ]0;evil  (6 min)"),
+        second.contains("builder ]0;evil  works · 6 min"),
         "{second}"
     );
 }

@@ -1,6 +1,7 @@
 mod common;
 
 use common::Home;
+use vision::lock::TickLock;
 
 #[test]
 fn status_on_an_empty_home_shows_the_tick_the_switch_and_the_limits() {
@@ -98,4 +99,49 @@ fn is_prompt_with_seconds(line: &str) -> bool {
     line.strip_prefix("V:0 ")
         .and_then(|age| age.strip_suffix('s'))
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+#[test]
+fn status_names_the_job_that_a_pass_runs_now_and_a_tick_clears_a_stale_record() {
+    let home = Home::init();
+    let lock = TickLock::try_acquire(&home.path("lock"))
+        .unwrap()
+        .expect("the test takes the lock of the tick, as a pass does");
+    let guard = vision::running::start(&home.paths(), "job", "proof", "DEMO-12");
+
+    let run = home.run(&["status", "--json"]);
+    run.expect_code(0);
+    let json: serde_json::Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(json["running"]["what"], "job");
+    assert_eq!(json["running"]["name"], "proof");
+    assert_eq!(json["running"]["ticket"], "DEMO-12");
+    assert_eq!(json["running"]["pid"], std::process::id());
+    let text = home.run(&["status"]);
+    assert!(
+        text.stdout
+            .contains("pass     runs the job proof for DEMO-12 since "),
+        "{text:?}"
+    );
+
+    drop(guard);
+    let json: serde_json::Value =
+        serde_json::from_str(&home.run(&["status", "--json"]).stdout).unwrap();
+    assert!(json["running"].is_null());
+    assert!(!home.run(&["status"]).stdout.contains("pass     runs"));
+
+    // A crash leaves the record behind: with no holder of the lock, nobody trusts it, and the
+    // next tick removes it.
+    std::mem::forget(vision::running::start(
+        &home.paths(),
+        "operation",
+        "git.push",
+        "DEMO-12",
+    ));
+    drop(lock);
+    assert!(home.path("running.json").exists());
+    let json: serde_json::Value =
+        serde_json::from_str(&home.run(&["status", "--json"]).stdout).unwrap();
+    assert!(json["running"].is_null());
+    home.run(&["tick"]).expect_code(0);
+    assert!(!home.path("running.json").exists());
 }

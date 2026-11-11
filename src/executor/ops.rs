@@ -623,7 +623,10 @@ fn reconcile_one(
             let runner = Runner::new(adapter, config, &secrets);
             let pr = ledger.ticket(&row.ticket)?.and_then(|r| r.pr);
             let input = act_input(row, &call, pr, true);
-            match runner.act(input, timeout_of(verb)) {
+            let record = crate::running::start(&ctx.paths, "reconcile", &row.verb, &row.ticket);
+            let answer = runner.act(input, timeout_of(verb));
+            drop(record);
+            match answer {
                 Ok(Answer::Done(map)) => {
                     let answer = act_answer(&map);
                     stored.detail = format!("reconcile: {}", answer.detail);
@@ -940,7 +943,10 @@ fn execute(
     let pr = ledger.ticket(&row.ticket)?.and_then(|r| r.pr);
     let input = act_input(row, call, pr, false);
     stored.held.clear();
-    let (state, external_id) = match runner.act(input, timeout_of(verb)) {
+    let record = crate::running::start(&ctx.paths, "operation", &row.verb, &row.ticket);
+    let answer = runner.act(input, timeout_of(verb));
+    drop(record);
+    let (state, external_id) = match answer {
         Ok(Answer::Done(map)) => {
             let answer = act_answer(&map);
             stored.detail = answer.detail;

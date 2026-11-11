@@ -91,7 +91,7 @@ Vision starts no new turn above the values of `[limits]` in `config.toml`. They 
 
 Type `vision` in a terminal, and press Enter. A loader shows while Vision reads the home folder, the ledger, and the queue of the tracker. Then Home lists the tickets in progress and the tickets that can start.
 
-Press Enter on a ticket to open it or to start it. These keys work on Home:
+Press Enter on a ticket of the queue to start it. Press Enter on a ticket in progress to open its live view. These keys work on Home:
 
 - `n` shows what waits for you.
 - `p` pauses the engine, or starts it again.
@@ -99,7 +99,17 @@ Press Enter on a ticket to open it or to start it. These keys work on Home:
 - `?` shows each key.
 - `q` quits.
 
-While the window is open, the app runs `vision tick` each minute and after each action. If you quit, a running turn finishes by itself. The next step waits until you open Vision again, or until the timer of `vision install` runs.
+The live view shows the path of the ticket, what happens now, and the work of the agent as it happens. These keys work in the live view:
+
+- `t` sends a line to the agent that works, or keeps it for the next turn.
+- `o` opens the session of the last turn in this terminal. The ticket pauses. Press `r` afterwards to continue it.
+- `x` stops the ticket. Enter starts a stopped ticket again.
+- `r` retries a ticket that waits for you.
+- `l` shows the log, `p` shows the plan, and `d` shows the commits that the forge does not have yet.
+- The arrows scroll the activity, and `G` goes back to its end.
+- Esc goes back to Home.
+
+While the window is open, the app runs `vision tick` each minute and after each action. It also runs the next pass at once while a ticket has work ready. If you quit, a running turn finishes by itself. The next step waits until you open Vision again, or until the timer of `vision install` runs.
 
 The app needs a window of 100 columns by 28 rows. Each command of the sections below still works in a shell.
 

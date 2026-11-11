@@ -45,8 +45,10 @@ pub use roles::{agents_dir, agents_file, compose_role, embedded_names, schema_na
 pub use schema::problems as schema_problems;
 pub use settings::{gitconfig_path, permission_mode, session_env, tools, ALLOWED_ENV};
 pub use state::{Phase, Reason, TurnState};
-pub use stream::{Event as StreamEvent, ResultEvent, Usage};
-pub use view::{render_event, PAUSED};
+pub use stream::{
+    parse_value as parse_stream_value, Event as StreamEvent, ResultEvent, ToolCall, Usage,
+};
+pub use view::{render_event, tool_summary, Tail, PAUSED};
 
 /// The three kinds of turn (section 7.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

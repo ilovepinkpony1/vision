@@ -64,6 +64,43 @@ pub fn restore() {
     }
 }
 
+/// File descriptor 2 lent back to the terminal, for a child that owns the terminal. Dropping
+/// it points file descriptor 2 at the log file again.
+#[derive(Debug)]
+pub struct Lent {
+    /// A copy of the log file, or -1 when no redirect was active.
+    log: i32,
+}
+
+/// Points file descriptor 2 at what it was before the redirect, until the guard drops.
+pub fn lend() -> Lent {
+    let saved = SAVED.load(Ordering::SeqCst);
+    if saved < 0 {
+        return Lent { log: -1 };
+    }
+    // SAFETY: plain calls on descriptors that this process owns.
+    unsafe {
+        let log = libc::fcntl(2, libc::F_DUPFD_CLOEXEC, 3);
+        if log < 0 {
+            return Lent { log: -1 };
+        }
+        libc::dup2(saved, 2);
+        Lent { log }
+    }
+}
+
+impl Drop for Lent {
+    fn drop(&mut self) {
+        if self.log >= 0 {
+            // SAFETY: `log` is the copy that `lend` made, and nothing else closes it.
+            unsafe {
+                libc::dup2(self.log, 2);
+                libc::close(self.log);
+            }
+        }
+    }
+}
+
 impl Drop for Redirect {
     fn drop(&mut self) {
         restore();

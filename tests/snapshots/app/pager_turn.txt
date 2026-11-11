@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  turn build-1 of 14:24                  engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  start  the session starts with claude-opus-5-5
+  read   src/report/export.py
+  find   "def export_month" in src
+  says   The export writes each row by hand. I add a CSV writer and keep the order of the columns
+         that the plan names.
+  edit   src/report/export.py
+  run    python3 -m unittest tests/test_export.py
+  says   3 tests pass. I add a test for an empty month next.
+  tool   lookup: csv
+  ends   result: Built the CSV export.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ scroll   pgup pgdn page   g G start end   esc back
+

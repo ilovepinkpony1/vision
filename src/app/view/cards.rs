@@ -13,21 +13,21 @@ use crate::snapshot::{Need, NeedKind};
 
 /// The rows of a card: each row is a list of (column in the card, text, ink).
 #[derive(Default)]
-struct Rows {
-    rows: Vec<Vec<(i32, String, Ink)>>,
+pub(super) struct Rows {
+    pub(super) rows: Vec<Vec<(i32, String, Ink)>>,
 }
 
 impl Rows {
-    fn text(&mut self, dx: i32, text: impl Into<String>, ink: Ink) {
+    pub(super) fn text(&mut self, dx: i32, text: impl Into<String>, ink: Ink) {
         self.rows.push(vec![(dx, text.into(), ink)]);
     }
 
-    fn blank(&mut self) {
+    pub(super) fn blank(&mut self) {
         self.rows.push(Vec::new());
     }
 
     /// A text in lines of at most `w` cells.
-    fn para(&mut self, dx: i32, text: &str, w: usize, ink: Ink) {
+    pub(super) fn para(&mut self, dx: i32, text: &str, w: usize, ink: Ink) {
         for line in wrap(text, w) {
             self.text(dx, line, ink);
         }
@@ -48,7 +48,7 @@ impl Rows {
     }
 
     /// The keys of a card: each key in bold, its label dim.
-    fn keys(&mut self, list: &[(&str, &str)]) {
+    pub(super) fn keys(&mut self, list: &[(&str, &str)]) {
         let mut row = Vec::new();
         let mut x = 3;
         for (key, label) in list {
@@ -75,7 +75,7 @@ fn lines_of(text: &str, w: usize) -> Vec<String> {
 }
 
 /// Dims the screen, and draws an empty card of width `w` in the center with its rows.
-fn show(c: &mut Canvas, w: i32, title: &str, color: Rgb, rows: Rows) {
+pub(super) fn show(c: &mut Canvas, w: i32, title: &str, color: Rgb, rows: Rows) {
     let w = w.min(c.w - 2);
     let h = (rows.rows.len() as i32 + 4).min(c.h - 2);
     let x = (c.w - w) / 2;
@@ -107,14 +107,21 @@ pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
         Card::Resume(card) => resume(app, card, c),
         Card::Kill(card) => kill(app, card, c),
         Card::Quit => quit(app, c),
-        Card::Help => help(c),
+        Card::Help => match app.screen {
+            crate::app::model::Screen::Live { .. } => super::live_cards::help(c),
+            _ => help(c),
+        },
         Card::Needs => needs(app, c),
         Card::Error { title, text } => error(c, title, text),
+        Card::Stop(card) => super::live_cards::stop(app, card, c),
+        Card::Retry(card) => super::live_cards::retry(app, card, c),
+        Card::Open(card) => super::live_cards::open(card, c),
+        Card::Opened(card) => super::live_cards::opened(app, card, c),
     }
 }
 
 /// The last rows of a card with an action: its keys, or what the action does now.
-fn action_rows(app: &App, rows: &mut Rows, run: &Run, go: &str, running: &str) {
+pub(super) fn action_rows(app: &App, rows: &mut Rows, run: &Run, go: &str, running: &str) {
     match run {
         Run::Idle => rows.keys(&[("enter", go), ("esc", "cancel")]),
         Run::Waiting { .. } => {

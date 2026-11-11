@@ -2,6 +2,12 @@
 //! update hands it a job only when it is free. An action of the person goes before a pass. A
 //! pass starts when the engine starts, after each action, when a running turn ends, and each
 //! minute; while the engine is paused, no pass starts, and actions still run.
+//!
+//! One pass does one thing for a ticket: it collects a turn, or moves the ticket to its next
+//! step, or starts the next turn. So a pass that changed a ticket and left work ready for the
+//! next pass starts that pass at once, and the ticket does not wait a minute between two steps.
+//! A pass that changed nothing starts no quick pass, and the number of quick passes in a row has
+//! a limit, so a ticket that cannot move never makes the engine spin.
 
 use std::time::Duration;
 
@@ -12,6 +18,9 @@ use super::{data, notice};
 
 /// A pass starts each this many seconds: the interval of the system timer.
 pub const PASS_EVERY: Duration = Duration::from_secs(crate::install::INTERVAL_SECONDS as u64);
+
+/// The most quick passes in a row. The pass of the minute starts the count again.
+pub const QUICK_MAX: u32 = 12;
 
 /// The text of `vision tick` when a different tick holds the lock.
 pub const LOCK_HELD: &str = "another tick holds the lock";
@@ -82,6 +91,21 @@ pub fn timer(app: &mut App) {
         .last_pass_start
         .is_none_or(|at| app.clock.elapsed >= at + PASS_EVERY);
     if due {
+        app.engine.quick = 0;
+        queue_pass(app);
+    }
+}
+
+/// After a pass and the load of the local data that follows it: starts the next pass at once
+/// when the pass changed a ticket and the next pass has work.
+pub fn after_pass(app: &mut App) {
+    if !std::mem::take(&mut app.engine.pass_ended) {
+        return;
+    }
+    let (states, ready) = app.ticket_states();
+    let changed = states != app.engine.before_pass;
+    if changed && ready && !app.engine.paused && !app.off() && app.engine.quick < QUICK_MAX {
+        app.engine.quick += 1;
         queue_pass(app);
     }
 }
@@ -112,6 +136,8 @@ pub fn dispatch(app: &mut App, fx: &mut Vec<Effect>) {
     let now = app.clock.elapsed;
     if job.kind == JobKind::Pass {
         app.engine.last_pass_start = Some(now);
+        app.engine.before_pass = app.ticket_states().0;
+        app.engine.pass_ended = false;
     }
     if let Some(run) = card_run(app, job.id) {
         *run = Run::Running { job: job.id };
@@ -130,6 +156,9 @@ fn card_run(app: &mut App, job: u64) -> Option<&mut Run> {
         Card::Start(card) => &mut card.run,
         Card::Resume(card) => &mut card.run,
         Card::Kill(card) => &mut card.run,
+        Card::Stop(card) => &mut card.run,
+        Card::Retry(card) => &mut card.run,
+        Card::Opened(card) => &mut card.run,
         _ => return None,
     };
     (run.job() == Some(job)).then_some(run)
@@ -170,7 +199,10 @@ pub fn on_done(app: &mut App, done: JobDone, fx: &mut Vec<Effect>) {
 
 fn pass_done(app: &mut App, result: &ChildResult) {
     if result.ok() {
-        app.engine.last_pass = Some(if result.stdout.contains(LOCK_HELD) {
+        let skipped = result.stdout.contains(LOCK_HELD);
+        // A pass that ran: the load of the local data that follows shows what it changed.
+        app.engine.pass_ended = !skipped;
+        app.engine.last_pass = Some(if skipped {
             PassEnd::Skipped
         } else {
             PassEnd::Done
@@ -232,6 +264,20 @@ fn action_done(
             Tone::Ok,
         ),
         Action::On => notice(app, "Vision is on. The next pass acts again.", Tone::Ok),
+        Action::Stop { key } => notice(
+            app,
+            format!("Stopped {key}. Its branch stays in its clone. Press Enter to start it again."),
+            Tone::Ok,
+        ),
+        Action::Retry { key } => {
+            let text = if app.engine.paused {
+                format!("{key} goes on when the engine runs. Press p on Home to start it.")
+            } else {
+                format!("{key} goes on. A pass runs now.")
+            };
+            notice(app, text, Tone::Ok);
+        }
+        Action::Tell { key, .. } => super::tell::told(app, key, result),
     }
     queue_pass(app);
 }

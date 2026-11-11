@@ -13,6 +13,7 @@ use crate::ledger::Event;
 use crate::paths::Paths;
 use crate::pipeline::view::marks_text;
 use crate::pipeline::TicketView;
+use crate::running::Running;
 use crate::snapshot::{collect_needs, LimitView, LimitsView, Need, NeedKind, Outcome, Snapshot};
 use crate::util::fs::{atomic_write, read_optional};
 use crate::util::time;
@@ -28,6 +29,8 @@ pub struct StatusView {
     pub needs: Vec<Need>,
     /// One row for each ticket: its step, what works or waits, its marks, and its cost.
     pub tickets: Vec<TicketView>,
+    /// The job or the operation that a pass runs now, or `None`.
+    pub running: Option<Running>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +190,7 @@ impl StatusView {
             limits: LimitsView::new(&config.limits, ledger.latest_limits()?),
             needs,
             tickets,
+            running: crate::running::read(&ctx.paths),
         })
     }
 
@@ -209,6 +213,15 @@ impl StatusView {
             "on"
         };
         let _ = writeln!(out, "switch   {switch}");
+        if let Some(running) = &self.running {
+            let _ = writeln!(
+                out,
+                "pass     runs {} for {} since {}",
+                running.label(),
+                running.ticket,
+                running.started
+            );
+        }
         let _ = writeln!(
             out,
             "limits   {}",

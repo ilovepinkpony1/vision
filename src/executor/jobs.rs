@@ -100,7 +100,9 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_TIMEOUT);
     let started = Instant::now();
+    let record = crate::running::start(&ctx.paths, "job", &run.job, run.ticket.as_str());
     let answer = runner.job(input, timeout, spec.secrets);
+    drop(record);
     let seconds = i64::try_from(started.elapsed().as_secs()).unwrap_or(i64::MAX);
     let at = time::now_rfc3339();
     let source = job_source(&run.job);
@@ -270,7 +272,9 @@ pub fn read(
         .timeout
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_TIMEOUT);
+    let record = crate::running::start(&ctx.paths, "read", verb, key.as_str());
     let answer = runner.act(input, timeout);
+    drop(record);
     let mut masked_args = args.clone();
     secrets.mask_json(&mut masked_args);
     let (outcome, result) = match answer {

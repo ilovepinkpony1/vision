@@ -1413,3 +1413,85 @@ fn the_tests_of_the_proof_never_get_a_secret() {
     let result = executor::job(&demo.ctx(), &demo.ledger(), &job("proof", json!({}))).unwrap();
     assert!(result.ok, "the tests saw the secret: {result:?}");
 }
+
+#[test]
+fn a_job_and_an_operation_write_the_record_of_what_runs_while_their_script_runs() {
+    let demo = Demo::new();
+    let dir = demo.home.user_home.join("record adapter");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("adapter.toml"),
+        r#"name = "record"
+base = "origin/main"
+
+[[step]]
+id = "work"
+kind = "job"
+job = "look"
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+
+[verbs."x.describe"]
+mode = "auto"
+
+[jobs.look]
+"#,
+    )
+    .unwrap();
+    // Each script copies the record into a file while it runs, then answers.
+    let running = demo.home.vision.join("running.json");
+    let seen = demo.home.user_home.join("seen.jsonl");
+    let script = |answer: &str| {
+        format!(
+            r#"#!/usr/bin/env python3
+import json, sys
+json.load(sys.stdin)
+with open({running:?}) as f:
+    record = f.read()
+with open({seen:?}, "a") as f:
+    f.write(record.strip() + "\n")
+print(json.dumps({answer}))
+"#
+        )
+    };
+    executor_support::write_script(
+        &dir.join("bin/act"),
+        &script(r#"{"state": "confirmed", "detail": "done"}"#),
+    );
+    executor_support::write_script(
+        &dir.join("bin/job"),
+        &script(r#"{"ok": True, "detail": "looked"}"#),
+    );
+    executor_support::write_script(
+        &dir.join("bin/observe"),
+        "#!/usr/bin/env python3\nimport json\nprint(json.dumps({\"tickets\": []}))\n",
+    );
+    let dir_text = dir.display().to_string();
+    demo.edit_config(|doc| doc["adapter"]["dir"] = toml_edit::value(dir_text));
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+
+    let looked = executor::job(&ctx, &ledger, &job("look", json!({}))).unwrap();
+    assert!(looked.ok, "{looked:?}");
+    assert!(!running.exists(), "the record goes when the job ends");
+    let done = executor::request(&ctx, &ledger, &op("x.describe", json!({}))).unwrap();
+    assert_eq!(done.state, OpState::Confirmed, "{done:?}");
+    assert!(!running.exists(), "the record goes when the operation ends");
+
+    let records: Vec<Value> = std::fs::read_to_string(&seen)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0]["what"], "job");
+    assert_eq!(records[0]["name"], "look");
+    assert_eq!(records[0]["ticket"], KEY);
+    assert_eq!(records[0]["pid"], std::process::id());
+    assert!(records[0]["started"].as_str().is_some());
+    assert_eq!(records[1]["what"], "operation");
+    assert_eq!(records[1]["name"], "x.describe");
+}

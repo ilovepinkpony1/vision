@@ -11,6 +11,20 @@ mod boot;
 mod colors;
 #[path = "app/e2e.rs"]
 mod e2e;
+#[path = "app/feed.rs"]
+mod feed;
+#[path = "app/input.rs"]
+mod input;
+#[path = "app/live.rs"]
+mod live;
+#[path = "app/live_colors.rs"]
+mod live_colors;
+#[path = "app/live_support.rs"]
+mod live_support;
+#[path = "app/live_update.rs"]
+mod live_update;
+#[path = "app/now.rs"]
+mod now;
 #[path = "app/snapshots.rs"]
 mod snapshots;
 #[path = "app/support.rs"]

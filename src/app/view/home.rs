@@ -7,6 +7,7 @@ use super::canvas::{ink, Canvas};
 use super::header::{dots, header, keys, spinner};
 use super::theme::{Rgb, T};
 use crate::app::model::{App, Held};
+use crate::app::now::{need_line, Tone};
 use crate::app::text::{count, cut, error_line, width, wrap};
 use crate::pipeline::commands::PickRow;
 use crate::pipeline::money;
@@ -151,9 +152,10 @@ fn needs_bar(app: &App, c: &mut Canvas, y: i32) {
         r = c.right(r - 2, y, &format!("+{} more", needs.len() - 1), ink(T.warn));
     }
     let first = &needs[0];
+    let line = need_line(first);
     let text = match &first.ticket {
-        Some(ticket) => format!("{ticket} · {}", first.text),
-        None => first.text.clone(),
+        Some(ticket) => format!("{ticket} · {line}"),
+        None => line,
     };
     let room = (r - 2 - 16).max(1) as usize;
     c.put(16, y, &cut(&text, room), ink(T.fg));
@@ -245,16 +247,14 @@ fn more_marks(c: &mut Canvas, y: i32, h: i32, offset: usize, shown: usize, total
     }
 }
 
-/// The tone of a ticket: an agent works, it needs the person, it is stopped, or it waits.
-pub fn tone(ticket: &Held) -> Rgb {
-    if ticket.view.works.is_some() {
-        T.accent
-    } else if ticket.needs_you {
-        T.warn
-    } else if ticket.stopped {
-        T.dim
-    } else {
-        T.info
+/// The color of a tone of the state of a ticket.
+pub fn tone_color(tone: Tone) -> Rgb {
+    match tone {
+        Tone::Work => T.accent,
+        Tone::Need => T.warn,
+        Tone::Wait => T.info,
+        Tone::Rest => T.dim,
+        Tone::Done => T.ok,
     }
 }
 
@@ -296,7 +296,8 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
     if !title.is_empty() {
         c.put(kx, y, &cut(title, (r - 2 - kx).max(1) as usize), ink(T.fg));
     }
-    let tone = tone(ticket);
+    let now = app.now_of(&ticket.view, &ticket.facts);
+    let tone = tone_color(now.tone);
     let steps = app.setup.as_ref().map_or(&[][..], |s| s.steps.as_slice());
     let step = view.step.as_deref().unwrap_or("-");
     let at = steps.iter().position(|s| s == step);
@@ -310,7 +311,7 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
     c.put(
         x + 1,
         y + 1,
-        &cut(&format!("· {}", view.now), room),
+        &cut(&format!("· {}", now.short), room),
         ink(tone),
     );
 }

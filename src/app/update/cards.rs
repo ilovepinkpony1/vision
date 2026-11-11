@@ -1,11 +1,29 @@
 //! The keys of the cards: the start card, the resume card, the kill switch card, the quit card,
-//! the keys card, the needs card, and the card of a long error. Enter runs the action of a card
-//! through the queue of the worker; while the action waits or runs, a second Enter does
+//! the keys card, the needs card, the card of a long error, and the cards of the live view
+//! (stop, retry, open the session, and the card after the session). Enter runs the action of a
+//! card through the queue of the worker; while the action waits or runs, a second Enter does
 //! nothing. Esc closes a card.
 
-use super::super::model::{App, Card, Run, StartInfo};
-use super::super::msg::{Action, Effect, Key};
-use super::{ask_quit, engine, leave};
+use super::super::model::{App, Card, OpenedCard, Run, StartInfo};
+use super::super::msg::{Action, ChildResult, Effect, Key};
+use super::super::text::error_line;
+use super::{ask_quit, engine, leave, tell};
+
+/// The session of `vision open` ended: the card asks whether the ticket goes on.
+pub fn on_session_ended(app: &mut App, key: &str, result: &ChildResult) {
+    app.dirty = true;
+    let error = if result.ok() {
+        None
+    } else {
+        Some(error_line(&result.failure()))
+    };
+    app.card = Some(Card::Opened(OpenedCard {
+        key: key.to_string(),
+        code: result.code,
+        error: error.filter(|e| !e.is_empty()),
+        run: Run::Idle,
+    }));
+}
 
 pub fn on_start_info(app: &mut App, key: &str, info: Result<StartInfo, String>) {
     if let Some(Card::Start(card)) = app.card.as_mut() {
@@ -67,6 +85,53 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             Key::Esc => app.card = None,
             _ => {}
         },
+        Card::Stop(card) => match key {
+            Key::Enter if card.run.job().is_none() => {
+                let action = Action::Stop {
+                    key: card.key.clone(),
+                };
+                run(app, action);
+            }
+            Key::Esc => app.card = None,
+            _ => {}
+        },
+        Card::Retry(card) => match key {
+            Key::Enter if card.run.job().is_none() => {
+                let action = Action::Retry {
+                    key: card.key.clone(),
+                };
+                run(app, action);
+            }
+            Key::Esc => app.card = None,
+            _ => {}
+        },
+        Card::Opened(card) => match key {
+            Key::Enter if card.run.job().is_none() => {
+                let action = Action::Retry {
+                    key: card.key.clone(),
+                };
+                run(app, action);
+            }
+            Key::Esc => app.card = None,
+            _ => {}
+        },
+        Card::Open(card) => match (key, card.running.is_some()) {
+            (Key::Enter, false) => {
+                let key = card.key.clone();
+                app.card = None;
+                fx.push(Effect::OpenSession(key));
+            }
+            (Key::Char('t'), true) => {
+                app.card = None;
+                tell::open(app);
+            }
+            (Key::Char('x'), true) => {
+                app.card = None;
+                super::live::on_key(app, Key::Char('x'), fx);
+            }
+            (Key::Esc, _) => app.card = None,
+            _ => {}
+        },
         Card::Kill(card) => match key {
             Key::Enter if card.run.job().is_none() => {
                 let action = if card.turn_on {
@@ -90,6 +155,9 @@ fn run(app: &mut App, action: Action) {
         Some(Card::Start(card)) => card.run = state,
         Some(Card::Resume(card)) => card.run = state,
         Some(Card::Kill(card)) => card.run = state,
+        Some(Card::Stop(card)) => card.run = state,
+        Some(Card::Retry(card)) => card.run = state,
+        Some(Card::Opened(card)) => card.run = state,
         _ => {}
     }
 }

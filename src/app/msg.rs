@@ -2,24 +2,40 @@
 //! run. A message is a key, a tick of the clock, a change of the window, or the result of a
 //! background thread. An effect starts a load, hands a job to the worker, or leaves.
 
+use super::feed::{Batch, StreamLine};
+use super::live::TicketData;
 use super::model::{Local, Setup, SetupError, StartInfo};
 use crate::pipeline::commands::PickRow;
+use crate::pipeline::{DiffView, PlanView};
 
-/// One key, as the update sees it. Ctrl-C arrives as `Char('q')`.
+/// One key, as the update sees it. Ctrl-C arrives as `Cancel`, which acts as `q`, and as Esc
+/// in the line of `t`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Up,
     Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Backspace,
+    Delete,
     Enter,
     Esc,
     Tab,
     Char(char),
+    /// Ctrl-C.
+    Cancel,
     Other,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Msg {
     Key(Key),
+    /// A paste of text, when the terminal sends it as one piece.
+    Paste(String),
     Resize {
         width: u16,
         height: u16,
@@ -37,6 +53,38 @@ pub enum Msg {
         key: String,
         info: Result<StartInfo, String>,
     },
+    /// The data of the live view of a ticket.
+    Ticket {
+        key: String,
+        data: Box<Result<TicketData, String>>,
+    },
+    /// New events of a stream file of the ticket of the live view.
+    Stream {
+        key: String,
+        batch: Batch,
+    },
+    /// The plan of a ticket, or `None` when it has none yet.
+    Plan {
+        key: String,
+        plan: Result<Option<PlanView>, String>,
+    },
+    /// The commits of a ticket that the forge does not have.
+    Diff {
+        key: String,
+        diff: Result<DiffView, String>,
+    },
+    /// The events of one turn.
+    TurnEvents {
+        key: String,
+        turn: String,
+        events: Result<Vec<StreamLine>, String>,
+    },
+    /// The session that `vision open` gave to the person ended, and the app has the terminal
+    /// again.
+    SessionEnded {
+        key: String,
+        result: ChildResult,
+    },
     /// The worker ended a job.
     JobDone(JobDone),
     /// The process got SIGTERM or SIGHUP. Only the runtime reads it.
@@ -50,6 +98,18 @@ pub enum Effect {
     LoadLocal,
     LoadQueue,
     LoadStartInfo(String),
+    /// Load the data of the live view of a ticket.
+    LoadTicket(String),
+    /// Follow the stream files of a ticket in a thread, or stop that thread with `None`.
+    Follow(Option<String>),
+    LoadPlan(String),
+    LoadDiff(String),
+    LoadTurn {
+        key: String,
+        turn: String,
+    },
+    /// Give the terminal to `vision open KEY`, wait for it, and take the terminal again.
+    OpenSession(String),
     /// Start the worker thread. The update asks for it once.
     StartWorker,
     /// Hand a job to the worker. The update hands over one job at a time.
@@ -72,8 +132,8 @@ pub enum JobKind {
     Action(Action),
 }
 
-/// A change of the state. Each one runs as a child process of the same binary. Part A2 and
-/// part A3 add `stop`, `retry`, `answer`, `approve`, `approve-plan`, `promote`, and `tell`.
+/// A change of the state. Each one runs as a child process of the same binary. Part A3 adds
+/// `answer`, `approve`, `approve-plan`, and `promote`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// `vision take KEY`: start a ticket, or start a stopped ticket again.
@@ -82,6 +142,12 @@ pub enum Action {
     Off,
     /// `vision on`.
     On,
+    /// `vision stop KEY`.
+    Stop { key: String },
+    /// `vision retry KEY`.
+    Retry { key: String },
+    /// `vision tell KEY -- TEXT`.
+    Tell { key: String, text: String },
 }
 
 impl Action {
@@ -91,6 +157,12 @@ impl Action {
             Action::Take { key } => vec!["take".into(), key.clone()],
             Action::Off => vec!["off".into()],
             Action::On => vec!["on".into()],
+            Action::Stop { key } => vec!["stop".into(), key.clone()],
+            Action::Retry { key } => vec!["retry".into(), key.clone()],
+            // `--` keeps a text that starts with `-` from looking like an option.
+            Action::Tell { key, text } => {
+                vec!["tell".into(), key.clone(), "--".into(), text.clone()]
+            }
         }
     }
 
@@ -100,6 +172,9 @@ impl Action {
             Action::Take { key } => format!("The take of {key}"),
             Action::Off => "The kill switch".into(),
             Action::On => "The switch on".into(),
+            Action::Stop { key } => format!("The stop of {key}"),
+            Action::Retry { key } => format!("The retry of {key}"),
+            Action::Tell { key, .. } => format!("The message to {key}"),
         }
     }
 }

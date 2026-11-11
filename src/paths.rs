@@ -71,6 +71,11 @@ impl Paths {
         self.home.join("off")
     }
 
+    /// The record of the job or the operation that a pass runs now. See [`crate::running`].
+    pub fn running(&self) -> PathBuf {
+        self.home.join("running.json")
+    }
+
     pub fn log_dir(&self) -> PathBuf {
         self.home.join("log")
     }

@@ -19,9 +19,12 @@ use time::OffsetDateTime;
 
 use super::model::{App, Clock};
 use super::msg::{ChildResult, Effect, Job, JobDone, Msg};
+use super::session;
+use super::tail::{self, Follow};
+use super::terminal::InputControl;
 use super::view::theme::ColorMode;
 use super::worker::{self, WorkerConfig};
-use super::{load, update, view};
+use super::{load, load_ticket, update, view};
 use crate::paths::Paths;
 
 /// The wait for a message while a part of the screen moves.
@@ -38,6 +41,10 @@ pub struct Runtime {
     rx: Receiver<Msg>,
     jobs: Option<Sender<Job>>,
     started: Instant,
+    /// The reader of the stream files of the ticket of the live view.
+    follow: Option<Follow>,
+    /// The sessions that wait for the terminal: only [`run_terminal`] can give it.
+    opens: Vec<String>,
 }
 
 /// How the loop ended.
@@ -61,6 +68,27 @@ impl Runtime {
             rx,
             jobs: None,
             started,
+            follow: None,
+            opens: Vec::new(),
+        }
+    }
+
+    /// The configuration of the children of the worker, for a child that gets the terminal.
+    pub fn worker(&self) -> &WorkerConfig {
+        &self.worker
+    }
+
+    /// The ticket of the reader of stream files, while one runs.
+    pub fn following(&self) -> Option<&str> {
+        self.follow.as_ref().map(|f| f.key.as_str())
+    }
+
+    /// The next session that waits for the terminal.
+    pub fn take_open(&mut self) -> Option<String> {
+        if self.opens.is_empty() {
+            None
+        } else {
+            Some(self.opens.remove(0))
         }
     }
 
@@ -153,6 +181,70 @@ impl Runtime {
                         },
                     );
                 }
+                Effect::LoadTicket(key) => {
+                    let paths = self.paths.clone();
+                    let failed = key.clone();
+                    self.spawn(
+                        move || Msg::Ticket {
+                            data: Box::new(load_ticket::ticket(&paths, &key)),
+                            key,
+                        },
+                        move |e| Msg::Ticket {
+                            key: failed.clone(),
+                            data: Box::new(Err(e)),
+                        },
+                    );
+                }
+                Effect::Follow(key) => {
+                    // Dropping the old reader stops its thread.
+                    self.follow =
+                        key.and_then(|key| tail::follow(self.paths.clone(), &key, self.tx.clone()));
+                }
+                Effect::LoadPlan(key) => {
+                    let paths = self.paths.clone();
+                    let failed = key.clone();
+                    self.spawn(
+                        move || Msg::Plan {
+                            plan: load_ticket::plan(&paths, &key),
+                            key,
+                        },
+                        move |e| Msg::Plan {
+                            key: failed.clone(),
+                            plan: Err(e),
+                        },
+                    );
+                }
+                Effect::LoadDiff(key) => {
+                    let paths = self.paths.clone();
+                    let failed = key.clone();
+                    self.spawn(
+                        move || Msg::Diff {
+                            diff: load_ticket::diff(&paths, &key),
+                            key,
+                        },
+                        move |e| Msg::Diff {
+                            key: failed.clone(),
+                            diff: Err(e),
+                        },
+                    );
+                }
+                Effect::LoadTurn { key, turn } => {
+                    let paths = self.paths.clone();
+                    let failed = (key.clone(), turn.clone());
+                    self.spawn(
+                        move || Msg::TurnEvents {
+                            events: load_ticket::turn_events(&paths, &key, &turn),
+                            key,
+                            turn,
+                        },
+                        move |e| Msg::TurnEvents {
+                            key: failed.0.clone(),
+                            turn: failed.1.clone(),
+                            events: Err(e),
+                        },
+                    );
+                }
+                Effect::OpenSession(key) => self.opens.push(key),
                 Effect::StartWorker => {
                     if self.jobs.is_none() {
                         self.jobs = worker::spawn(self.worker.clone(), self.tx.clone()).ok();
@@ -237,23 +329,51 @@ fn local_offset(at: i64) -> i32 {
     }
 }
 
+/// Clears the screen and forgets what it showed, so that the next draw writes each cell again.
+/// Gives the size of the window now. `Terminal::clear` of ratatui asks the terminal for the
+/// position of its cursor and fails when no answer comes in time; a resize to the size of now
+/// clears the same way with no question.
+fn redraw_all(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<(u16, u16)> {
+    let size = terminal.size()?;
+    terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))?;
+    Ok((size.width, size.height))
+}
+
 /// The loop with a terminal: draws when something changed or something moves, and waits for a
-/// message up to 100 ms while something moves, else up to one second.
+/// message up to 100 ms while something moves, else up to one second. A session that waits for
+/// the terminal runs here, between two messages.
 pub fn run_terminal(
     rt: &mut Runtime,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    input: &InputControl,
 ) -> Result<Exit> {
     rt.start();
-    let mut minute = None;
+    let mut shown = None;
     loop {
         if rt.app.quit {
             return Ok(Exit::Normal);
         }
-        let now_minute = rt.app.clock.local_hm();
-        if rt.app.dirty || rt.app.animating() || minute != Some(now_minute) {
+        while let Some(key) = rt.take_open() {
+            let result = session::open(rt.worker(), &key, input);
+            // The child drew on the terminal: the next draw writes each cell again.
+            let (width, height) = redraw_all(terminal)?;
+            if (width, height) != rt.app.size {
+                rt.handle(Msg::Resize { width, height });
+            }
+            rt.handle(Msg::SessionEnded { key, result });
+        }
+        // The clock of the header shows minutes; the live view also shows seconds.
+        let (hour, minute) = rt.app.clock.local_hm();
+        let second = if rt.app.shows_seconds() {
+            rt.app.clock.wall.second()
+        } else {
+            0
+        };
+        let now_shown = (hour, minute, second);
+        if rt.app.dirty || rt.app.animating() || shown != Some(now_shown) {
             terminal.draw(|frame| view::draw(&rt.app, frame))?;
             rt.app.dirty = false;
-            minute = Some(now_minute);
+            shown = Some(now_shown);
         }
         let timeout = if rt.app.animating() { FAST } else { SLOW };
         let mut next = rt.wait(timeout);

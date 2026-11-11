@@ -11,6 +11,9 @@ mod cards;
 mod data;
 pub mod engine;
 mod home;
+pub mod live;
+mod pager;
+mod tell;
 
 use std::time::Duration;
 
@@ -42,6 +45,13 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
             app.dirty = true;
             on_key(app, key, &mut fx);
         }
+        Msg::Paste(text) => tell::on_paste(app, &text),
+        Msg::Ticket { key, data } => live::on_ticket(app, &key, *data),
+        Msg::Stream { key, batch } => live::on_stream(app, &key, &batch),
+        Msg::Plan { key, plan } => pager::on_plan(app, &key, plan),
+        Msg::Diff { key, diff } => pager::on_diff(app, &key, diff),
+        Msg::TurnEvents { key, turn, events } => pager::on_turn(app, &key, &turn, events),
+        Msg::SessionEnded { key, result } => cards::on_session_ended(app, &key, &result),
         Msg::Setup(result) => boot::on_setup(app, result, &mut fx),
         Msg::Local(result) => data::on_local(app, result, &mut fx),
         Msg::Queue(result) => data::on_queue(app, result, &mut fx),
@@ -55,6 +65,13 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
 }
 
 fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
+    // Ctrl-C cancels the line of `t`, and is `q` everywhere else.
+    let telling = app.card.is_none() && app.live.as_ref().is_some_and(|l| l.tell.is_some());
+    let key = match key {
+        Key::Cancel if telling => Key::Esc,
+        Key::Cancel => Key::Char('q'),
+        other => other,
+    };
     if app.card.is_some() {
         cards::on_key(app, key, fx);
         return;
@@ -62,7 +79,7 @@ fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
     match app.screen {
         super::model::Screen::Boot => boot::on_key(app, key, fx),
         super::model::Screen::Home => home::on_key(app, key, fx),
-        super::model::Screen::Detail { .. } => home::on_detail_key(app, key, fx),
+        super::model::Screen::Live { .. } => live::on_key(app, key, fx),
     }
 }
 
@@ -80,6 +97,7 @@ fn timers(app: &mut App, fx: &mut Vec<Effect>) {
             data::load_queue(app, fx);
         }
     }
+    live::timer(app, fx);
     engine::timer(app);
 }
 

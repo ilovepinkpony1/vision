@@ -1,11 +1,11 @@
-//! The keys of Home and of the detail screen of a ticket.
+//! The keys of Home.
 //!
-//! Home: the arrows and `k`/`j` move through both boxes; Enter opens a ticket in progress,
+//! The arrows and `k`/`j` move through both boxes; Enter opens the live view of a ticket in progress,
 //! opens the start card of a ticket that can start, says why another ticket cannot start, and
 //! asks to resume a stopped ticket; `n` lists the needs; `p` pauses the engine; `r` loads the
 //! queue again; `K` opens the kill switch card; `?` shows the keys; `q` and Ctrl-C leave.
 
-use super::super::model::{App, Card, Item, KillCard, ResumeCard, Run, Screen, StartCard, Tone};
+use super::super::model::{App, Card, Item, KillCard, ResumeCard, Run, StartCard, Tone};
 use super::super::msg::{Effect, Key};
 use super::{ask_quit, data, engine, notice};
 
@@ -14,13 +14,6 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         Key::Up | Key::Char('k') => step(app, -1),
         Key::Down | Key::Char('j') => step(app, 1),
         Key::Enter => open(app, fx),
-        _ => common(app, key, fx),
-    }
-}
-
-pub fn on_detail_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
-    match key {
-        Key::Esc => app.screen = Screen::Home,
         _ => common(app, key, fx),
     }
 }
@@ -96,7 +89,7 @@ fn open(app: &mut App, fx: &mut Vec<Effect>) {
     };
     match choice {
         Choice::Resume(card) => app.card = Some(Card::Resume(card)),
-        Choice::Detail(key) => app.screen = Screen::Detail { key },
+        Choice::Detail(key) => super::live::open(app, &key, fx),
         Choice::Start(card) => {
             fx.push(Effect::LoadStartInfo(card.key.clone()));
             app.card = Some(Card::Start(card));

@@ -352,24 +352,6 @@ fn the_card_of_a_long_error() {
 }
 
 #[test]
-fn the_detail_screen() {
-    let mut tickets = two_tickets();
-    tickets[0]
-        .view
-        .flags
-        .push(vision::pipeline::view::FlagView {
-            flag: "needs-you".into(),
-            reason: "the proof did not pass at 1a2b3c4d5e6f".into(),
-            since: None,
-            command: "vision retry DEMO-12".into(),
-        });
-    tickets[0].view.marks.plan = Some("3f2a1b4c5d6e".into());
-    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
-    send(&mut app, 2.0, Msg::Key(Key::Enter));
-    check("detail", &app);
-}
-
-#[test]
 fn the_message_of_a_window_that_is_too_small() {
     let mut app = home((80, 24));
     send(&mut app, 2.0, Msg::Tick);

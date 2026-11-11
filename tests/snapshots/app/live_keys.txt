@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
+ ⠸ build            ╭─ Keys ─────────────────────────────────────────────────────────────╮its    none to push
+ ○ review           │                                                                    │
+ ○ ci               │  esc          back to Home                                         │TIONS
+ ○ fix-ci           │  n            what waits for you                                   │ou                0
+ ○ ready            │  t            tell the agent something                             │emory             1
+ ○ comments         │  o            open the session and type into it yourself           │he Judge          0
+ ○ ci-review        │  l  p  d      the log, the plan, the commits to push               │
+ ○ ready-to-merge   │  x            stop the ticket                                      │S
+ ○ done             │  r            start the step again, or continue                    │          3f2a1b4 ✓
+                    │  enter        start a stopped ticket again                         │f                 -
+ TEAM               │  ↑↓  j k      scroll the activity                                  │                  -
+ ✓ scout     fable-5│  pgup pgdn    scroll the activity by a page                        │                  -
+ ● builder   opus-5-│  G  end       back to the end of the activity                      │
+ · reviewer  opus-5-│  ?            this list of keys                                    │TS
+ · tester    opus-5-│  q            quit                                                 │━━━━━━━━━ 31% of 60
+ · shepherd  opus-5-│                                                                    │esets at 18:00
+ · judge     fable-5│  esc closes this list                                              │━━━━━━━━━ 71% of 85
+ · curator   fable-5│                                                                    │
+                    ╰────────────────────────────────────────────────────────────────────╯NE
+                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 2s ago
+                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
+                           │                month next.                             │
+                           │ 14:25:10 tool  lookup: csv                             │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+

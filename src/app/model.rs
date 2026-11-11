@@ -7,10 +7,13 @@ use std::time::Duration;
 
 use time::OffsetDateTime;
 
-use super::msg::Job;
+use super::msg::{Job, JobKind};
+use super::now::{self, Now, Pass};
 use super::view::theme::ColorMode;
 use crate::pipeline::commands::PickRow;
+use crate::pipeline::facts::StateFacts;
 use crate::pipeline::TicketView;
+use crate::running::Running;
 use crate::snapshot::{LimitsView, Need};
 
 /// The smallest window that the app draws in.
@@ -61,8 +64,8 @@ pub enum Screen {
     /// The loader.
     Boot,
     Home,
-    /// The plain detail screen of one ticket in progress. Part A2 replaces it with the live view.
-    Detail {
+    /// The live view of one ticket. [`App::live`] holds its state.
+    Live {
         key: String,
     },
 }
@@ -81,6 +84,58 @@ pub enum Card {
         title: String,
         text: String,
     },
+    /// `x` of the live view: what a stop does, and the stop.
+    Stop(StopCard),
+    /// `r` of the live view: what a retry does, and the retry.
+    Retry(RetryCard),
+    /// `o` of the live view: what an open of the session does.
+    Open(OpenCard),
+    /// After the session of `vision open` ended: continue the ticket, or keep it paused.
+    Opened(OpenedCard),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StopCard {
+    pub key: String,
+    pub step: String,
+    pub branch: Option<String>,
+    /// The agent whose turn runs now.
+    pub agent: Option<String>,
+    pub run: Run,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RetryCard {
+    pub key: String,
+    pub step: String,
+    /// The agent of the step, for a turn step.
+    pub agent: Option<String>,
+    /// The person took over the session.
+    pub paused: bool,
+    /// The turn of the step held its end facts, so the retry runs its writes again.
+    pub held: bool,
+    /// Why a rule stopped the ticket.
+    pub reason: Option<String>,
+    pub run: Run,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenCard {
+    pub key: String,
+    /// The agent whose turn runs now: then the card only says how to reach it.
+    pub running: Option<String>,
+    /// The agent of the last turn, whose session opens.
+    pub last: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenedCard {
+    pub key: String,
+    /// The exit code of `vision open`, or `None` when a signal ended it or it did not start.
+    pub code: Option<i32>,
+    /// Why it did not start, or the last line of its error text.
+    pub error: Option<String>,
+    pub run: Run,
 }
 
 /// The state of the action of a card.
@@ -227,12 +282,19 @@ pub struct Local {
     pub week: Week,
     /// True when the system timer of this home is installed.
     pub timer: bool,
+    /// The job or the operation that a pass runs now.
+    pub running: Option<Running>,
+    /// The reset time of the reading of each window that is in force, RFC 3339 UTC: the 5-hour
+    /// window, then the 7-day window.
+    pub resets: [Option<String>; 2],
 }
 
 /// One ticket in progress.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Held {
     pub view: TicketView,
+    /// The facts of its state, for [`now::now`].
+    pub facts: StateFacts,
     /// When Vision took it, RFC 3339 UTC.
     pub taken: Option<String>,
     pub stopped: bool,
@@ -304,7 +366,18 @@ pub struct Engine {
     pub last_pass_start: Option<Duration>,
     pub last_pass: Option<PassEnd>,
     pub next_id: u64,
+    /// The states of the tickets in progress when the last pass started, to see what the pass
+    /// changed.
+    pub before_pass: Vec<TicketState>,
+    /// True from the end of a pass until the local data loaded again.
+    pub pass_ended: bool,
+    /// The quick passes in a row: passes that started at once because the pass before them
+    /// left work ready.
+    pub quick: u32,
 }
+
+/// The state of one ticket in short: its key, its step, and the title of its state.
+pub type TicketState = (String, String, String);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunningJob {
@@ -319,6 +392,23 @@ pub enum PassEnd {
     /// Another tick held the lock, such as the tick of the system timer. Not an error.
     Skipped,
     Failed(String),
+}
+
+/// A color of the theme by its meaning, for a text that the model holds, such as a word of the
+/// activity or a column of a pager. The view turns it into a color.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Hue {
+    Fg,
+    Dim,
+    Faint,
+    Ok,
+    Warn,
+    Bad,
+    Info,
+    Accent,
+    Primary,
+    /// The color of an agent, such as `builder`.
+    Agent(String),
 }
 
 /// One line at the bottom that goes away after a few seconds.
@@ -366,6 +456,8 @@ pub struct App {
     pub queue: Fetch<Vec<PickRow>>,
     pub home: HomeState,
     pub engine: Engine,
+    /// The live view, while it is open.
+    pub live: Option<super::live::Live>,
     pub notice: Option<Notice>,
     /// The app leaves.
     pub quit: bool,
@@ -387,6 +479,7 @@ impl App {
             queue: Fetch::default(),
             home: HomeState::default(),
             engine: Engine::default(),
+            live: None,
             notice: None,
             quit: false,
             dirty: true,
@@ -459,12 +552,99 @@ impl App {
         if self.engine.running.is_some() || self.queue.loading() {
             return true;
         }
-        match &self.card {
+        let card = match &self.card {
             Some(Card::Start(card)) => card.info.is_none() || card.run.job().is_some(),
             Some(Card::Resume(card)) => card.run.job().is_some(),
             Some(Card::Kill(card)) => card.run.job().is_some(),
+            Some(Card::Stop(card)) => card.run.job().is_some(),
+            Some(Card::Retry(card)) => card.run.job().is_some(),
+            Some(Card::Opened(card)) => card.run.job().is_some(),
             _ => false,
+        };
+        card || self.live_moves()
+    }
+
+    /// True when the live view shows something that moves: a working agent, a spinner, a
+    /// cursor that blinks, or a pager that loads.
+    fn live_moves(&self) -> bool {
+        let Some(live) = &self.live else {
+            return false;
+        };
+        if live.tell.is_some()
+            || live
+                .pagers
+                .iter()
+                .any(|p| p.state == super::pager::PagerState::Loading)
+        {
+            return true;
         }
+        let Some(data) = &live.data.data else {
+            return live.data.loading();
+        };
+        let now = self.now_of(&data.view, &data.facts);
+        now.spinner || now.seconds.is_some()
+    }
+
+    /// The engine as a ticket sees it: off, paused, a pass that runs or waits, or idle.
+    pub fn pass(&self) -> Pass {
+        if self.off() {
+            return Pass::Off;
+        }
+        let running = self
+            .engine
+            .running
+            .as_ref()
+            .is_some_and(|r| r.job.kind == JobKind::Pass);
+        if running {
+            return Pass::Runs;
+        }
+        if self.engine.paused {
+            return Pass::Paused;
+        }
+        if self.engine.queue.iter().any(|j| j.kind == JobKind::Pass) {
+            return Pass::Waits;
+        }
+        Pass::Idle
+    }
+
+    /// The state of a ticket in the words of the app.
+    pub fn now_of(&self, view: &TicketView, facts: &StateFacts) -> Now {
+        let running = self.local.data.as_ref().and_then(|l| l.running.as_ref());
+        now::now(&now::Input {
+            view,
+            facts,
+            needs: self.needs(),
+            running,
+            pass: self.pass(),
+            wall: self.clock.wall,
+            offset_seconds: self.clock.offset_seconds,
+        })
+    }
+
+    /// The state of each ticket in progress in short, and whether the next pass acts on one of
+    /// them at once.
+    pub fn ticket_states(&self) -> (Vec<TicketState>, bool) {
+        let mut ready = false;
+        let states = self
+            .held()
+            .iter()
+            .map(|held| {
+                let now = self.now_of(&held.view, &held.facts);
+                ready |= now.ready;
+                (
+                    held.view.key.clone(),
+                    held.view.step.clone().unwrap_or_default(),
+                    now.title,
+                )
+            })
+            .collect();
+        (states, ready)
+    }
+
+    /// True when a part of the screen counts seconds without moving otherwise, such as the time
+    /// since the last pass of the live view: the runtime draws it each second.
+    pub fn shows_seconds(&self) -> bool {
+        matches!(self.screen, Screen::Live { .. })
     }
 
     /// True when the window is big enough for the app.

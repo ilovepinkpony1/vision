@@ -92,7 +92,7 @@ pub fn render_event(event: &Event) -> Vec<String> {
 }
 
 /// The most telling part of the input of a tool call, on one line.
-fn tool_summary(input: &Value) -> String {
+pub fn tool_summary(input: &Value) -> String {
     for key in [
         "file_path",
         "path",
@@ -114,15 +114,16 @@ fn tool_summary(input: &Value) -> String {
     }
 }
 
-/// Reads the new complete lines of a growing file.
-struct Tail {
+/// Reads the new complete lines of a growing file. A last line with no newline waits until it
+/// is complete, so each line comes out one time.
+pub struct Tail {
     path: PathBuf,
     offset: u64,
     partial: Vec<u8>,
 }
 
 impl Tail {
-    fn new(path: PathBuf) -> Tail {
+    pub fn new(path: PathBuf) -> Tail {
         Tail {
             path,
             offset: 0,
@@ -130,7 +131,8 @@ impl Tail {
         }
     }
 
-    fn read_new(&mut self) -> Vec<String> {
+    /// The complete lines that came since the last call.
+    pub fn read_new(&mut self) -> Vec<String> {
         let Ok(mut file) = File::open(&self.path) else {
             return Vec::new();
         };

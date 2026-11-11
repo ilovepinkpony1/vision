@@ -12,6 +12,7 @@ use crate::adapter::{self, StepKind};
 use crate::config::Mode;
 use crate::ctx::Ctx;
 use crate::executor;
+use crate::ledger::turns::Window;
 use crate::paths::{tilde_display, Paths, TicketKey};
 use crate::pipeline::commands::{next_clone, pick_rows, report_of, PickRow};
 use crate::pipeline::state::{flags_of, Counts, NEEDS_YOU, PAUSED, STOPPED};
@@ -59,6 +60,7 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
     let ledger = ctx.ledger()?;
     let rows = ledger.tickets()?;
     let since = time::rfc3339(wall - Duration::from_secs(7 * 24 * 3600));
+    let mut facts = crate::pipeline::facts::state_facts(&ctx, &ledger)?;
     let mut tickets = Vec::new();
     let mut agents: Vec<String> = Vec::new();
     for ticket in view.tickets {
@@ -74,7 +76,9 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
                 agents.push(works.agent.clone());
             }
         }
+        let at = facts.iter().position(|f| f.key == ticket.key);
         tickets.push(Held {
+            facts: at.map(|i| facts.swap_remove(i)).unwrap_or_default(),
             stopped: flags.iter().any(|f| f == STOPPED),
             needs_you: !ticket.needs.is_empty()
                 || flags.iter().any(|f| f == NEEDS_YOU || f == PAUSED),
@@ -93,6 +97,11 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
     let report = report_of(&ledger, Some(&since))?;
     let total = &report.total;
     let turns = crate::turn::running_turns(&ctx, &ledger)?.len();
+    let now = time::rfc3339(wall);
+    let reset = |window| -> anyhow::Result<Option<String>> {
+        Ok(ledger.active_reading(window, &now)?.and_then(|r| r.resets))
+    };
+    let resets = [reset(Window::FiveHour)?, reset(Window::SevenDay)?];
     Ok(Local {
         off: view.off,
         limits: view.limits,
@@ -107,6 +116,8 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
             questions: total.cards_by_memory + total.cards_by_judge + total.cards_to_person,
         },
         timer: crate::install::is_installed(paths),
+        running: view.running,
+        resets,
     })
 }
 

@@ -1,18 +1,23 @@
 //! The app against a temporary home with the demo adapter and the demo world, as the end-to-end
 //! tests make them, with the fake `claude`. The real loaders fill the model in their threads;
 //! the take runs through the built binary and puts the ticket in progress with its title; one
-//! pass through the worker moves the ticket on.
+//! pass through the worker moves the ticket on. The live view follows a running turn: its model
+//! names the agent that works, its feed gets the events of the stream file, a text of `t`
+//! reaches the turn, and the state moves on after the turn.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use serde_json::json;
 use vision::app::model::{App, Card, Screen};
 use vision::app::msg::{Key, Msg};
+use vision::app::now::Kind;
+use vision::app::pager::{PagerKind, PagerState};
 use vision::app::runtime::Runtime;
 use vision::app::view::theme::ColorMode;
 use vision::app::worker::WorkerConfig;
 
-use super::pipeline_support::{fake_claude, simple_scenarios, World, KEY};
+use super::pipeline_support::{ends_with, fake_claude, result, simple_scenarios, World, KEY, PLAN};
 
 const LIMIT: Duration = Duration::from_secs(120);
 
@@ -152,4 +157,167 @@ fn vision_with_no_arguments_and_no_terminal_prints_the_help() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Usage: vision <COMMAND>"), "{stderr}");
     assert!(!home.path().join("vision").exists());
+}
+
+/// The data of the live view, when it loaded.
+fn live_data(app: &App) -> Option<&vision::app::live::TicketData> {
+    app.live.as_ref()?.data.data.as_ref()
+}
+
+/// True when an item of the feed holds this text.
+fn feed_has(app: &App, needle: &str) -> bool {
+    app.live
+        .as_ref()
+        .is_some_and(|l| l.feed.items().iter().any(|i| i.text.contains(needle)))
+}
+
+#[test]
+fn the_live_view_follows_a_running_turn_and_tells_it_something() {
+    let world = World::new();
+    // The turn of scout waits for a message, so the view can see it work.
+    world.scenario(
+        "scout",
+        "refine",
+        json!([[
+            {"do": "init"},
+            {"do": "text", "text": "I read the ticket now."},
+            {"do": "tool", "name": "Read", "input": {"file_path": "README.md"}},
+            {"do": "wait_input", "timeout": 60},
+            {"do": "result", "cost": 0.25, "structured_output": result(
+                "Refined.",
+                &[("refine.md", "Research."), ("description.md", "Add subtract(a, b).")]
+            )}
+        ]]),
+    );
+    world.scenario(
+        "builder",
+        "plan",
+        json!([ends_with(result("Planned.", &[("plan.md", PLAN)]))]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    let mut rt = runtime(&world);
+    rt.start();
+
+    // The first pass starts the turn of scout.
+    assert!(
+        rt.run_until(LIMIT, |app| app.screen == Screen::Home
+            && app.held_ticket(KEY).is_some_and(|h| h.facts.work.is_some())),
+        "no turn started: {:?}",
+        rt.app.held_ticket(KEY).map(|h| &h.view.now)
+    );
+    while rt.app.home.selected.as_deref() != Some(KEY) {
+        let before = rt.app.home.selected.clone();
+        rt.handle(Msg::Key(Key::Down));
+        assert_ne!(
+            before, rt.app.home.selected,
+            "the ticket is not in the list"
+        );
+    }
+
+    // Enter opens the live view, its loader, and the reader of the stream files.
+    rt.handle(Msg::Key(Key::Enter));
+    assert_eq!(rt.app.screen, Screen::Live { key: KEY.into() });
+    assert_eq!(rt.following(), Some(KEY));
+    assert!(
+        rt.run_until(LIMIT, |app| live_data(app)
+            .and_then(|d| d.facts.work.as_ref())
+            .is_some_and(|w| w.agent == "scout")),
+        "the live view never saw scout work"
+    );
+    let data = live_data(&rt.app).unwrap().clone();
+    let now = rt.app.now_of(&data.view, &data.facts);
+    assert_eq!(now.kind, Kind::Agent);
+    assert_eq!(now.agent.as_deref(), Some("scout"));
+    assert!(now.title.starts_with("scout works"), "{}", now.title);
+    assert_eq!(data.view.step.as_deref(), Some("refine"));
+    assert!(data.team.iter().any(|m| m.agent == "scout"));
+
+    // The feed gets the events of the stream file of the turn.
+    assert!(
+        rt.run_until(LIMIT, |app| feed_has(app, "I read the ticket now.")
+            && feed_has(app, "README.md")),
+        "the feed never got the stream: {:?}",
+        rt.app.live.as_ref().map(|l| l.feed.items().len())
+    );
+
+    // `t` sends a text into the running turn.
+    rt.handle(Msg::Key(Key::Char('t')));
+    for c in "use the old export".chars() {
+        rt.handle(Msg::Key(Key::Char(c)));
+    }
+    rt.handle(Msg::Key(Key::Enter));
+    assert!(
+        rt.run_until(LIMIT, |app| app.notice.as_ref().is_some_and(|n| n
+            .text
+            .starts_with("Sent to the running turn of DEMO-12."))),
+        "the text did not reach the turn: {:?}",
+        rt.app.notice
+    );
+    assert!(
+        rt.run_until(LIMIT, |app| feed_has(app, "got: use the old export")),
+        "the feed never showed the answer of the turn"
+    );
+
+    // The turn ends. The engine of the app collects it; the ticks of the test move the ticket
+    // on at once, where the engine would wait for its next pass. The view sees each change.
+    assert!(
+        rt.run_until(LIMIT, |app| live_data(app)
+            .is_some_and(|d| d.facts.work.is_none())),
+        "the turn never ended"
+    );
+    world.tick_to("plan");
+    assert!(
+        rt.run_until(LIMIT, |app| live_data(app).is_some_and(|d| d
+            .view
+            .step
+            .as_deref()
+            == Some("plan"))),
+        "the view did not see the step plan: {:?}",
+        live_data(&rt.app).map(|d| &d.view.now)
+    );
+    assert!(
+        rt.run_until(LIMIT, |app| feed_has(app, "the turn of scout ended")),
+        "the feed never got the end of the turn from the ledger"
+    );
+
+    // `l` shows the log, with the turn of scout in it.
+    rt.handle(Msg::Key(Key::Char('l')));
+    let log = rt.app.live.as_ref().unwrap().pagers.last().unwrap().clone();
+    assert_eq!(log.kind, PagerKind::Log);
+    assert_eq!(log.state, PagerState::Ready);
+    assert!(log.lines.iter().any(|l| l.turn.is_some()));
+    rt.handle(Msg::Key(Key::Esc));
+
+    // When the plan is there, `p` shows it.
+    world.tick_to("plan-ready");
+    assert!(
+        rt.run_until(LIMIT, |app| live_data(app).is_some_and(|d| d
+            .view
+            .step
+            .as_deref()
+            == Some("plan-ready"))),
+        "the view did not see the plan get ready"
+    );
+    rt.handle(Msg::Key(Key::Char('p')));
+    assert!(
+        rt.run_until(LIMIT, |app| app
+            .live
+            .as_ref()
+            .and_then(|l| l.pagers.last())
+            .is_some_and(|p| p.state == PagerState::Ready)),
+        "the plan never loaded"
+    );
+    let plan = rt.app.live.as_ref().unwrap().pagers.last().unwrap().clone();
+    assert_eq!(plan.kind, PagerKind::Plan);
+    assert!(plan
+        .lines
+        .iter()
+        .any(|l| l.spans.iter().any(|s| s.text.contains("Plan of DEMO-12"))));
+    rt.handle(Msg::Key(Key::Esc));
+
+    // Esc goes back to Home and stops the reader.
+    rt.handle(Msg::Key(Key::Esc));
+    assert_eq!(rt.app.screen, Screen::Home);
+    assert_eq!(rt.following(), None);
+    world.settle();
 }

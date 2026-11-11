@@ -1,0 +1,28 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the …   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                          │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                     │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this tick… │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh           │ turns                 3
+ ⠦ build               6:00│   ▀▀▀▀▀▀▀  ⠦ 6:00 · 5 tool calls             │ commits    none to push
+ ○ review                  │                                              │ QUESTIONS
+ ○ ci                      │ ACTIVITY ─────────────────────────────────── │ to you                0
+ ○ fix-ci                  │ 14:05:31 step  moves from plan to plan-ready │ by memory             1
+ ○ ready                   │ 14:20:00 you   approved the plan             │ by the Judge          0
+ ○ comments                │ 14:20:01 step  moves from plan-ready to bui… │ MARKS
+ ○ ci-review               │ 14:24:00 turn  builder starts a turn at the… │ plan          3f2a1b4 ✓
+ ○ ready-to-merge          │ 14:24:01 start the session starts with clau… │ proof                 -
+ ○ done                    │ 14:24:05 read  src/report/export.py          │ CI                    -
+                           │ 14:24:12 find  "def export_month" in src     │ PR                    -
+ TEAM                      │ 14:24:20 says  The export writes each row by │ LIMITS
+ ✓ scout     fable-5-2 high│                hand. I add a CSV writer and  │ 5h ━━━━━━━━━━ 31% of 60
+ ● builder   opus-5-5 xhigh│                keep the order of the columns │    resets at 18:00
+ · reviewer  opus-5-5 max  │                that the plan names.          │ 7d ━━━━━━━━━━ 71% of 85
+ · tester    opus-5-5 high │ 14:24:35 edit  src/report/export.py          │ ENGINE
+ · shepherd  opus-5-5 high │ 14:24:50 run   python3 -m unittest tests/te… │ ● on   last pass 2s ago
+ · judge     fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test    │
+ · curator   fable-5-2 high│                for an empty month next.      │
+                           │ 14:25:10 tool  lookup: csv                   │
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+

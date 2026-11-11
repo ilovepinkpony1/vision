@@ -75,6 +75,10 @@ pub fn on_local(app: &mut App, result: Result<Local, String>, fx: &mut Vec<Effec
             if ended {
                 engine::queue_pass(app);
             }
+            // The data of a load that started before the pass ended says nothing about it.
+            if !app.local.again {
+                engine::after_pass(app);
+            }
         }
         Err(error) => {
             if app.local.error.as_deref() != Some(error.as_str()) {

@@ -448,15 +448,48 @@ fn restart(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, mut ticket: Ticket) ->
 
 // ----- plan and approve-plan -------------------------------------------------------------
 
-/// `vision plan KEY`.
-pub fn plan(ctx: &Ctx, key: &TicketKey) -> Result<()> {
+/// The plan of a ticket: its text, its hash, and whether it waits for an approval now.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PlanView {
+    pub text: String,
+    /// The full hash: sha256 of the bytes of `plan.md`.
+    pub hash: String,
+    /// True when the person edited `plan.md` after the agent wrote it.
+    pub edited: bool,
+    /// True when the step of the ticket waits for the approval of this plan.
+    pub waits: bool,
+}
+
+/// The plan of a ticket, or `None` when its plan step has not written `plan.md` yet.
+pub fn plan_of(ctx: &Ctx, key: &TicketKey) -> Result<Option<PlanView>> {
     ctx.require_setup()?;
     let path = ctx.paths.ticket_doc(key, "plan.md");
     let Ok(bytes) = std::fs::read(&path) else {
-        bail!("{key} has no plan yet: the plan step writes plan.md. `vision status` shows where the ticket is");
+        return Ok(None);
     };
     let hash = plan_hash(&bytes);
-    let text = String::from_utf8_lossy(&bytes);
+    let edited =
+        std::fs::read(ctx.paths.ticket_doc(key, "plan.agent.md")).is_ok_and(|agent| agent != bytes);
+    let ledger = ctx.ledger()?;
+    let waits = match ledger.ticket(key.as_str())? {
+        Some(row) => Ticket::of(row)?.visit().action.as_deref() == Some("approve-plan"),
+        None => false,
+    };
+    Ok(Some(PlanView {
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+        hash,
+        edited,
+        waits,
+    }))
+}
+
+/// `vision plan KEY`.
+pub fn plan(ctx: &Ctx, key: &TicketKey) -> Result<()> {
+    let Some(plan) = plan_of(ctx, key)? else {
+        bail!("{key} has no plan yet: the plan step writes plan.md. `vision status` shows where the ticket is");
+    };
+    let hash = &plan.hash;
+    let text = &plan.text;
     println!(
         "The plan of {key}, hash {} (in full: {hash}):\n",
         &hash[..SHORT_HASH]
@@ -465,20 +498,14 @@ pub fn plan(ctx: &Ctx, key: &TicketKey) -> Result<()> {
     if !text.ends_with('\n') {
         println!();
     }
-    if let Ok(agent) = std::fs::read(ctx.paths.ticket_doc(key, "plan.agent.md")) {
-        if agent != bytes {
-            println!("\nYou edited plan.md after the agent wrote it. The first text of the agent stays in plan.agent.md.");
-        }
+    if plan.edited {
+        println!("\nYou edited plan.md after the agent wrote it. The first text of the agent stays in plan.agent.md.");
     }
-    let ledger = ctx.ledger()?;
-    if let Some(row) = ledger.ticket(key.as_str())? {
-        let visit = Ticket::of(row)?.visit();
-        if visit.action.as_deref() == Some("approve-plan") {
-            println!(
-                "\nApprove it with: vision approve-plan {key} {}",
-                &hash[..SHORT_HASH]
-            );
-        }
+    if plan.waits {
+        println!(
+            "\nApprove it with: vision approve-plan {key} {}",
+            &hash[..SHORT_HASH]
+        );
     }
     Ok(())
 }
@@ -792,6 +819,13 @@ pub struct LogEntry {
     pub kind: String,
     pub id: Option<String>,
     pub text: String,
+    /// The facts of the line for the app, which says them in its own words: the actor of an
+    /// event, the agent of a turn or of a card, and the detail as JSON. `vision log` does not
+    /// print them.
+    #[serde(skip)]
+    pub who: String,
+    #[serde(skip)]
+    pub detail: Value,
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -813,6 +847,12 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
             continue;
         }
         out.push(LogEntry {
+            who: e.actor.clone(),
+            detail: e
+                .detail
+                .as_deref()
+                .and_then(|d| serde_json::from_str(d).ok())
+                .unwrap_or(Value::Null),
             at: e.at.clone(),
             source: "event".into(),
             kind: e.kind.clone(),
@@ -831,8 +871,14 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
     for t in ledger.turns_of_ticket(key.as_str())? {
         let agent = t.agent.clone().unwrap_or_default();
         let step = t.step.clone().unwrap_or_default();
+        let detail = json!({
+            "step": step, "model": t.model, "effort": t.effort, "resumes": t.resumes.is_some(),
+            "status": t.status, "reason": t.reason, "cost": t.cost_usd, "end_fact": t.end_fact,
+        });
         if let Some(started) = &t.started {
             out.push(LogEntry {
+                who: agent.clone(),
+                detail: detail.clone(),
                 at: started.clone(),
                 source: "turn".into(),
                 kind: "started".into(),
@@ -850,6 +896,8 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
         }
         if let Some(ended) = &t.ended {
             out.push(LogEntry {
+                who: agent.clone(),
+                detail: detail.clone(),
                 at: ended.clone(),
                 source: "turn".into(),
                 kind: "ended".into(),
@@ -871,8 +919,15 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
     for c in ledger.cards_of(Some(key.as_str()))? {
         let card: Value = serde_json::from_str(&c.card).unwrap_or(Value::Null);
         let question = card.get("text").and_then(Value::as_str).unwrap_or("");
+        let asked_by = match ledger.question(&c.id)? {
+            Some(q) => ledger.turn(&q.turn)?.and_then(|t| t.agent),
+            None => None,
+        }
+        .unwrap_or_default();
         if let Some(created) = &c.created {
             out.push(LogEntry {
+                who: asked_by.clone(),
+                detail: json!({"question": question}),
                 at: created.clone(),
                 source: "card".into(),
                 kind: "asked".into(),
@@ -887,6 +942,11 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
                 .and_then(|a| serde_json::from_str(a).ok())
                 .unwrap_or(Value::Null);
             out.push(LogEntry {
+                who: asked_by.clone(),
+                detail: json!({
+                    "question": question, "outcome": c.outcome, "basis": c.basis,
+                    "answer": answer.get("text").and_then(Value::as_str),
+                }),
                 at: answered.clone(),
                 source: "card".into(),
                 kind: c.state.clone(),
@@ -912,6 +972,11 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
             .or_else(|| op.started.clone())
             .unwrap_or_default();
         out.push(LogEntry {
+            who: "vision".into(),
+            detail: json!({
+                "verb": op.verb, "head": short(&op.head), "outcome": op.outcome.to_string(),
+                "detail": op.detail,
+            }),
             at,
             source: "operation".into(),
             kind: op.state.as_str().into(),
@@ -964,7 +1029,7 @@ pub fn log(ctx: &Ctx, key: &TicketKey, json: bool) -> Result<()> {
 // ----- diff ------------------------------------------------------------------------------
 
 /// What `vision diff KEY --json` prints.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DiffView {
     pub ticket: String,
     pub branch: String,
@@ -974,14 +1039,16 @@ pub struct DiffView {
     pub commits: Vec<DiffCommit>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DiffCommit {
     pub commit: String,
     pub subject: String,
 }
 
-/// `vision diff KEY [--json]`: the commits of the branch that the forge does not have yet.
-pub fn diff(ctx: &Ctx, key: &TicketKey, json: bool) -> Result<()> {
+/// The commits of the branch of a ticket that the forge does not have yet. With `fetch`, it
+/// fetches the remote first; without it, it compares with the refs that the clone has, which
+/// needs no network.
+pub fn diff_of(ctx: &Ctx, key: &TicketKey, fetch: bool) -> Result<DiffView> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
     let adapter = adapter::load(ctx)?;
@@ -1002,7 +1069,7 @@ pub fn diff(ctx: &Ctx, key: &TicketKey, json: bool) -> Result<()> {
     } else {
         remotes.first().map(|r| r.to_string())
     };
-    if let Some(remote) = &remote {
+    if let (Some(remote), true) = (&remote, fetch) {
         if let Err(e) = git::run(&clone, &["fetch", "--quiet", remote]) {
             eprintln!("warning: could not fetch {remote}, so the comparison uses the refs of the clone: {e:#}");
         }
@@ -1048,13 +1115,20 @@ pub fn diff(ctx: &Ctx, key: &TicketKey, json: bool) -> Result<()> {
             subject: s.to_string(),
         })
         .collect();
-    let view = DiffView {
+    Ok(DiffView {
         ticket: key.to_string(),
-        branch: branch.clone(),
+        branch,
         clone: clone.display().to_string(),
-        compared_with: compared_with.clone(),
+        compared_with,
         commits,
-    };
+    })
+}
+
+/// `vision diff KEY [--json]`: the commits of the branch that the forge does not have yet.
+pub fn diff(ctx: &Ctx, key: &TicketKey, json: bool) -> Result<()> {
+    let view = diff_of(ctx, key, true)?;
+    let branch = &view.branch;
+    let compared_with = &view.compared_with;
     if json {
         println!("{}", serde_json::to_string_pretty(&view)?);
         return Ok(());

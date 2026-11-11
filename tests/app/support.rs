@@ -16,6 +16,7 @@ use vision::app::update::{start, update};
 use vision::app::view::{self, theme::ColorMode};
 use vision::ledger::LimitReading;
 use vision::pipeline::commands::PickRow;
+use vision::pipeline::facts::{StateFacts, TurnFact, WaitFacts};
 use vision::pipeline::view::{FlagView, Marks, Works};
 use vision::pipeline::TicketView;
 use vision::snapshot::{LimitView, LimitsView, Need, NeedKind};
@@ -86,8 +87,25 @@ pub fn working(key: &str, title: &str, step: &str, agent: &str, minutes: i64) ->
         minutes,
     });
     v.cost_usd = 1.03;
+    let facts = StateFacts {
+        key: key.into(),
+        agent: Some(agent.into()),
+        work: Some(TurnFact {
+            id: format!("20261116T140000Z-{key}-{step}-1"),
+            agent: agent.into(),
+            step: step.into(),
+            model: Some("claude-opus-5-5".into()),
+            effort: Some("xhigh".into()),
+            started: Some(minutes_ago(minutes)),
+            n: 2,
+        }),
+        turns: 2,
+        agents: vec!["scout".into(), agent.into()],
+        ..StateFacts::default()
+    };
     Held {
         view: v,
+        facts,
         taken: Some(minutes_ago(38)),
         stopped: false,
         needs_you: false,
@@ -100,8 +118,22 @@ pub fn waiting(key: &str, title: &str, step: &str, now: &str) -> Held {
     v.kind = Some("wait".into());
     v.cost_usd = 6.12;
     v.pr = Some(7);
+    let facts = StateFacts {
+        key: key.into(),
+        wait: Some(WaitFacts {
+            watch: Some("ci.state".into()),
+            value: Some("none".into()),
+            since: Some(minutes_ago(9)),
+            observed: Some(minutes_ago(0)),
+            ..WaitFacts::default()
+        }),
+        turns: 5,
+        agents: vec!["scout".into(), "builder".into(), "reviewer".into()],
+        ..StateFacts::default()
+    };
     Held {
         view: v,
+        facts,
         taken: Some(minutes_ago(130)),
         stopped: false,
         needs_you: false,
@@ -115,6 +147,13 @@ pub fn needing(key: &str, title: &str, step: &str) -> Held {
     v.cost_usd = 1.09;
     Held {
         view: v,
+        facts: StateFacts {
+            key: key.into(),
+            open_cards: 1,
+            turns: 2,
+            agents: vec!["scout".into(), "builder".into(), "judge".into()],
+            ..StateFacts::default()
+        },
         taken: Some(minutes_ago(41)),
         stopped: false,
         needs_you: true,
@@ -133,6 +172,12 @@ pub fn stopped(key: &str, title: &str, step: &str) -> Held {
     v.cost_usd = 2.5;
     Held {
         view: v,
+        facts: StateFacts {
+            key: key.into(),
+            turns: 4,
+            agents: vec!["scout".into(), "builder".into(), "reviewer".into()],
+            ..StateFacts::default()
+        },
         taken: Some(minutes_ago(300)),
         stopped: true,
         needs_you: false,
@@ -197,6 +242,8 @@ pub fn local(tickets: Vec<Held>, needs: Vec<Need>) -> Local {
             questions: 14,
         },
         timer: false,
+        running: None,
+        resets: [Some("2026-11-16T18:00:00Z".into()), None],
     }
 }
 

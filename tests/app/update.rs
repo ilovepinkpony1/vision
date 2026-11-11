@@ -2,7 +2,7 @@
 //! effects, a refresh keeps the selection on the same ticket, and the engine starts a pass at
 //! the right moments.
 
-use vision::app::model::{Card, PassEnd, Run, Screen, Tone};
+use vision::app::model::{Card, Local, PassEnd, Run, Screen, Tone};
 use vision::app::msg::{Action, ChildResult, Effect, JobDone, JobKind, Key, Msg};
 use vision::app::terminal::key_of;
 use vision::app::update::engine::LOCK_HELD;
@@ -76,18 +76,26 @@ fn the_arrows_and_j_k_move_through_both_boxes() {
 }
 
 #[test]
-fn enter_opens_the_ticket_in_progress_and_esc_goes_back() {
+fn enter_opens_the_live_view_of_the_ticket_in_progress_and_esc_goes_back() {
     let mut app = home(SIZE);
     let fx = key(&mut app, 2.0, Key::Enter);
-    assert!(fx.is_empty(), "{fx:?}");
+    assert_eq!(
+        fx,
+        vec![
+            Effect::LoadTicket("DEMO-12".into()),
+            Effect::Follow(Some("DEMO-12".into()))
+        ]
+    );
     assert_eq!(
         app.screen,
-        Screen::Detail {
+        Screen::Live {
             key: "DEMO-12".into()
         }
     );
-    key(&mut app, 2.1, Key::Esc);
+    let fx = key(&mut app, 2.1, Key::Esc);
     assert_eq!(app.screen, Screen::Home);
+    assert_eq!(fx, vec![Effect::Follow(None)]);
+    assert_eq!(app.live, None);
 }
 
 #[test]
@@ -259,7 +267,11 @@ fn q_asks_first_when_tickets_are_in_progress() {
 fn ctrl_c_is_the_key_q() {
     use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-    assert_eq!(key_of(ctrl_c), Some(Key::Char('q')));
+    // Ctrl-C arrives as Cancel, which acts as q (and as Esc in the line of `t`).
+    assert_eq!(key_of(ctrl_c), Some(Key::Cancel));
+    let mut app = home(SIZE);
+    key(&mut app, 2.0, Key::Cancel);
+    assert_eq!(app.card, Some(Card::Quit));
     let plain = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
     assert_eq!(key_of(plain), Some(Key::Char('c')));
     assert_eq!(
@@ -401,6 +413,127 @@ fn a_pass_starts_when_a_running_turn_ends() {
     tickets[0].view.now = "the next tick tests the end facts of the turn of builder".into();
     let fx = send(&mut app, 5.0, Msg::Local(Ok(local(tickets, Vec::new()))));
     assert_eq!(runs(&fx), vec![JobKind::Pass]);
+}
+
+/// The id of the pass that the effects started.
+fn pass_id(effects: &[Effect]) -> Option<u64> {
+    effects.iter().find_map(|e| match e {
+        Effect::Run(job) if job.kind == JobKind::Pass => Some(job.id),
+        _ => None,
+    })
+}
+
+/// The sample tickets after the turn of DEMO-12 ended and held its end facts, at a step.
+fn turn_held(step: &str) -> Local {
+    let mut tickets = two_tickets();
+    tickets[0].view.works = None;
+    tickets[0].view.step = Some(step.into());
+    tickets[0].facts.work = None;
+    tickets[0].facts.held = true;
+    local(tickets, Vec::new())
+}
+
+/// Gives the local data to the update, also for a load that the update asked for again.
+fn load(app: &mut vision::app::model::App, at: f64, data: &Local) -> Vec<Effect> {
+    let mut fx = send(app, at, Msg::Local(Ok(data.clone())));
+    while app.local.loading() {
+        fx.extend(send(app, at, Msg::Local(Ok(data.clone()))));
+    }
+    fx
+}
+
+#[test]
+fn a_pass_that_left_work_ready_starts_the_next_pass_at_once() {
+    let mut app = home(SIZE);
+    // The turn of DEMO-12 ended, so a pass collects it.
+    let mut ended = two_tickets();
+    ended[0].view.works = None;
+    ended[0].facts.work = None;
+    ended[0].facts.testing = true;
+    let fx = send(&mut app, 5.0, Msg::Local(Ok(local(ended, Vec::new()))));
+    let first = pass_id(&fx).expect("the pass that collects the turn");
+    // The pass ends. The data after it shows a ticket that the next pass moves on.
+    let fx = send(
+        &mut app,
+        6.0,
+        done(first, JobKind::Pass, ok("tick done in 12 ms\n")),
+    );
+    assert!(runs(&fx).is_empty());
+    let fx = load(&mut app, 6.1, &turn_held("build"));
+    let second = pass_id(&fx).expect("a pass at once, and no wait of a minute");
+    // That pass changed nothing, so no other pass starts before the minute.
+    let fx = send(
+        &mut app,
+        7.0,
+        done(second, JobKind::Pass, ok("tick done in 12 ms\n")),
+    );
+    assert!(runs(&fx).is_empty());
+    let fx = load(&mut app, 7.1, &turn_held("build"));
+    assert!(runs(&fx).is_empty());
+    assert!(runs(&send(&mut app, 30.0, Msg::Tick)).is_empty());
+}
+
+#[test]
+fn a_paused_engine_and_a_skipped_pass_start_no_quick_pass() {
+    // Another tick held the lock: this pass did nothing, so it says nothing about the tickets.
+    let mut app = home_with(SIZE, turn_held("plan"), Some(queue()));
+    let fx = send(&mut app, 60.3, Msg::Tick);
+    let id = pass_id(&fx).expect("the pass of the minute");
+    let skipped = ok("tick skipped: another tick holds the lock\n");
+    send(&mut app, 61.0, done(id, JobKind::Pass, skipped));
+    let fx = load(&mut app, 61.1, &turn_held("build"));
+    assert!(runs(&fx).is_empty());
+
+    // A paused engine starts no pass at all.
+    let mut app = home_with(SIZE, turn_held("plan"), Some(queue()));
+    let fx = send(&mut app, 60.3, Msg::Tick);
+    let id = pass_id(&fx).expect("the pass of the minute");
+    key(&mut app, 60.5, Key::Char('p'));
+    send(
+        &mut app,
+        61.0,
+        done(id, JobKind::Pass, ok("tick done in 12 ms\n")),
+    );
+    let fx = load(&mut app, 61.1, &turn_held("build"));
+    assert!(runs(&fx).is_empty());
+    assert!(app.engine.queue.is_empty());
+}
+
+#[test]
+fn the_quick_passes_in_a_row_have_a_limit() {
+    use vision::app::update::engine::QUICK_MAX;
+    let mut app = home_with(SIZE, turn_held("plan"), Some(queue()));
+    let mut at = 60.3;
+    let mut fx = send(&mut app, at, Msg::Tick);
+    let mut quick = 0;
+    // Each pass moves the ticket to a new step and leaves work ready, without an end.
+    for n in 0..40 {
+        let Some(id) = pass_id(&fx) else {
+            break;
+        };
+        at += 0.5;
+        send(
+            &mut app,
+            at,
+            done(id, JobKind::Pass, ok("tick done in 12 ms\n")),
+        );
+        at += 0.1;
+        fx = load(&mut app, at, &turn_held(&format!("step-{n}")));
+        if pass_id(&fx).is_some() {
+            quick += 1;
+        }
+    }
+    assert_eq!(quick, QUICK_MAX);
+    // The pass of the next minute starts the count again.
+    let fx = send(&mut app, 200.0, Msg::Tick);
+    let id = pass_id(&fx).expect("the pass of the minute");
+    send(
+        &mut app,
+        200.5,
+        done(id, JobKind::Pass, ok("tick done in 12 ms\n")),
+    );
+    let fx = load(&mut app, 200.6, &turn_held("a-new-step"));
+    assert!(pass_id(&fx).is_some());
 }
 
 #[test]

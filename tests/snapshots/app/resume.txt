@@ -4,7 +4,7 @@
   IN PROGRESS                                           1 ticket · Vision moves it while this window is open
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-3    Rename the setting of the weekly email                                         $2.50   5h 0m │
- │             ●━●━●━●━◉─○─○─○─○─○─○─○  review · stopped: you stopped it with vision stop                   │
+ │             ●━●━●━●━◉─○─○─○─○─○─○─○  review · stopped · Enter starts it again                            │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   READY TO STAR╭─ Resume DEMO-3 ──────────────────────────────────────────────────────────────╮· 1 can start

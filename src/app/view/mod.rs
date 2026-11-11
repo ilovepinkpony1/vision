@@ -1,19 +1,22 @@
 //! The view: a function from the model to a frame. It does no input or output and reads no
 //! clock. Each screen is one module that draws on a [`canvas::Canvas`], as the functions of the
-//! design draw on its grid: the loader, Home, and the detail screen of a ticket, then a card
-//! over the screen, then the notice at the bottom.
+//! design draw on its grid: the loader, Home, and the live view of a ticket with its pagers,
+//! then a card over the screen, then the notice at the bottom.
 //!
-//! Part A2 and part A3 add a screen as one more variant of [`Screen`] and one more module here,
-//! and a card as one more variant of [`super::model::Card`] and one more function in
-//! [`cards`]: the header, the footer of keys, the notice, the cards, and the size message stay.
+//! Part A3 adds a screen as one more variant of [`Screen`] and one more module here, and a card
+//! as one more variant of [`super::model::Card`] and one more function in [`cards`]: the
+//! header, the footer of keys, the notice, the cards, and the size message stay.
 
 pub mod android;
 mod boot;
 pub mod canvas;
 mod cards;
-mod detail;
+pub mod face;
 pub mod header;
-mod home;
+pub mod home;
+pub mod live;
+mod live_cards;
+pub mod pager;
 pub mod theme;
 
 use ratatui::buffer::Buffer;
@@ -40,7 +43,7 @@ pub fn render(app: &App, buf: &mut Buffer) {
             match &app.screen {
                 Screen::Boot => boot::draw(app, &mut c),
                 Screen::Home => home::draw(app, &mut c),
-                Screen::Detail { key } => detail::draw(app, &mut c, key),
+                Screen::Live { key } => live::draw(app, &mut c, key),
             }
             if let Some(card) = &app.card {
                 cards::draw(app, card, &mut c);

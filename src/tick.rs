@@ -141,6 +141,8 @@ pub fn run(ctx: &Ctx) -> Result<TickOutcome> {
         ctx.log("tick skipped: another tick holds the lock");
         return Ok(TickOutcome::Skipped);
     };
+    // A record of a job or an operation that a crash left: nothing runs now.
+    crate::running::clear(&ctx.paths);
     let now = time::now();
     let mut report = TickReport {
         started: time::rfc3339(now),

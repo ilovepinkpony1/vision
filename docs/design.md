@@ -45,6 +45,7 @@ $VISION_HOME/
   heartbeat              the time of the last tick, RFC 3339 UTC
   lock                   the lock file of the tick
   off                    the kill switch. Its presence stops each action.
+  running.json           the job or the operation that a pass runs now. It is gone when nothing runs.
   log/vision.log         one line for each tick action
   log/app.err            what library code prints to standard error while the app runs
   claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
@@ -924,6 +925,8 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - After a wrong operation, the person moves its verb down the ladder with `vision demote VERB`. Vision never changes a mode by itself.
 - `vision approve` exits with code 2 after a gate refuses. It exits with code 1 after an operation fails or stays `uncertain`.
 
+A pass can take minutes, and the ledger says nothing about a script until the script ends. So the executor writes `running.json` right before it runs a script. This holds for a job, an operation, a read verb, and the check of an uncertain operation. The file holds the kind, the name, the ticket, the start time, and the process id of the pass. When the script ends, the executor removes the file. A reader trusts the file only while that process holds the lock of the tick. The next tick removes a file that a crash left. The ledger stays the evidence.
+
 ## 13. Commands
 
 ```
@@ -958,6 +961,8 @@ vision install | uninstall         the timer of the system
 
 A command that is not built yet prints `not built yet: <name>` and exits with code 3.
 
+`vision status` names the job or the operation that a pass runs now, in the line `pass     runs <what> for <ticket> since <time>`. `vision status --json` gives it in `running`, or `null`.
+
 `vision report` lists the steps in the order of the step list of the adapter. A step that the adapter no longer has comes after them, by name. `vision report` and `vision status` show a cost above zero and below one cent as `<$0.01`. `vision report --json` gives the order in `steps`.
 
 ## 14. Rules for the code
@@ -987,7 +992,7 @@ If standard input and standard output are both terminals, `vision` with no argum
 
 The app has three layers. The model is plain data. The update takes a message, changes the model, and gives the effects to run. A message is a key, a tick of the clock, or the result of a background thread. The view draws the model. The update and the view read no clock and no file. So each screen has a text snapshot in `tests/snapshots/app/`, and no test needs a terminal.
 
-Each read runs in a thread, in the process, through the functions that the commands use: the status view, the rows of `vision pick`, the report, the model table, and the adapter. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
+Each read runs in a thread, in the process, through the functions that the commands use. These are the status view, the rows of `vision pick`, the report, the timeline, the plan, the commit list, the model table, and the adapter. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
 
 ### 15.2 The engine
 
@@ -998,7 +1003,11 @@ The worker is one thread that runs one job at a time. A job is a pass or an acti
 - A running turn ends.
 - One minute passed since the last pass.
 
-An action of the person goes before a pass that waits. A pass that finds the lock of a different tick is not an error, so the timer of section 6 can run too. A pass can take minutes, because a job of the adapter runs inside it. The screen stays live in that time, and the header shows the pass with its time.
+- A pass changed a ticket, and the next pass has work for a ticket.
+
+One pass does one thing for a ticket: it collects a turn, or moves the ticket to its next step, or starts the next turn. So the last rule starts the next pass at once, and a ticket does not wait a minute between two steps. A pass that changed nothing starts no such pass. At most 12 such passes run in a row, and the pass of the minute starts the count again. So a ticket that cannot move never makes the engine spin.
+
+An action of the person goes before a pass that waits. A pass that finds the lock of a different tick is not an error, so the timer of section 6 can run too. A pass can take minutes, because a job of the adapter runs inside it. The screen stays live in that time. The header shows the pass with its time, and the state of the ticket names the job or the operation from `running.json`.
 
 The person can pause the engine. Then no pass starts, and actions still run. The pause lives only in the memory of the app. The kill switch of section 3 is a different thing: the app shows it and can switch it.
 
@@ -1012,11 +1021,29 @@ The loader shows an android while the data loads. Its four stages are real: the 
 - The person pressed a key.
 - The tracker stage took more than 10 seconds. The load then continues, and Home shows the queue later.
 
-Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens a ticket in progress, or opens the start card for a ticket of the queue. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
+Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or opens the start card for a ticket of the queue. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
+
+One state function says what happens to a ticket now, in the words of the app, and Home and the live view both use it. It reads facts that the pipeline gives as data: the turn that runs, the entry of the step that is not done, the wait of the step, and the limit. No text of it names a command.
+
+The live view shows one ticket. The path is on the left, with the time and the cost of each step, and the team is under it. NOW is in the middle, with ACTIVITY under it. The cost, the questions, the marks, the limits, and the engine are on the right. While the view is open, its data loads again each second. The count of the commits that the forge does not have loads again each 10 seconds.
+
+ACTIVITY joins two sources by time, with the newest line at the bottom. The first source is the stream files of the last six turns of the ticket: what the agent says, and each tool that it calls. A thread reads their new lines four times each second. The second source is the timeline of the ledger. A stream line holds no time, so a line that was in the file before the view opened shows no time. The feed keeps a bounded number of lines. A scroll stops the follow, and `G` goes back to the end.
+
+These keys act on the ticket of the live view:
+
+- `t` opens a line that sends a text to the running turn, or keeps it for the next turn.
+- `o` opens the session of the last turn in the same terminal.
+- `x` stops the ticket, and Enter starts a stopped ticket again.
+- `r` retries a ticket that waits for the person, or continues a paused ticket.
+- `l`, `p`, and `d` open a pager with the log, the plan, or the commits that the forge does not have.
+
+In the log, Enter on a turn shows the events of that turn. Esc closes a pager, and then the view.
 
 ### 15.4 The terminal
 
-While the app owns the terminal, standard error goes to `log/app.err`. The terminal comes back on each way out: the normal end, an error, a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is the key `q`.
+While the app owns the terminal, standard error goes to `log/app.err`. The terminal comes back on each way out: the normal end, an error, a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is the key `q`. In the line of `t`, it cancels the line as Esc does. A paste arrives as one piece, and only the line of `t` takes it.
+
+For `o`, the app gives the terminal to the child `vision open`. The thread of the keys stops first, and the app waits for that stop. So the app reads no key of the session. The app ignores SIGINT in that time, so a Ctrl-C ends only the session. Standard error goes back to the terminal for the session. When the session ends, the app puts back the terminal modes of before and drops the input that nobody read. Then it takes the terminal and draws the whole screen again.
 
 The app needs 100 columns and 28 rows. In a smaller window, it shows the size that it needs. If `COLORTERM` says `truecolor` or `24bit`, the app uses 24-bit color. If not, it uses the nearest of the 256 colors. With `NO_COLOR`, it uses no color, and it does not draw the android.
 
