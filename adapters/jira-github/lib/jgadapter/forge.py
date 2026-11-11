@@ -46,16 +46,34 @@ class GitHub:
 
     def holds(self, branch, head):
         """True when `branch` holds the commit `head`; None when the branch does not exist."""
+        return self._holds(core.ref_path(branch), branch, head)
+
+    def commit_holds(self, commit, head):
+        """True when the commit `commit` holds the commit `head`: the same test as `holds`, with
+        a commit in the place of the branch. None when GitHub does not know the commit."""
+        if commit == head:
+            return True
+        return self._holds(core.segment(commit), core.short(commit), head)
+
+    def _holds(self, ref, shown, head):
         try:
             data = self.client.json(
-                "GET", self.path("compare/%s...%s" % (core.ref_path(branch), core.segment(head))),
-                "compare %s with %s" % (branch, core.short(head)),
+                "GET", self.path("compare/%s...%s" % (ref, core.segment(head))),
+                "compare %s with %s" % (shown, core.short(head)),
             ) or {}
         except core.HttpError as e:
             if e.status == 404:
                 return None
             raise
         return data.get("status") in ("behind", "identical")
+
+    def latest_deployment(self, environment):
+        """The newest deployment of a GitHub environment, or None. One call: the statuses of the
+        deployment are not read."""
+        data = self.client.json("GET", self.path("deployments"), "list the deployments of %s" % environment,
+                                query={"environment": environment, "per_page": 1})
+        items = [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+        return items[0] if items else None
 
     # Pull requests.
 
@@ -232,6 +250,38 @@ def review_first_line(review):
     return first_line(review.get("body")) or "%s asked for changes." % login(review.get("user"))
 
 
+class Ignore:
+    """The comments that never wait, from the entries of `ignore_logins`: a login (each kind of
+    its comments), or `<login>:<kind>` (only that kind), with the kind inline, review, or
+    conversation, such as "review-bot[bot]:conversation". A login can hold `[`, `]`, and `-`, so
+    an entry splits at its last `:`. Logins are lowercase."""
+
+    def __init__(self, entries=()):
+        self.every = set()
+        self.kinds = {kind: set() for kind in KINDS}
+        for entry in entries:
+            text = str(entry).strip().lower()
+            if not text:
+                continue
+            name, colon, kind = text.rpartition(":")
+            if not colon:
+                self.every.add(text)
+                continue
+            if kind not in KINDS or not name.strip():
+                raise core.Failure(
+                    "the entry %r of `ignore_logins` must be a login or <login>:<kind>, with the kind "
+                    "inline, review, or conversation, such as \"review-bot[bot]:conversation\"" % core.clean(entry, 80))
+            self.kinds[kind].add(name.strip())
+
+    @classmethod
+    def of(cls, value):
+        return value if isinstance(value, Ignore) else cls(value or ())
+
+    def skips(self, name, kind):
+        name = str(name or "").lower()
+        return name in self.every or name in self.kinds[kind]
+
+
 def waiting_rows(reviews, review_comments, issue_comments, own, ignore=()):
     """Each comment of a pull request that waits for an answer, as one row with its kind:
 
@@ -243,12 +293,12 @@ def waiting_rows(reviews, review_comments, issue_comments, own, ignore=()):
     - `conversation`: a conversation comment of a login that is not in `own`.
 
     A review or a conversation comment waits until a conversation comment of `own` answers it:
-    one with its mark, or one that quotes its first line. A comment of a login of `ignore`
-    (lowercase, such as a CI bot) never waits: the rows leave it out, as if nobody wrote it.
-    The text of each row is untrusted."""
-    ignore = set(ignore)
+    one with its mark, or one that quotes its first line. A comment that `ignore` (an `Ignore`,
+    or the entries of `ignore_logins`) names never waits: the rows leave it out, as if nobody
+    wrote it. The text of each row is untrusted."""
+    ignore = Ignore.of(ignore)
     rows = []
-    review_comments = [c for c in review_comments if login(c.get("user")).lower() not in ignore]
+    review_comments = [c for c in review_comments if not ignore.skips(login(c.get("user")), "inline")]
     for root, items in sorted(waiting_threads(review_comments, own).items()):
         first, last = items[0], items[-1]
         mine = [i for i, c in enumerate(items) if login(c.get("user")).lower() in own]
@@ -278,7 +328,7 @@ def waiting_rows(reviews, review_comments, issue_comments, own, ignore=()):
         name = login(review.get("user"))
         state = review.get("state")
         body = review.get("body") or ""
-        if not name or name.lower() in own or name.lower() in ignore or not isinstance(review.get("id"), int):
+        if not name or name.lower() in own or ignore.skips(name, "review") or not isinstance(review.get("id"), int):
             continue
         if not body.strip():
             continue
@@ -301,7 +351,7 @@ def waiting_rows(reviews, review_comments, issue_comments, own, ignore=()):
         })
     for c in sorted(issue_comments, key=lambda c: c.get("id") or 0):
         name = login(c.get("user"))
-        if not name or name.lower() in own or name.lower() in ignore or not isinstance(c.get("id"), int):
+        if not name or name.lower() in own or ignore.skips(name, "conversation") or not isinstance(c.get("id"), int):
             continue
         body = c.get("body") or ""
         if answered("conversation", c["id"], body):
@@ -319,10 +369,15 @@ def waiting_rows(reviews, review_comments, issue_comments, own, ignore=()):
 
 
 def pr_facts(gh, pr, config):
-    """The pull request facts of design 11.1, with the review state of the in-review step."""
+    """The pull request facts of design 11.1, with the review state of the in-review step.
+
+    The review state is the first of these that holds: `merged`, `closed`, `comments` (a
+    comment waits), `changes` (a reviewer asks for changes and is not asked again), `conflict`
+    (the open pull request conflicts with its base), `approved`, and `waiting`."""
     number = pr["number"]
     approvers = config.logins("approvers")
     own = config.logins("own_logins")
+    ignore = Ignore(config.logins("ignore_logins"))
     needed = int(config.number("approvals_needed", 1))
 
     def counts(name):
@@ -334,8 +389,7 @@ def pr_facts(gh, pr, config):
     asked = sorted(shown[n] for n, s in last.items() if s == "CHANGES_REQUESTED" and counts(n))
     requested = {login(u).lower() for u in pr.get("requested_reviewers") or []}
     # Each comment that waits, of each kind: the same rows as the job comments gives.
-    waiting = waiting_rows(reviews, gh.review_comments(number), gh.issue_comments(number), own,
-                           config.logins("ignore_logins"))
+    waiting = waiting_rows(reviews, gh.review_comments(number), gh.issue_comments(number), own, ignore)
     merged = bool(pr.get("merged") or pr.get("merged_at"))
     closed = pr.get("state") == "closed" and not merged
     facts = {
@@ -362,6 +416,8 @@ def pr_facts(gh, pr, config):
         state = "comments"
     elif any(n.lower() not in requested for n in asked):
         state = "changes"
+    elif facts["conflict"]:
+        state = "conflict"
     elif len(approved_by) >= needed and not asked:
         state = "approved"
     else:

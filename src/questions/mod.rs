@@ -46,7 +46,10 @@ use crate::turn::{self, LaunchRequest, Launched};
 
 pub use card::{Answer, Card, Reply};
 pub use commands::{answer_card, correct_card, mark_needless, Answered, Corrected, PersonAnswer};
-pub use replay::{replay, ReplayItem, ReplayOptions, ReplayReport};
+pub use replay::{
+    replay, replay_end, replay_ended, replay_kill, replay_start, ReplayItem, ReplayOptions,
+    ReplayReport, ReplayStarted,
+};
 pub use rules::{Entry, Outcome, Ruling};
 pub use tick::tick;
 

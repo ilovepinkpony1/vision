@@ -3,12 +3,13 @@
 //! The library API that later milestones build on:
 //!
 //! - [`tick`] is the hook of the tick. `tick.rs` calls it at the end of step 7, after the
-//!   actions of the tickets, so that a Curator that fails never holds a ticket back. It
-//!   applies the result of each Curator turn that the collector collected in step 4
-//!   ([`runs::apply`]: the checks, one proposal branch, the rule "no line is lost", and both
-//!   replays), and it starts a Curator turn when one is due: a ticket merged since the last
+//!   actions of the tickets, so that a Curator that fails never holds a ticket back. It moves
+//!   the replays of each open proposal one step on ([`runs::advance_replays`]), applies the
+//!   result of each Curator turn that the collector collected in step 4 ([`runs::apply`]: the
+//!   checks, one proposal branch, the rule "no line is lost", and the start of the first
+//!   replay), and it starts a Curator turn when one is due: a ticket merged since the last
 //!   run started, or 7 days passed since the last good run and the signals are not empty.
-//!   It never runs two Curator turns at the same time.
+//!   It never runs two Curator turns at the same time, and it never waits for a replay.
 //! - [`record_merged`] records the event that makes a run due: the pipeline calls it when a
 //!   ticket reaches its end with a merged pull request. The event has the kind
 //!   [`EVENT_MERGED`] (`ticket-merged`), the ticket key, and the external id
@@ -72,13 +73,18 @@ pub fn last_eval_line(ledger: &Ledger, agent: &str) -> Result<Option<String>> {
 
 /// Each proposal with an open change: it waits for `vision memory review`. A memory that
 /// cannot be read gives no need, so that the snapshot is still written.
-pub fn needs(ctx: &Ctx, _ledger: &Ledger) -> Result<Vec<Need>> {
+pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     let Ok(memory) = Memory::from_ctx(ctx) else {
         return Ok(Vec::new());
     };
     let Ok(proposals) = memory.proposals() else {
         return Ok(Vec::new());
     };
+    let replaying: Vec<String> = runs::replaying(ledger)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| r.proposal)
+        .collect();
     Ok(proposals
         .into_iter()
         .filter(|p| p.problem.is_none() && p.open > 0)
@@ -86,9 +92,14 @@ pub fn needs(ctx: &Ctx, _ledger: &Ledger) -> Result<Vec<Need>> {
             kind: NeedKind::Proposal,
             ticket: None,
             text: format!(
-                "the Curator proposes {} change(s): {}",
+                "the Curator proposes {} change(s): {}{}",
                 p.open,
-                short(&p.summary, 80)
+                short(&p.summary, 80),
+                if replaying.contains(&p.name) {
+                    " (its replays still run)"
+                } else {
+                    ""
+                }
             ),
             id: p.name,
         })

@@ -938,7 +938,7 @@ fn request_action(
 
 /// The state of each entry of a list: the stored operation of a verb at the commit of now, or
 /// the result of a job there.
-fn op_facts(
+pub(crate) fn op_facts(
     ctx: &Ctx,
     ledger: &Ledger,
     ticket: &Ticket,
@@ -1246,7 +1246,12 @@ fn enter_turn(
     resume: Option<String>,
     message: Option<String>,
 ) -> Result<Option<Action>> {
-    for entry in &step.before {
+    for (index, entry) in step.before.iter().enumerate() {
+        let label = entry.label();
+        // An entry that is done in this visit does not run again while a later one waits.
+        if ticket.visit().before_is_done(index, &label) {
+            continue;
+        }
         let args = match entry_args(ctx, &ticket.key, entry) {
             Ok(args) => args,
             Err(text) => return Ok(Some(flag_action(ticket, super::state::NEEDS_YOU, &text))),
@@ -1297,6 +1302,13 @@ fn enter_turn(
                 }
             }
         }
+        if let Some(visit) = ticket.counts.visit.as_mut() {
+            visit
+                .before_done
+                .push(super::state::Visit::before_mark(index, &label));
+        }
+        save(ledger, ticket, &time::now_rfc3339(), None)?;
+        crash_point("before-entry-done");
     }
     write_issue(ctx, ledger, ticket)?;
     Ok(Some(start_action(ticket, step, resume, message)))

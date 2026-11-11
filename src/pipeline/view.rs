@@ -6,12 +6,14 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::machine::Ticket;
+use super::decide::OpFact;
+use super::machine::{op_facts, visit_turns, Ticket};
 use super::state::{clear_command, NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT};
 use crate::ctx::Ctx;
-use crate::executor::{self, short};
+use crate::executor::{self, short, Outcome};
 use crate::ledger::Ledger;
 use crate::snapshot::{Need, NeedKind};
+use crate::turn::TurnStatus;
 use crate::util::fs::read_optional;
 use crate::util::{ids, time};
 
@@ -212,7 +214,7 @@ pub fn rows(ctx: &Ctx, ledger: &Ledger, all_needs: &[Need]) -> Result<Vec<Ticket
                 .map_or(0, |at| time::seconds_between(at, now) / 60),
         });
         let judging = mine.len() > usize::from(work.is_some());
-        let now_text = now_line(ledger, &ticket, &works, judging, &needs, &flags)?;
+        let now_text = now_line(ctx, ledger, &ticket, &works, judging, &needs, &flags)?;
         out.push(TicketView {
             key: key.clone(),
             step: row.state.clone(),
@@ -243,6 +245,7 @@ fn need_word(kind: NeedKind) -> &'static str {
 }
 
 fn now_line(
+    ctx: &Ctx,
     ledger: &Ledger,
     ticket: &Ticket,
     works: &Option<Works>,
@@ -280,6 +283,14 @@ fn now_line(
         };
         return Ok(format!("{word}: {reason}{more}"));
     }
+    let visit = ticket.visit();
+    if visit.kind == "turn" && !judging {
+        if let Some(text) = turn_after_text(ctx, ledger, ticket, &visit)
+            .or_else(|| turn_before_text(ctx, ledger, ticket, &visit))
+        {
+            return Ok(text);
+        }
+    }
     if !needs.is_empty() {
         let list: Vec<String> = needs.iter().map(|(k, n)| format!("{n} {k}")).collect();
         return Ok(format!(
@@ -294,7 +305,6 @@ fn now_line(
     if open > 0 {
         return Ok(format!("{open} card(s) wait for an answer"));
     }
-    let visit = ticket.visit();
     for op in executor::operations_of(ledger, key)?.into_iter().rev() {
         if op.state == executor::OpState::Uncertain {
             return Ok(format!(
@@ -312,14 +322,129 @@ fn now_line(
             Some(value) => format!("waits: the watched value is {value}"),
             None => "waits for its first look".into(),
         },
-        "turn" => format!(
-            "next: a turn of {}",
-            visit.agent.as_deref().unwrap_or("the agent")
-        ),
+        "turn" => turn_text(ledger, ticket, &visit)?,
         "end" => "the end step finishes it".into(),
         _ => "the next tick moves it".into(),
     };
     Ok(text)
+}
+
+/// The line of a turn step whose last turn ended well and held its end facts: the first
+/// `after` entry that is not confirmed, with its state, or the move to the next step. `None`
+/// when the last turn did not hold, or when the adapter cannot be read: a broken adapter never
+/// breaks the status view.
+fn turn_after_text(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    visit: &super::state::Visit,
+) -> Option<String> {
+    let turns = visit_turns(ledger, &ticket.key, &visit.step, visit.turns).ok()?;
+    let last = turns.last()?;
+    if last.status.as_deref() != Some(TurnStatus::Done.as_str())
+        || last.end_fact.as_deref() != Some("held")
+    {
+        return None;
+    }
+    let adapter = crate::adapter::load(ctx).ok()?;
+    let step = adapter.step(&visit.step)?;
+    let facts = op_facts(ctx, ledger, ticket, &step.after, Some(&last.id)).ok()?;
+    Some(entries_text(&facts).unwrap_or_else(|| {
+        "its turn and its after verbs are done, so the next tick moves it to the next step".into()
+    }))
+}
+
+/// The first entry of a list that is not confirmed, as a line of the column NOW: such as
+/// `runs git.push` or `waits for your approval of review.reply`. `None` when each entry is
+/// confirmed.
+pub(crate) fn entries_text(facts: &[(String, OpFact)]) -> Option<String> {
+    for (label, fact) in facts {
+        let text = match fact {
+            OpFact::Known {
+                outcome: Outcome::Confirmed,
+                ..
+            } => continue,
+            OpFact::NotAsked => format!("next: {label}"),
+            OpFact::BadArgs(text) => format!("{label} cannot run: {text}"),
+            OpFact::Known { outcome, .. } => match outcome {
+                Outcome::Pending | Outcome::Executing => format!("runs {label}"),
+                Outcome::Waiting { .. } => {
+                    format!("waits for your approval of {label}. Run `vision needs`")
+                }
+                Outcome::Uncertain => {
+                    format!("waits for the reconcile of {label}, which is uncertain")
+                }
+                other => format!("{label} is {other}"),
+            },
+        };
+        return Some(text);
+    }
+    None
+}
+
+/// The line of a turn step with no running turn and no `before` or `after` entry to name: the
+/// test of the end facts, or the next turn.
+fn turn_text(ledger: &Ledger, ticket: &Ticket, visit: &super::state::Visit) -> Result<String> {
+    let agent = visit.agent.as_deref().unwrap_or("the agent");
+    let turns = visit_turns(ledger, &ticket.key, &visit.step, visit.turns)?;
+    match turns.last() {
+        Some(last)
+            if last.status.as_deref() == Some(TurnStatus::Done.as_str())
+                && last.end_fact.is_none() =>
+        {
+            return Ok(format!(
+                "the next tick tests the end facts of the turn of {agent}"
+            ));
+        }
+        _ => {}
+    }
+    Ok(format!("next: a turn of {agent}"))
+}
+
+/// The line of a turn step whose visit has no turn yet and a `before` entry that is not done.
+fn turn_before_text(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    visit: &super::state::Visit,
+) -> Option<String> {
+    let turns = visit_turns(ledger, &ticket.key, &visit.step, visit.turns).ok()?;
+    if !turns.is_empty() {
+        return None;
+    }
+    let agent = visit.agent.as_deref().unwrap_or("the agent");
+    before_text(ctx, ledger, ticket, visit).map(|text| format!("before a turn of {agent}: {text}"))
+}
+
+/// The first `before` entry of the step that is not done in this visit, with its state. `None`
+/// when each one is done, or when the adapter cannot be read.
+fn before_text(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    visit: &super::state::Visit,
+) -> Option<String> {
+    let adapter = crate::adapter::load(ctx).ok()?;
+    let step = adapter.step(&visit.step)?;
+    let mut facts = Vec::new();
+    for (index, entry) in step.before.iter().enumerate() {
+        let label = entry.label();
+        if visit.before_is_done(index, &label) {
+            continue;
+        }
+        let fact = op_facts(ctx, ledger, ticket, std::slice::from_ref(entry), None)
+            .ok()?
+            .pop()?
+            .1;
+        // A job that is not done in this visit runs at the next entry, whatever an older run
+        // of it says.
+        let fact = match entry.kind {
+            crate::adapter::EntryKind::Job => OpFact::NotAsked,
+            crate::adapter::EntryKind::Verb => fact,
+        };
+        facts.push((label, fact));
+    }
+    entries_text(&facts)
 }
 
 fn marks(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket) -> Result<Marks> {
@@ -396,5 +521,46 @@ pub fn marks_text(marks: &Marks) -> String {
         "-".into()
     } else {
         parts.join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn known(outcome: Outcome) -> OpFact {
+        OpFact::Known {
+            outcome,
+            detail: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_first_entry_that_is_not_confirmed_names_its_state() {
+        let push = ("git.push".to_string(), known(Outcome::Confirmed));
+        let reply = |fact| ("review.reply".to_string(), fact);
+        assert_eq!(entries_text(std::slice::from_ref(&push)), None);
+        assert_eq!(
+            entries_text(&[push.clone(), reply(known(Outcome::Executing))]).as_deref(),
+            Some("runs review.reply")
+        );
+        assert_eq!(
+            entries_text(&[
+                push.clone(),
+                reply(known(Outcome::Waiting {
+                    command: "vision approve DEMO-12 review.reply abc".into()
+                }))
+            ])
+            .as_deref(),
+            Some("waits for your approval of review.reply. Run `vision needs`")
+        );
+        assert_eq!(
+            entries_text(&[push.clone(), reply(OpFact::NotAsked)]).as_deref(),
+            Some("next: review.reply")
+        );
+        assert_eq!(
+            entries_text(&[reply(known(Outcome::Uncertain)), push]).as_deref(),
+            Some("waits for the reconcile of review.reply, which is uncertain")
+        );
     }
 }

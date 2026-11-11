@@ -12,6 +12,20 @@
 # The proof gets the approved plan in args.plan. A line `Proof: green` of the plan declares the
 # whole proof green (a change with no new behavior), and a line `Proof: green <path>` declares
 # one test file, which then only has to pass at the last commit.
+#
+# The path of a ticket:
+#
+#   refine -> plan -> plan-ready -> build -> review -> ci
+#   ci:        green -> ready, red -> fix-ci -> ci
+#   ready:     the team marks the pull request ready -> comments
+#   comments -> ci-review: a commit of the Shepherd goes through CI again before the merge;
+#              green -> ready-to-merge, red -> fix-ci
+#   ready-to-merge: merged -> done
+#
+# Each loop goes through a turn step with a cap: fix-ci (ci_fix) and comments (comments). Each
+# wait step names the values that mean "not yet" in `wait`, and its `limit` in seconds: any
+# other value, or a longer wait, needs the person. At a commit where CI already ran, ci.run of
+# ci-review is the operation of that commit, so it runs no second time.
 
 name = "demo"
 branch = "vision/{key}"
@@ -106,7 +120,17 @@ reads = ["comments.json", "approved-plan.md"]
 expects = ["clean", "doc:verdicts.json"]
 after = ["git.push", { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } }]
 cap = "comments"
-next = "ready-to-merge"
+next = "ci-review"
+
+[[step]]
+id = "ci-review"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "ready-to-merge", red = "fix-ci" }
+wait = ["none"]
+limit = 3600
+every = 60
 
 [[step]]
 id = "ready-to-merge"

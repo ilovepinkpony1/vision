@@ -354,6 +354,11 @@ fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
     let id = reply["id"].as_str().unwrap().to_string();
     let (verb, commit) = id.split_once(' ').unwrap();
     assert_eq!(verb, "review.reply");
+    assert_eq!(
+        ticket_status(&world)["now"],
+        "waits for your approval of review.reply. Run `vision needs`",
+        "the turn ended well, so the column names the after verb"
+    );
     world.run(&["approve", KEY, verb, commit]).expect_code(0);
     let prs = world.world_json("prs.json");
     assert_eq!(
@@ -392,6 +397,7 @@ fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
             "ci",
             "ready",
             "comments",
+            "ci-review",
             "ready-to-merge",
             "done"
         ]

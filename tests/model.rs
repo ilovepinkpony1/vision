@@ -30,20 +30,44 @@ fn model_shows_each_agent_with_its_default_and_reason() {
     run.expect_code(0);
     let lines: Vec<&str> = run.stdout.lines().collect();
     assert!(lines[0].starts_with("AGENT"), "{}", run.stdout);
-    for header in ["MODEL", "EFFORT", "SOURCE", "RECOMMENDATION", "REASON"] {
+    for header in ["MODEL", "EFFORT", "SOURCE"] {
         assert!(lines[0].contains(header), "{}", run.stdout);
     }
-    assert_eq!(lines.len(), 8, "{}", run.stdout);
-    let builder: Vec<&str> = lines[2].split_whitespace().take(4).collect();
+    // The table fits 100 columns: the reason and the recommendation of each agent have their
+    // own lines under its row.
+    for line in &lines {
+        assert!(line.chars().count() <= 100, "{}", run.stdout);
+    }
+    let agents: Vec<&str> = lines
+        .iter()
+        .filter(|l| !l.starts_with(' '))
+        .map(|l| l.split_whitespace().next().unwrap())
+        .collect();
+    assert_eq!(
+        agents,
+        ["AGENT", "scout", "builder", "reviewer", "tester", "shepherd", "judge", "curator"],
+        "{}",
+        run.stdout
+    );
+    let at = lines.iter().position(|l| l.starts_with("builder")).unwrap();
+    let builder: Vec<&str> = lines[at].split_whitespace().take(4).collect();
     assert_eq!(
         builder,
         ["builder", "claude-opus-5-5", "xhigh", "default"],
         "{}",
         run.stdout
     );
-    assert!(run
-        .stdout
-        .contains("It writes the code and uses the most tokens."));
+    assert!(lines[at + 1]
+        .starts_with("  reason of the default: It writes the code and uses the most tokens."));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("  recommendation: "))
+            .count(),
+        7,
+        "{}",
+        run.stdout
+    );
 
     let rows = rows(&home);
     assert_eq!(rows.len(), 7);

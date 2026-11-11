@@ -1100,6 +1100,9 @@ pub struct Report {
     pub since: Option<String>,
     pub tickets: BTreeMap<String, Measures>,
     pub total: Measures,
+    /// The steps of the measures in the order of the step list of the adapter, then each step
+    /// that the adapter no longer has, by name.
+    pub steps: Vec<String>,
 }
 
 /// The measures of each ticket and in total.
@@ -1168,11 +1171,46 @@ pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
     for m in tickets.values() {
         total.add(m);
     }
+    let steps = step_order(
+        &[],
+        total.step_seconds.keys().chain(total.step_cost_usd.keys()),
+    );
     Ok(Report {
         since: since.map(str::to_string),
         tickets,
         total,
+        steps,
     })
+}
+
+/// A cost in dollars for people: two decimals, and `<$0.01` for a cost above zero that is below
+/// one cent, so that a cheap turn never shows as free.
+pub fn money(cost: f64) -> String {
+    if cost > 0.0 && cost < 0.01 {
+        "<$0.01".to_string()
+    } else {
+        format!("${cost:.2}")
+    }
+}
+
+/// The steps of the measures in the order of the step list of the adapter, then each step that
+/// the adapter no longer has, by name.
+pub fn step_order<'a>(
+    adapter_steps: &[String],
+    names: impl IntoIterator<Item = &'a String>,
+) -> Vec<String> {
+    let names: BTreeSet<&String> = names.into_iter().collect();
+    let mut out: Vec<String> = adapter_steps
+        .iter()
+        .filter(|s| names.contains(s))
+        .cloned()
+        .collect();
+    for name in names {
+        if !adapter_steps.contains(name) {
+            out.push(name.clone());
+        }
+    }
+    out
 }
 
 /// `vision report [--week] [--json]`.
@@ -1180,20 +1218,39 @@ pub fn report(ctx: &Ctx, week: bool, json: bool) -> Result<()> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
     let since = week.then(|| time::rfc3339(time::now() - ::time::Duration::days(7)));
-    let report = report_of(&ledger, since.as_deref())?;
+    let mut report = report_of(&ledger, since.as_deref())?;
+    // A broken adapter never breaks the report: the steps then go by name.
+    let adapter_steps: Vec<String> = crate::adapter::load(ctx)
+        .map(|a| a.steps.iter().map(|s| s.id.clone()).collect())
+        .unwrap_or_default();
+    report.steps = step_order(
+        &adapter_steps,
+        report
+            .total
+            .step_seconds
+            .keys()
+            .chain(report.total.step_cost_usd.keys()),
+    );
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
+    print!("{}", render_report(&report));
+    Ok(())
+}
+
+/// The text of `vision report`.
+pub fn render_report(report: &Report) -> String {
+    let mut out = String::new();
     let window = match &report.since {
         Some(s) => format!("since {s}"),
         None => "for all time".into(),
     };
     if report.tickets.is_empty() {
-        println!("No ticket has measures {window}.");
-        return Ok(());
+        out.push_str(&format!("No ticket has measures {window}.\n"));
+        return out;
     }
-    println!("Measures {window}\n");
+    out.push_str(&format!("Measures {window}\n\n"));
     let mut table = vec![[
         "TICKET",
         "CARDS TO YOU",
@@ -1210,33 +1267,100 @@ pub fn report(ctx: &Ctx, week: bool, json: bool) -> Result<()> {
             m.cards_by_memory.to_string(),
             m.cards_by_judge.to_string(),
             format!("{:.1}", m.human_minutes),
-            format!("${:.2}", m.cost_usd),
+            money(m.cost_usd),
         ]
     };
     for (key, m) in &report.tickets {
         table.push(line(key, m));
     }
     table.push(line("total", &report.total));
-    print!("{}", render_table(&table));
+    out.push_str(&render_table(&table));
     for (key, m) in report
         .tickets
         .iter()
         .chain(std::iter::once((&"total".to_string(), &report.total)))
     {
-        let steps: BTreeSet<&String> = m
+        let own: BTreeSet<&String> = m
             .step_seconds
             .keys()
             .chain(m.step_cost_usd.keys())
             .collect();
-        if steps.is_empty() {
+        if own.is_empty() {
             continue;
         }
-        println!("\n{key}, by step:");
+        let steps = step_order(&report.steps, own);
+        out.push_str(&format!("\n{key}, by step:\n"));
         for step in steps {
-            let seconds = m.step_seconds.get(step).copied().unwrap_or(0);
-            let cost = m.step_cost_usd.get(step).copied().unwrap_or(0.0);
-            println!("  {step:<16} {:>6}  ${cost:.2}", time::short_age(seconds));
+            let seconds = m.step_seconds.get(&step).copied().unwrap_or(0);
+            let cost = m.step_cost_usd.get(&step).copied().unwrap_or(0.0);
+            out.push_str(&format!(
+                "  {step:<16} {:>6}  {}\n",
+                time::short_age(seconds),
+                money(cost)
+            ));
         }
     }
-    Ok(())
+    out
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+
+    #[test]
+    fn a_cost_below_one_cent_is_not_free() {
+        assert_eq!(money(0.0), "$0.00");
+        assert_eq!(money(0.0014), "<$0.01");
+        assert_eq!(money(0.009), "<$0.01");
+        assert_eq!(money(0.01), "$0.01");
+        assert_eq!(money(2.5), "$2.50");
+    }
+
+    #[test]
+    fn the_steps_follow_the_adapter_and_an_old_step_comes_last() {
+        let adapter: Vec<String> = ["refine", "plan", "build", "review", "ci"]
+            .map(String::from)
+            .to_vec();
+        let names: Vec<String> = ["ci", "build", "old-step", "refine", "another-old"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            step_order(&adapter, &names),
+            ["refine", "build", "ci", "another-old", "old-step"]
+        );
+        assert_eq!(step_order(&[], &names)[0], "another-old");
+    }
+
+    #[test]
+    fn the_report_lists_the_steps_in_the_order_of_the_adapter() {
+        let mut m = Measures::default();
+        m.step_seconds.insert("review".into(), 60);
+        m.step_seconds.insert("build".into(), 120);
+        m.step_seconds.insert("gone".into(), 5);
+        m.step_cost_usd.insert("build".into(), 1.25);
+        m.step_cost_usd.insert("review".into(), 0.004);
+        m.cost_usd = 1.254;
+        let mut report = Report {
+            since: None,
+            tickets: BTreeMap::from([("DEMO-12".to_string(), m.clone())]),
+            total: m,
+            steps: Vec::new(),
+        };
+        report.steps = step_order(
+            &["build".to_string(), "review".to_string()],
+            report.total.step_seconds.keys(),
+        );
+        let text = render_report(&report);
+        let lines: Vec<&str> = text.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| *l == "DEMO-12, by step:")
+            .unwrap();
+        assert!(lines[at + 1].starts_with("  build "), "{text}");
+        assert!(lines[at + 1].ends_with("$1.25"), "{text}");
+        assert!(lines[at + 2].starts_with("  review "), "{text}");
+        assert!(lines[at + 2].ends_with("<$0.01"), "{text}");
+        assert!(lines[at + 3].starts_with("  gone "), "{text}");
+        assert!(lines[at + 3].ends_with("$0.00"), "{text}");
+    }
 }

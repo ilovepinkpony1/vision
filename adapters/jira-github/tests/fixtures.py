@@ -34,14 +34,15 @@ def jira_issue(key=KEY, summary="Export the report", status="To Do", description
     return {"key": key, "fields": fields}
 
 
-def pull(number=7, draft=True, sha=HEAD, state="open", merged=False, mergeable_state="clean", requested=()):
+def pull(number=7, draft=True, sha=HEAD, state="open", merged=False, mergeable_state="clean", requested=(),
+         mergeable="auto"):
     return {
         "number": number,
         "state": state,
         "draft": draft,
         "merged": merged,
         "merged_at": "2026-11-02T10:00:00Z" if merged else None,
-        "mergeable": mergeable_state != "dirty",
+        "mergeable": (mergeable_state != "dirty") if mergeable == "auto" else mergeable,
         "mergeable_state": mergeable_state,
         "head": {"ref": BRANCH, "sha": sha},
         "base": {"ref": "main"},

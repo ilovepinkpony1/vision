@@ -393,7 +393,8 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         )?;
         atomic_write(
             &turn.settings,
-            settings::settings_text(paths, request.kind, &rendered)?.as_bytes(),
+            settings::settings_text(paths, request.kind, &rendered, config.claude.attribution)?
+                .as_bytes(),
         )?;
         let role_path = turn.dir.join(ROLE_FILE);
         atomic_write(&role_path, role.as_bytes())?;

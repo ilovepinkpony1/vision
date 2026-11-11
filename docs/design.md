@@ -109,6 +109,7 @@ clones = []                   # absolute paths of the clones that Vision owns
 bin = "claude"
 config_dir = "~/.vision/claude"   # a missing key means the folder claude/ of the home. "" means the default login.
 env_pass = []                     # more environment names that a session gets
+attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 
 [budget]                      # dollars at list price, as Claude Code reports them
 reader = 3
@@ -307,6 +308,8 @@ The supervisor drops each other name, so that a token of the executor never reac
 
 The runner renders `settings.json` for each turn. For a worker and a tester, it turns the sandbox on. It denies reads of the home folder, and it allows the clone, the folders of `sandbox.allow_read`, and the domains and sockets of `[sandbox]`. A reader gets no Bash tool, so its file needs no sandbox. Its file denies the Bash tool and the web tools.
 
+The key `claude.attribution` controls the lines that Claude Code adds about itself. If it is false, the `settings.json` of each turn gets `"attribution": {"commit": "", "pr": ""}`. Then a session adds no co-author trailer to a commit and no line about its tool to a pull request. If it is true, the file has no such key. A session of Vision does not read the configuration of the project, so a project that turns these lines off needs this key. A file `sandbox/<kind>.json` of the home with its own key `attribution` keeps that key.
+
 Claude Code adds the tool `StructuredOutput` by itself, because each turn has a result schema. The contract of 7.4 expects that tool next to the tools of the kind. A test with a real session showed this.
 
 ### 7.4 The supervisor
@@ -455,6 +458,7 @@ vision correct ID "RIGHT ANSWER" [--why "W"]
 - `--choice N` counts from 1, as the card shows the choices to the person. The index in the output of the Judge counts from 0.
 - `correct` writes a decision of the person that replaces the answer of the Judge. The old file gets the status `superseded`. If the ticket still runs, its next turn gets the correction as a message.
 - A decision with no reason is weaker. The Judge uses it only for a question with the same words and the same area.
+- `answer` writes the `human` row of an answer in the same ledger transaction that sets the question to `recording`. The commit of the decision file comes after it. If the decision file cannot be written, the row goes again. So a crash after that commit never loses the row, and the next tick ends the record. `correct` writes its mark and its `human` row in one transaction too.
 
 ## 9. The memory
 
@@ -528,12 +532,15 @@ vision memory teach AGENT "TEXT"   write a principle directly. It is active at o
 vision memory retire ID "WHY"      retire it. The file stays, and no turn loads it.
 vision memory lint                 test the format of each file
 vision memory import FILE          read past answers from a JSONL file as decisions
-vision memory review               accept, edit, or reject each change of a proposal
+vision memory review [--accept N|all [--answer TEXT] | --reject N|all [--why TEXT]]
+                                   accept, edit, or reject each change of a proposal
 vision memory log                  the history
 vision memory revert COMMIT        make a commit that undoes one commit
 ```
 
 The person can also edit the files with any tool. The next tick reads the change.
+
+`--answer TEXT` goes with `--accept N` for a question of the Curator. The command refuses it for any other change, and for more than one question at a time. The next run of the Curator reads the answer. Some questions name exactly one decision as evidence, and the section `## Why` of that decision is empty. For such a question, the answer also becomes that section, as a commit of the person in the memory repo. The review says so before the person answers, and the interactive review does the same.
 
 ### 9.3 The life of a principle
 
@@ -577,8 +584,14 @@ The runner drops each change that fails the test, and `vision curate` prints the
 `evidence` lists the decision ids that support a change. The runner writes the changes to a branch `proposal/<date>-<n>` of the memory repo. Three rules protect the memory:
 
 - No line is lost. Each line that a proposal removes or rewrites goes to `ARCHIVE.md` word for word, with the commit and the reason. The runner tests this in code, and it rejects a proposal that loses a line.
-- A replay comes first. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree. The replay hides the decision file of each answer that it replays, because the Judge has to find that answer again without it. In the proposed memory, each candidate of the proposal counts as active, so that the replay shows its effect.
+- A replay shows the effect. The Judge answers the last `curator.replay` questions that the person answered, with the proposed memory. The review shows how many answers now agree with the person and how many no longer agree. The replay hides the decision file of each answer that it replays, because the Judge has to find that answer again without it. In the proposed memory, each candidate of the proposal counts as active, so that the replay shows its effect.
 - A person decides. Only a change that the person accepts reaches the main branch.
+
+The replays run over several ticks, so that no tick waits for one. The tick that applies the result of a Curator turn builds the proposal branch and starts the first replay, with the proposed memory. A later tick reads it and starts the replay with the memory of today. A stored result of the same memory, model, and cards serves in its place. A tick kills a replay turn that runs longer than `caps.judge_minutes`, and that replay counts as timed out.
+
+The proposal record keeps the state of the replays after each step. The start of a replay turn writes its claim in the same transaction as its turn row. So a crash at any point leaves a state that the next tick repairs, with no second proposal and no lost replay. The next tick also adopts a proposal branch that a crash left with no record.
+
+While the replays run, `vision memory review` says so in one line, and the person can still accept or reject each change. `vision needs` marks such a proposal with the text `(its replays still run)`. `vision curate` waits for the replays for at most two times `caps.judge_minutes` plus two minutes. It holds the lock of the tick only for the short step after a replay turn ended.
 
 ## 10. Models
 
@@ -595,6 +608,7 @@ vision model eval AGENT --models A,B [--n N]    replay past work with each model
 - `set` writes `[agents.<agent>]` with `pinned_at` to the configuration. The value stays until the person changes it. A new version of Vision never replaces a pinned value.
 - `MODEL` is a full model id or one of the short names `fable`, `opus`, `sonnet`, `haiku`. Effort is `low`, `medium`, `high`, `xhigh`, or `max`.
 - Each turn row records the model and the effort that it used. Each change is a row in `model_changes`.
+- `vision model` prints a table that fits 100 columns: the agent, the model, the effort, and the source. Under each row, one line gives the reason of the default, and one line gives the recommendation. For a pinned agent, the first line names the default that the pin replaced.
 
 The defaults, with the reason for each one:
 
@@ -796,7 +810,7 @@ A step can expect these end facts:
 
 The ticket row holds the id of its step in `state`, its flags, and its counters. One tick moves a ticket at most one step.
 
-- Entry of a turn step. The runner runs each `before` job. A job that does not pass sets the flag `needs-you`. The runner asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
+- Entry of a turn step. The runner runs each `before` entry in order: a job or a verb. A job that does not pass sets the flag `needs-you`. A verb must reach the state `confirmed`. The visit remembers each entry that is done, so each one runs one time in a visit. The runner then asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
 - A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
 - A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
 - A turn that ends with `result`. The runner writes each expected document to the ticket folder. Then it tests each end fact.
@@ -811,6 +825,8 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - The end step frees the clone. If the pull request is merged, it records the event `ticket-merged`.
 
 Each visit of a step is one row in `spans`. Its key `waits_on` says what the ticket waits for: `agent:<name>`, `job:<name>`, `person:<action>`, `watch:<path>`, or `end`.
+
+The column NOW of `vision status` says the same thing for people. After a turn that ended well, it names the first `after` verb that is not `confirmed`, with its state. Two examples are `runs git.push` and `waits for your approval of review.reply`. Before a turn, it names the first `before` entry that is not done. The text `next: a turn of <agent>` means that a turn is the next action.
 
 A ticket can have four flags. A ticket with a flag starts no new turn, no job, and no operation.
 
@@ -830,6 +846,8 @@ The proof gets the approved plan in `args.plan`. A line `Proof: green` in the pl
 ### 11.4 The demo adapter
 
 `adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
+
+Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
 
 ### 11.5 The adapter for Jira and GitHub
 
@@ -858,7 +876,19 @@ These rules keep the tokens and the repo safe:
 
 A comment that waits has one of three kinds. `inline` is a thread on a line of the diff, and its reply goes into the thread. `review` is a review with a text that asks for changes or that comments. `conversation` is a comment in the conversation of the pull request. A reply to a review or to a conversation comment is a new conversation comment. It quotes the first line of the comment, and it ends with a hidden mark that names the comment. So a later round does not answer the same comment again.
 
-The key `own_logins` names the logins of the person and of the bot. The key `ignore_logins` names logins whose comments never wait, such as a CI bot.
+The key `own_logins` names the logins of the person and of the bot. The key `ignore_logins` names logins whose comments never wait, such as a CI bot. An entry can also be `<login>:<kind>`, with the kind `inline`, `review`, or `conversation`. Then only the comments of that kind of that login never wait. This fits a review bot that keeps one status comment in the conversation.
+
+`review.state` is the first value that holds of `merged`, `closed`, `comments`, `changes`, `conflict`, `approved`, and `waiting`. `conflict` means that the open pull request conflicts with its base. No step names `conflict`, so the ticket gets the flag `needs-you` at once, with the value in the reason. The person merges the base into the branch in the clone, resolves the conflict, and pushes the branch. Then `vision retry KEY` lets the ticket go on.
+
+The key `envs` lists the staging envs of the project. For each env, `observe` gives `envs.<name>.branch`, `envs.<name>.head`, and `envs.<name>.holds`. `head` is the last commit of the env branch. If the env branch holds the head commit of the ticket, `holds` is true. It says that the merge happened, not that the env runs the new code.
+
+An env can also name `deployment`, a GitHub environment where the project records its deployments. For such an env, `observe` reads the newest deployment and gives `envs.<name>.deployed`, `deployment_sha`, and `deployed_at`. If the commit of that deployment holds the head commit of the ticket, `deployed` is true. The adapter reads the deployment record and not its statuses. So `deployed` is true from the moment that the project records the deployment.
+
+The job `app-start` remembers the app that it started in a state file in the temporary folder. The file holds the process id, the start time of that process as `ps` reports it, the head commit, and the log path. If that app still runs and the head commit changed, the job stops its process group and starts the app at the new head. The job never stops a process whose start time differs from the state file. The job trusts only a plain file of this user that no other user can write. An app that answers but that Vision did not start stays as it is, and the detail says that it can run older code.
+
+`app_restart = false` turns the restart off, for an app that loads new code by itself. `app-<env>.json` names the head of the app in `head`, and `restarted` says whether the job started it again.
+
+The key `test_canary` names test files that pass on the base commit. The proof runs them first in the worktree of the base commit. If one is missing or fails, that worktree cannot run tests. Then the proof does not hold, its check `proof-canary` has the cause `env`, and no changed test runs on the base. Without a canary, a worktree that cannot run tests looks the same as a new test that fails on the base.
 
 `tests/e2e_jira_github.rs` drives the whole path against `adapters/jira-github/tests/serve_world.py`. That script is a fake Jira and GitHub with state on a free localhost port. No run against the real services is part of the tests.
 
@@ -910,6 +940,8 @@ vision install | uninstall         the timer of the system
 
 A command that is not built yet prints `not built yet: <name>` and exits with code 3.
 
+`vision report` lists the steps in the order of the step list of the adapter. A step that the adapter no longer has comes after them, by name. `vision report` and `vision status` show a cost above zero and below one cent as `<$0.01`. `vision report --json` gives the order in `steps`.
+
 ## 14. Rules for the code
 
 - Rust, stable toolchain, one binary crate with a library. No async runtime. No daemon.
@@ -920,6 +952,7 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 - Each command that prints a table also takes `--json`.
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` must pass.
 - A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder.
+- Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`.
 - No name of a company, a person, or a private project goes into the repo.
 
 ```

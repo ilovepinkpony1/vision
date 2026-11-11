@@ -416,6 +416,24 @@ http_timeout = 20
         );
     }
 
+    /// Ticks until the ticket gets the flag `flag`, for a stage where the person is needed.
+    fn tick_until_flag(&self, flag: &str) {
+        let until = Instant::now() + STAGE;
+        loop {
+            let run = self.run(&["tick"]);
+            assert_eq!(run.code, 0, "the tick failed: {run:#?}");
+            if self.flags().iter().any(|f| f == flag) {
+                return;
+            }
+            assert!(
+                Instant::now() < until,
+                "timed out waiting for the flag {flag}. {}",
+                self.report()
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Ticks until `done` holds. Each stage of the path waits for a fact, never for a time.
     fn tick_until(&self, what: &str, mut done: impl FnMut(&Project) -> bool) {
         let until = Instant::now() + STAGE;
@@ -921,6 +939,28 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         json!({"number": 7, "id": 602, "login": "lead", "state": "APPROVED", "body": ""}),
     );
     p.tick_to("ready-to-merge");
+
+    // The base moved on, and the pull request conflicts with it: review.state is conflict, which
+    // the step names in neither on nor wait, so the person is needed at once.
+    p.server
+        .team("conflict", json!({"number": 7, "conflict": true}));
+    p.tick_until_flag("needs-you");
+    assert_eq!(p.step().as_deref(), Some("ready-to-merge"));
+    let reason = p.counts()["reasons"]["needs-you"]["reason"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        reason.contains("watches review.state") && reason.contains("`conflict`"),
+        "{reason}"
+    );
+    // The person merges the base into the branch and pushes; then vision retry: it goes on.
+    p.server
+        .team("conflict", json!({"number": 7, "conflict": false}));
+    p.run(&["retry", KEY]).expect_code(0);
+    p.tick();
+    assert!(p.flags().is_empty(), "{:?}", p.flags());
+    assert_eq!(p.step().as_deref(), Some("ready-to-merge"));
     p.server.team("merge", json!({"number": 7}));
     p.tick_until("the end", |p| p.counts()["finished"].is_string());
     let row = p.row().unwrap();
@@ -962,6 +1002,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             "comments",
             "ci-review",
             "in-review",
+            "ready-to-merge",
             "ready-to-merge",
             "done"
         ]

@@ -5,7 +5,9 @@
 //! which the session view gets, and the memory repo is an extra folder that the session reads.
 //! The run is the chain of that turn and its automatic resume, if any. When the chain ends
 //! with a result, [`apply`] checks each change, builds one proposal branch with the store,
-//! runs the checker of "no line is lost", runs the replays, and stores it all in the ledger.
+//! runs the checker of "no line is lost", starts the first replay, and stores it all in the
+//! ledger. Later ticks move the replays on ([`advance_replays`]), one turn at a time, so that
+//! no tick holds its lock while the Judge replays.
 //! Only one run is open at a time: a new turn needs no running Curator turn and no run that
 //! waits to be applied.
 
@@ -284,11 +286,39 @@ pub fn apply(
                     }),
                 }
             }
+            // A stop between the build of the branch and its record left a branch with the
+            // summary of this run and no record: the run adopts it, and builds no second one.
+            let orphan = if valid.is_empty() {
+                None
+            } else {
+                orphan_proposal(ledger, memory, &output.summary)?
+            };
+            if let Some(orphan) = orphan {
+                dropped.sort_by_key(|d| d.index);
+                applied.dropped = dropped.clone();
+                let record = ProposalRecord {
+                    proposal: orphan.name.clone(),
+                    turn: started.turn.clone(),
+                    summary: output.summary.clone(),
+                    created: orphan.created.clone(),
+                    dropped,
+                    state: OPEN.into(),
+                    lost: Vec::new(),
+                    replays: None,
+                };
+                records::put(ledger, "tick", EVENT_PROPOSAL, &orphan.name, &record)?;
+                ctx.log(&format!(
+                    "curator: {} has no record after a stop, so the run {} takes it",
+                    orphan.name, started.turn
+                ));
+                return finish_applied(ctx, ledger, memory, started, applied, Some(record));
+            }
             let built = if valid.is_empty() {
                 None
             } else {
                 Some(memory.build_proposal(&output.summary, &valid, time::now().date())?)
             };
+            crate::pipeline::crash_point("curator-proposal-built");
             if let Some(built) = &built {
                 for skipped in &built.skipped {
                     if let Some((index, value)) = places.get(skipped.index) {
@@ -322,6 +352,36 @@ pub fn apply(
             }
         }
     };
+    finish_applied(ctx, ledger, memory, started, applied, record)
+}
+
+/// An open proposal branch with this summary and no record: the branch of a run that stopped
+/// between the build and its record.
+fn orphan_proposal(
+    ledger: &Ledger,
+    memory: &Memory,
+    summary: &str,
+) -> Result<Option<crate::memory::ProposalInfo>> {
+    for info in memory.proposals()? {
+        if info.problem.is_none()
+            && info.summary == summary
+            && records::read::<ProposalRecord>(ledger, EVENT_PROPOSAL, &info.name)?.is_none()
+        {
+            return Ok(Some(info));
+        }
+    }
+    Ok(None)
+}
+
+/// The end of [`apply`]: the replays of the proposal start, and the run is applied.
+fn finish_applied(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    memory: &Memory,
+    started: &Started,
+    mut applied: Applied,
+    record: Option<ProposalRecord>,
+) -> Result<Applied> {
     if let Some(record) = record {
         applied.dropped = record.dropped.clone();
         let record = finish(ctx, ledger, memory, record)?;
@@ -358,7 +418,8 @@ pub fn apply(
 }
 
 /// The end of a proposal that the store built: Vision rejects it when it loses a line, and
-/// else runs both replays. The record goes to the ledger, keyed by the branch.
+/// else plans both replays and starts the first replay turn. A later tick reads it and starts
+/// the second one ([`advance_replays`]). The record goes to the ledger, keyed by the branch.
 pub fn finish(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -384,9 +445,62 @@ pub fn finish(
         return Ok(record);
     }
     let view = memory.proposal(&name)?;
-    record.replays = Some(replays::run(ctx, ledger, memory, &view)?);
+    record.replays = Some(replays::begin(ctx, ledger, &view)?);
     records::put(ledger, "tick", EVENT_PROPOSAL, &name, &record)?;
+    crate::pipeline::crash_point("curator-replays-planned");
+    // The run is applied also when its first replay cannot start now: the record says what
+    // runs next, and the next tick tries again.
+    if let Err(e) = replays::advance(ctx, ledger, memory, &mut record, time::now()) {
+        ctx.log(&format!(
+            "curator: the replays of {name} wait for the next tick: {e:#}"
+        ));
+    }
     Ok(record)
+}
+
+/// The open proposals whose replays still run, newest first.
+pub fn replaying(ledger: &Ledger) -> Result<Vec<ProposalRecord>> {
+    Ok(ledger
+        .events_of_kind(EVENT_PROPOSAL, 20)?
+        .iter()
+        .filter_map(records::detail_of::<ProposalRecord>)
+        .filter(|r| r.state == OPEN && r.replays.as_ref().is_some_and(|p| !p.is_done()))
+        .collect())
+}
+
+/// Moves the replays of each open proposal one step on: a replay turn that ended gets its
+/// numbers, and the next replay turn starts. It never waits for a turn. Gives the proposals
+/// whose replays are done now.
+pub fn advance_replays(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    memory: &Memory,
+    now: OffsetDateTime,
+) -> Result<Vec<String>> {
+    let mut done = Vec::new();
+    let mut errors = Vec::new();
+    for mut record in replaying(ledger)? {
+        match replays::advance(ctx, ledger, memory, &mut record, now) {
+            Ok(()) => {
+                if record
+                    .replays
+                    .as_ref()
+                    .is_some_and(replays::Replays::is_done)
+                {
+                    ctx.log(&format!(
+                        "curator: the replays of {} are done, so it is ready for review",
+                        record.proposal
+                    ));
+                    done.push(record.proposal.clone());
+                }
+            }
+            Err(e) => errors.push(format!("{}: {e:#}", record.proposal)),
+        }
+    }
+    if !errors.is_empty() {
+        bail!("could not move the replays of {}", errors.join("; "));
+    }
+    Ok(done)
 }
 
 /// What a start did.
@@ -530,6 +644,10 @@ pub fn tick(pass: &mut Pass) -> Result<()> {
     let ctx = pass.ctx;
     let memory = Memory::from_ctx(ctx).context("the Curator needs the memory")?;
     let mut failed = Vec::new();
+    if let Err(e) = advance_replays(ctx, &pass.ledger, &memory, pass.now) {
+        ctx.log(&format!("curator: {e:#}"));
+        failed.push("replays");
+    }
     if let Err(e) = apply_pending(ctx, &pass.ledger, &memory) {
         ctx.log(&format!("curator: {e:#}"));
         failed.push("apply");

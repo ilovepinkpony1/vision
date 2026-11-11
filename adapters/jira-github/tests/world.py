@@ -427,6 +427,11 @@ class World:
                            "created_at": now()}
                 self.issue_comments.setdefault(number, []).append(comment)
                 return 201, comment
+            if action == "conflict":
+                # The base moved on, and the pull request conflicts with it, or no longer does.
+                conflict = bool(body.get("conflict", True))
+                pull.update({"mergeable": not conflict, "mergeable_state": "dirty" if conflict else "clean"})
+                return 200, self.pull_view(pull)
             if action == "merge":
                 return self.merge(pull)
             return 404, {"message": "no control action %s" % action}

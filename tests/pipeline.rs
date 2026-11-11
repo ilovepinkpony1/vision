@@ -1028,3 +1028,278 @@ kind = "end"
         "an entry by on counts for the cap"
     );
 }
+
+/// The runs of one job at one commit: its rows of the kind `job`.
+fn job_runs(world: &World, job: &str, head: &str) -> Vec<String> {
+    world
+        .ledger()
+        .checks_of(KEY, Some(head))
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == "job" && c.source == format!("job:{job}"))
+        .map(|c| c.result)
+        .collect()
+}
+
+/// The demo adapter with a job step `check` between the approval of the plan and the build.
+fn check_step_adapter(world: &World, job: &str) {
+    world.write_adapter(|text| {
+        let old = "action = \"approve-plan\"\nnext = \"build\"";
+        assert!(text.contains(old));
+        text.replacen(
+            old,
+            &format!(
+                "action = \"approve-plan\"\nnext = \"check\"\n\n[[step]]\nid = \"check\"\nkind = \"job\"\njob = \"{job}\"\nnext = \"build\""
+            ),
+            1,
+        )
+    });
+}
+
+#[test]
+fn a_job_step_moves_on_after_its_job_passes() {
+    let world = World::new();
+    check_step_adapter(&world, "second-review");
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    world.tick_to("build");
+    assert_eq!(job_runs(&world, "second-review", &base), ["pass"]);
+    assert!(world.doc("second-review.md").is_some());
+    let spans: Vec<String> = world
+        .ledger()
+        .spans_of(Some(KEY))
+        .unwrap()
+        .into_iter()
+        .map(|s| format!("{} {}", s.state, s.waits_on.unwrap_or_default()))
+        .collect();
+    assert!(
+        spans.contains(&"check job:second-review".to_string()),
+        "{spans:?}"
+    );
+    assert!(world.flags().is_empty());
+}
+
+#[test]
+fn a_job_step_whose_job_fails_needs_you_and_does_not_move() {
+    let world = World::new();
+    // The proof with no plan and no changed test cannot pass.
+    check_step_adapter(&world, "proof");
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    assert_eq!(world.step().as_deref(), Some("check"));
+    assert_eq!(job_runs(&world, "proof", &base), ["fail"]);
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains("the job of the step check did not pass")
+            && reason.contains("see the documents of the job proof"),
+        "{reason}"
+    );
+    assert!(world.doc("proof.txt").is_some(), "the job wrote its log");
+    world.tick();
+    assert_eq!(
+        job_runs(&world, "proof", &base).len(),
+        1,
+        "a flag stops the job"
+    );
+    assert_eq!(world.turns_of("build"), 0);
+}
+
+/// The demo adapter whose build step first runs the job second-review, then the verb
+/// tracker.describe.
+fn before_verb_adapter(world: &World) {
+    world.write_adapter(|text| {
+        let old = "turn = \"worker\"\nreads = [\"approved-plan.md\", \"refine.md\", \"answers.md\"]";
+        assert!(text.contains(old));
+        text.replacen(
+            old,
+            "turn = \"worker\"\nbefore = [\"job:second-review\", { verb = \"tracker.describe\", args = { text = \"Work on this ticket started.\" } }]\nreads = [\"approved-plan.md\", \"refine.md\", \"answers.md\"]",
+            1,
+        )
+    });
+}
+
+#[test]
+fn a_before_verb_in_the_mode_auto_runs_before_the_turn() {
+    let world = World::new();
+    before_verb_adapter(&world);
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    world.tick_to("review");
+    assert_eq!(world.acts_of("tracker.describe"), 2, "refine and before");
+    assert_eq!(
+        world.world_json("tracker.json")["tickets"][0]["description"],
+        "Work on this ticket started."
+    );
+    assert_eq!(job_runs(&world, "second-review", &base), ["pass"]);
+    assert_eq!(world.turns_of("build"), 1);
+}
+
+#[test]
+fn a_before_verb_in_the_mode_ask_waits_and_the_jobs_before_it_run_once() {
+    let world = World::new();
+    before_verb_adapter(&world);
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    world.edit_config(|doc| doc["modes"]["tracker.describe"] = toml_edit::value("ask"));
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    world.tick_until("the approval", LONG, |w| {
+        status(w)["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "operation")
+    });
+    assert_eq!(world.step().as_deref(), Some("build"));
+    for _ in 0..3 {
+        world.tick();
+    }
+    assert_eq!(
+        job_runs(&world, "second-review", &base),
+        ["pass"],
+        "a before job runs one time for a visit while a later entry waits"
+    );
+    assert_eq!(world.turns_of("build"), 0, "no turn before the approval");
+    assert!(
+        world.flags().is_empty(),
+        "the mode ask is a need, not a flag"
+    );
+    assert_eq!(
+        ticket_status(&world, KEY)["now"],
+        "before a turn of builder: waits for your approval of tracker.describe. Run `vision needs`"
+    );
+    let needs = status(&world)["needs"].as_array().unwrap().clone();
+    let id = needs.iter().find(|n| n["kind"] == "operation").unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (verb, commit) = id.split_once(' ').unwrap();
+    assert_eq!(verb, "tracker.describe");
+    world.run(&["approve", KEY, verb, commit]).expect_code(0);
+    world.tick_to("review");
+    assert_eq!(world.acts_of("tracker.describe"), 2);
+    assert_eq!(job_runs(&world, "second-review", &base), ["pass"]);
+    assert_eq!(world.turns_of("build"), 1);
+}
+
+#[test]
+fn a_held_ticket_that_the_queue_no_longer_lists_as_eligible_still_moves() {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.run(&["take", KEY]).expect_code(0);
+    // A person moves the issue in the tracker: the queue says that it is not eligible now.
+    world.world_cmd(&["status", world.root(), KEY, "In Progress"]);
+    world.tick_to("plan");
+    let pick = world.run(&["pick", "--json"]).json();
+    let row = pick
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == KEY)
+        .unwrap()
+        .clone();
+    assert_eq!(row["eligible"], false, "{row}");
+    assert_eq!(row["reason"], "the status is In Progress, not To Do");
+    assert_eq!(row["taken"], "plan");
+    let text = world.run(&["pick"]);
+    text.expect_code(0);
+    assert!(text.stdout.contains("taken (plan)"), "{text:?}");
+    let issue: Value = serde_json::from_str(&world.doc("issue.json").unwrap()).unwrap();
+    assert_eq!(issue["tracker_status"], "In Progress");
+    let again = world.run(&["take", KEY]);
+    again.expect_code(1);
+    assert!(again.stderr.contains("already holds DEMO-12"), "{again:?}");
+}
+
+/// The build of DEMO-12 with no TODO file, so that the first CI run is green.
+const GREEN_BUILD: &str = "printf '\\n\\ndef subtract(a, b):\\n    \"\"\"Gives a minus b.\"\"\"\\n    return a - b\\n' >> calc.py && printf 'import unittest\\n\\nfrom calc import subtract\\n\\n\\nclass SubtractTest(unittest.TestCase):\\n    def test_subtract(self):\\n        self.assertEqual(subtract(5, 3), 2)\\n' > test_subtract.py && git add -A && git commit -q -m 'Add subtract'";
+
+#[test]
+fn a_commit_of_the_shepherd_goes_through_ci_again_before_the_merge() {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.edit_config(|doc| doc["modes"]["review.reply"] = toml_edit::value("auto"));
+    world.scenario(
+        "builder",
+        "build",
+        json!([runs_then(
+            GREEN_BUILD,
+            result(
+                "Built.",
+                &[("pr.md", "Add subtract\n\nThe calculator can subtract.")]
+            )
+        )]),
+    );
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([ends_with(result(
+            "Reviewed.",
+            &[("review.md", "# Review\n\n## Findings\n\nNone.\n")]
+        ))]),
+    );
+    let verdicts = r#"[{"comment_id": 1, "verdict": "valid", "fix_commit": "HEAD", "reply": "Added a test for negative numbers."}]"#;
+    world.scenario(
+        "shepherd",
+        "comments",
+        json!([runs_then(
+            "printf '\\n    def test_negative(self):\\n        self.assertEqual(subtract(-1, 1), -2)\\n' >> test_subtract.py && git commit -q -am 'Test negative numbers'",
+            result("Fixed the comment.", &[("verdicts.json", verdicts)])
+        )]),
+    );
+    take_and_approve(&world);
+    world.tick_to("ready");
+    let built = git(world.clone(), &["rev-parse", "HEAD"]);
+    assert_eq!(world.acts_of("ci.run"), 1);
+    world.world_cmd(&["ready", world.root(), "1"]);
+    world.world_cmd(&[
+        "comment",
+        world.root(),
+        "1",
+        "Test negative numbers too",
+        "--author",
+        "someone",
+    ]);
+    world.tick_to("ready-to-merge");
+    let fixed = git(world.clone(), &["rev-parse", "HEAD"]);
+    assert_ne!(fixed, built, "the Shepherd made a commit");
+    assert_eq!(
+        world.acts_of("ci.run"),
+        2,
+        "the commit of the Shepherd got its own CI run"
+    );
+    let ci: Vec<(String, String)> = world
+        .ledger()
+        .checks_of(KEY, None)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == "ci")
+        .map(|c| (c.head, c.result))
+        .collect();
+    assert_eq!(
+        ci,
+        [
+            (built, "green".to_string()),
+            (fixed.clone(), "green".to_string())
+        ]
+    );
+    let steps: Vec<String> = world
+        .ledger()
+        .spans_of(Some(KEY))
+        .unwrap()
+        .into_iter()
+        .map(|s| s.state)
+        .collect();
+    assert_eq!(
+        steps[steps.len() - 3..],
+        ["comments", "ci-review", "ready-to-merge"]
+    );
+    let remote = git(
+        &world.world.join("remote.git"),
+        &["rev-parse", "refs/heads/vision/DEMO-12"],
+    );
+    assert_eq!(remote, fixed, "the commit is on the forge");
+}

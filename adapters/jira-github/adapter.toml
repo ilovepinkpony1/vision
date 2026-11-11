@@ -37,12 +37,26 @@
 #                          of them answers it. review.reply and the job comments need this key.
 #   ignore_logins          The logins whose comments never wait for an answer, such as a CI bot
 #                          that posts a status comment. Default []. Do not name a reviewer here.
+#                          An entry can also be <login>:<kind>, with the kind inline, review, or
+#                          conversation, such as "review-bot[bot]:conversation": then only the
+#                          comments of that kind of that login never wait, and its reviews and
+#                          inline comments still do. An entry splits at its last `:`, because a
+#                          login can hold `[`, `]`, and `-`. Another kind is an error.
 #   statuses               A table from a role to the status name of the project, such as
 #                          { in_progress = "In Progress", in_review = "In Review" }. tracker.move
 #                          takes the role. The steps below use in_progress and in_review.
 #   envs                   The staging envs: [{ name = "staging", branch = "staging" }]. observe
 #                          tells for each one whether its branch holds the head; deploy merges
-#                          into its branch. Default [].
+#                          into its branch. Default []. An env can also name `deployment`, a
+#                          GitHub environment where the project records a deployment when the
+#                          env runs a commit, such as { name = "staging", branch = "staging",
+#                          deployment = "staging" }. For such an env, observe reads the newest
+#                          deployment of that environment (one call, no deployment status) and
+#                          gives envs.<name>.deployed (true when the commit of the deployment
+#                          holds the head: the same test as holds), deployment_sha, and
+#                          deployed_at. With no deployment yet, deployed is false and the two
+#                          others are null. An env with no `deployment` key has none of the three,
+#                          so a watch of envs.<name>.deployed reads none there.
 #   test_command           The command of the proof. It runs with one test file as its last
 #                          argument: `sh -c '<test_command> "$@"' sh <file>`, in a plain
 #                          environment with no secret, such as "python3 -m pytest -q".
@@ -52,6 +66,18 @@
 #   setup_command          Optional. A shell command that runs in the temporary worktree of the
 #                          base commit before its tests, such as a link to the dependencies of
 #                          the clone ($VISION_CLONE names the clone). Default: none.
+#   test_canary            Optional. One test file, or a list of test files, that exist on the
+#                          base commit and pass there, such as one fast test for each test
+#                          runner of the project. After setup_command, the proof runs each one
+#                          with test_command in the worktree of the base commit, before the
+#                          changed tests. A canary that is missing there or that fails means that
+#                          the worktree cannot run tests (such as a missing dependency): the proof
+#                          does not hold, its check proof-canary has the cause env, no changed
+#                          test runs on the base, and the detail names the canary and asks to fix
+#                          setup_command. A changed test file is never a canary: the proof skips
+#                          it and says so in proof.txt. Without test_canary, a failure of a
+#                          changed test on the base can also come from a broken setup, and the
+#                          detail of the proof ends with a note that no canary guards that run.
 #   lint_command           Optional. Runs with the changed files as its arguments. Default: none.
 #   app_start_command      The shell command that starts the app of the clone for QA.
 #   app_health_url         The address that answers when the app is up, such as
@@ -59,6 +85,19 @@
 #   app_url                The address that the tester opens. Default: the scheme, host, and
 #                          port of app_health_url.
 #   app_start_timeout      Seconds that app-start waits for app_health_url. Default 120.
+#   app_restart            true or false. Default true. app-start remembers the app that it
+#                          started: a state file in the temporary folder, named by a hash of the
+#                          clone and the env, with the process id, the start time of that
+#                          process, the head commit, and the log. When that app still runs and
+#                          the head commit changed, app-start stops its process group and
+#                          starts the app again at the new head, so that QA after a fix tests
+#                          the new code. Set false for an app that loads new code by itself.
+#                          An app that answers and that Vision did not start is left as it is,
+#                          and the detail says that it can run older code. app-start never
+#                          stops a process whose start time differs from the state file. It
+#                          trusts the state file only when it is a plain file of this user that
+#                          no other user can write, because a temporary folder can be shared.
+#                          app-<env>.json names the head of the app and whether it restarted.
 #   second_review_command  Optional. A command that reviews the diff. It gets the range
 #                          "<base>..<head>" as its last argument and prints its findings.
 #                          With no command, the job gives no document, and the review turn gets
@@ -102,6 +141,14 @@
 #              red -> fix-ci
 #   ready-to-merge: merged -> done, changes or comments -> comments
 #
+# review.state is the first value that holds of: merged, closed, comments (a comment waits),
+# changes (a reviewer asks for changes and is not asked again), conflict (the open pull request
+# conflicts with its base), approved, and waiting. Neither in-review nor ready-to-merge names
+# conflict in `on` or `wait`, so a conflict gives the ticket the flag needs-you at once, with
+# the value in the reason. The person then merges the base into the branch in the clone,
+# resolves the conflict, commits, pushes the branch, and runs `vision retry KEY`: the step looks
+# again, and the ticket goes on.
+#
 # Each turn step of a loop has a cap: fix-ci (ci_fix), qa and fix-qa (qa_fix), comments
 # (comments), review (review_rounds). Each wait step names the values that mean "not yet" in
 # `wait`, and its `limit` in seconds: any other value, or a longer wait, needs the person.
@@ -116,16 +163,25 @@
 # ---------------------------------------------------------------------------------------------
 # A project with staging envs writes its own adapter.toml in $VISION_HOME/adapters/<name>/,
 # with `scripts = "<the path of this folder>"`, so that it uses these scripts. It copies the
-# steps below and adds two steps for each env, such as staging, with
-# envs = [{ name = "staging", branch = "staging" }] in the [adapter] table:
+# steps below and adds three steps for each env, such as staging, with
+# envs = [{ name = "staging", branch = "staging", deployment = "staging" }] in the [adapter]
+# table:
 #
 #   [[step]]                      # the step qa then has none = "deploy-staging" in its `on`
 #   id = "deploy-staging"
 #   kind = "wait"
 #   start = [{ verb = "deploy", args = { env = "staging" } }]
 #   watch = "envs.staging.holds"
-#   on = { "true" = "qa-staging" }
+#   on = { "true" = "deployed-staging" }
 #   wait = ["false", "none"]
+#   limit = 3600
+#
+#   [[step]]                      # the env runs the head: its newest deployment holds it
+#   id = "deployed-staging"
+#   kind = "wait"
+#   watch = "envs.staging.deployed"
+#   on = { "true" = "qa-staging" }
+#   wait = ["false"]
 #   limit = 3600
 #
 #   [[step]]
@@ -144,7 +200,10 @@
 # of the new commit, and QA on the env again.
 #
 # `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
-# merge happened, not that the env already runs the new code.
+# merge happened, not that the env already runs the new code. `envs.staging.deployed` says
+# that: the newest deployment of the GitHub environment of the env holds the head. A project
+# whose env records no deployment leaves out the key `deployment` and the step deployed-staging,
+# and its deploy-staging step moves to qa-staging.
 
 name = "jira-github"
 branch = "vision/{key}"

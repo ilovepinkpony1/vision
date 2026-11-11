@@ -130,6 +130,28 @@ impl Ledger {
     pub fn conn_mut(&mut self) -> &mut Connection {
         &mut self.conn
     }
+
+    /// Runs `f` in one immediate transaction: each write of `f`, or none. Inside a transaction
+    /// that is already open, `f` runs as a part of it.
+    pub fn in_transaction<T>(&self, f: impl FnOnce(&Ledger) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return f(self);
+        }
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        match f(self) {
+            Ok(value) => {
+                if let Err(e) = self.conn.execute_batch("COMMIT") {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(e.into());
+                }
+                Ok(value)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
 }
 
 fn user_version(conn: &Connection) -> Result<u32> {

@@ -568,14 +568,21 @@ fn curate_builds_a_proposal_with_its_replays_and_the_review_brings_it_to_main() 
     assert_eq!(run.stdout.trim(), "[]");
 
     // Main has one commit of the person for each accepted change, and the archive of each.
+    // The answer to the question about D-0004, which had no reason, is its reason now.
     let log = git(&dir, &["log", "--format=%an|%s", &format!("{head}..main")]);
     let lines: Vec<&str> = log.lines().collect();
-    assert_eq!(lines.len(), 3, "{log}");
+    assert_eq!(lines.len(), 4, "{log}");
+    assert_eq!(
+        lines[1], "user|Write the reason of D-0004: Never so far.",
+        "{log}"
+    );
+    let accepts: Vec<&&str> = lines.iter().filter(|l| *l != &lines[1]).collect();
     assert!(
-        lines.iter().all(|l| l.starts_with("user|Accept change ")),
+        accepts.iter().all(|l| l.starts_with("user|Accept change ")),
         "{log}"
     );
     assert!(lines[0].contains(&format!("change 4 of {name}")), "{log}");
+    assert!(main_file(&home, "decisions/D-0004.md").contains("## Why\nNever so far.\n"));
     let archive = main_file(&home, "ARCHIVE.md");
     assert!(
         archive.contains(&format!("## {name} change 2\n")),
@@ -722,6 +729,150 @@ fn a_loose_output_of_a_real_session_still_makes_a_valid_principle() {
     assert!(
         text.ends_with("## Not when\nA customer asks for a formatted file.\n"),
         "{text:?}"
+    );
+    home.run(&["memory", "lint"]).expect_code(0);
+}
+
+#[test]
+fn an_answer_to_a_question_about_one_decision_with_no_reason_becomes_its_reason() {
+    let home = TestHome::new();
+    seed(&home);
+    let output = json!({"summary": "Three questions.", "changes": [
+        {"op": "retire", "target": "P-004", "reason": "The person corrected it twice."},
+        {"op": "question", "question": "Why must the log export be CSV?", "evidence": ["D-0004"],
+         "reason": "D-0004 gave no reason."},
+        {"op": "question", "question": "Is CSV still right for the export?", "evidence": ["D-0001"],
+         "reason": "D-0001 is old."},
+        {"op": "question", "question": "Do both exports need CSV?", "evidence": ["D-0001", "D-0004"],
+         "reason": "Two answers chose CSV."},
+    ]});
+    curator_scenario(&home, output, 0.0);
+    home.run(&["curate"]).expect_code(0);
+    assert_eq!(proposals(&home).len(), 1);
+    let dir = memory_dir(&home);
+    let head = git(&dir, &["rev-parse", "main"]);
+
+    // The list says which answer becomes a reason.
+    let text = home.run(&["memory", "review"]);
+    text.expect_code(0);
+    assert!(
+        text.stdout
+            .contains("D-0004 has no reason yet, so your answer becomes its section ## Why."),
+        "{text:?}"
+    );
+    assert_eq!(
+        text.stdout.matches("has no reason yet").count(),
+        1,
+        "{text:?}"
+    );
+    assert!(text.stdout.contains("--answer TEXT"), "{text:?}");
+    let views: Value =
+        serde_json::from_str(&home.run(&["memory", "review", "--json"]).stdout).unwrap();
+    let fills: Vec<Value> = views[0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["answer_fills"].clone())
+        .collect();
+    assert_eq!(
+        fills,
+        [Value::Null, json!("D-0004"), Value::Null, Value::Null]
+    );
+
+    // --answer is refused for a change that is not a question, and nothing changes.
+    for pick in ["1", "all"] {
+        let run = home.run(&["memory", "review", "--accept", pick, "--answer", "Yes."]);
+        run.expect_code(1);
+        assert!(
+            run.stderr.contains("change 1 of")
+                && run
+                    .stderr
+                    .contains("is not one (retire principles/P-004.md)"),
+            "{run:?}"
+        );
+    }
+    let run = home.run(&["memory", "review", "--reject", "1", "--answer", "Yes."]);
+    assert_ne!(run.code, 0, "{run:?}");
+    assert_eq!(git(&dir, &["rev-parse", "main"]), head);
+    let again: Value =
+        serde_json::from_str(&home.run(&["memory", "review", "--json"]).stdout).unwrap();
+    assert_eq!(again[0]["open"], 4, "each change is still open: {again:#}");
+
+    // The answer to the question about D-0004 becomes its reason, as a commit of the person.
+    let run = home.run(&[
+        "memory",
+        "review",
+        "--accept",
+        "2",
+        "--answer",
+        "The log tool reads only CSV.",
+    ]);
+    run.expect_code(0);
+    assert!(
+        run.stdout.contains(
+            "Accepted change 2: question: Why must the log export be CSV?. Your answer is now the reason (## Why) of D-0004, in a commit of yours in the memory."
+        ),
+        "{run:?}"
+    );
+    let d4 = main_file(&home, "decisions/D-0004.md");
+    assert!(
+        d4.contains("## Why\nThe log tool reads only CSV.\n"),
+        "{d4}"
+    );
+    let log = git(&dir, &["log", "--format=%an|%s", &format!("{head}..main")]);
+    assert_eq!(
+        log, "user|Write the reason of D-0004: The log tool reads only CSV.",
+        "{log}"
+    );
+    let rows = home
+        .ledger()
+        .human_rows_after(0, records::HUMAN_ACCEPT)
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].1.reason.as_deref(),
+        Some("The log tool reads only CSV.")
+    );
+    assert!(rows[0]
+        .1
+        .value
+        .as_deref()
+        .unwrap()
+        .contains("\"reason_of\":\"D-0004\""));
+
+    // One answer is for one question: `all` with two open questions is refused.
+    home.run(&["memory", "review", "--reject", "1"])
+        .expect_code(0);
+    let run = home.run(&[
+        "memory",
+        "review",
+        "--accept",
+        "all",
+        "--answer",
+        "Yes, CSV.",
+    ]);
+    run.expect_code(1);
+    assert!(
+        run.stderr
+            .contains("--answer is the answer to one question, and")
+            && run.stderr.contains("has 2 open questions"),
+        "{run:?}"
+    );
+
+    // A decision with a reason, and a question about two decisions: the answer only goes to
+    // the next Curator run.
+    let d1 = main_file(&home, "decisions/D-0001.md");
+    for n in ["3", "4"] {
+        let run = home.run(&["memory", "review", "--accept", n, "--answer", "Yes, CSV."]);
+        run.expect_code(0);
+        assert!(!run.stdout.contains("is now the reason"), "{run:?}");
+    }
+    assert_eq!(main_file(&home, "decisions/D-0001.md"), d1);
+    assert_eq!(
+        git(&dir, &["log", "--format=%s", &format!("{head}..main")])
+            .lines()
+            .count(),
+        1
     );
     home.run(&["memory", "lint"]).expect_code(0);
 }
@@ -1100,4 +1251,385 @@ fn the_tick_starts_a_curator_turn_seven_days_after_the_last_good_run() {
         .is_some());
     tick(&home);
     assert_eq!(curator_turns(&home).len(), 1, "the next week starts now");
+}
+
+// ----- The replays over several ticks -----------------------------------------------------------
+
+/// A gate for the fake Judge of the replays: each replay turn waits until the file exists. The
+/// gate opens when the test drops it, so that no fake waits after a failed test.
+struct Gate(PathBuf);
+
+impl Gate {
+    fn new(home: &TestHome) -> Gate {
+        Gate(home.scenarios.join("replay gate"))
+    }
+
+    fn open(&self) {
+        std::fs::write(&self.0, "open").unwrap();
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.0, "open");
+    }
+}
+
+/// The Judge of [`judge_scenario`], whose replay turns wait for the gate first.
+fn gated_judge_scenario(home: &TestHome, gate: &Gate) {
+    let today = json!({"answers": [
+        entry("Q-0001", "inference", &[], "answer", Some(1)),
+        entry("Q-0002", "inference", &[], "answer", Some(0)),
+        entry("Q-0003", "none", &[], "ask", None),
+    ]});
+    let proposed = json!({"answers": [
+        entry("Q-0001", "principle", &["P-005"], "answer", Some(0)),
+        entry("Q-0002", "inference", &[], "answer", Some(0)),
+        entry("Q-0003", "none", &[], "ask", None),
+    ]});
+    let wait = format!("while [ ! -f '{}' ]; do sleep 0.05; done", gate.0.display());
+    write_scenario(
+        home,
+        "judge",
+        json!([[{"do": "init"}, {"do": "run", "command": wait},
+                {"do": "result", "cost": 0.2, "structured_output": today,
+                 "when": [{"file": "principles/P-005.md", "contains": "status: active",
+                           "set": {"structured_output": proposed}}]},
+                {"do": "exit", "code": 0}]]),
+    );
+}
+
+/// The replay turns of the Judge, oldest first.
+fn replay_turns(home: &TestHome) -> Vec<String> {
+    home.ledger()
+        .turns_of_ticket("curator")
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.agent.as_deref() == Some("judge"))
+        .map(|t| t.id)
+        .collect()
+}
+
+/// The record of the one proposal.
+fn the_record(home: &TestHome) -> ProposalRecord {
+    let names = proposals(home);
+    assert_eq!(names.len(), 1, "one proposal: {names:?}");
+    records::read(&home.ledger(), EVENT_PROPOSAL, &names[0])
+        .unwrap()
+        .unwrap()
+}
+
+fn stage(home: &TestHome) -> String {
+    serde_json::to_value(the_record(home).replays.unwrap().stage)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Waits until the replay turn `id` ended, without a tick.
+fn wait_replay_turn(home: &TestHome, id: &str) {
+    wait_curator_turn(home, id);
+}
+
+/// Starts a Curator run by a merge, and waits for its turn.
+fn curator_run_by_the_tick(home: &TestHome) {
+    assert!(records::record_merged(&home.ledger(), "DEMO-12", 7, None).unwrap());
+    tick(home);
+    let turns = curator_turns(home);
+    assert_eq!(turns.len(), 1);
+    wait_curator_turn(home, &turns[0]);
+}
+
+#[test]
+fn the_replays_run_over_several_ticks_and_no_tick_waits_for_one() {
+    let home = TestHome::new();
+    seed(&home);
+    answered_cards(&home);
+    let gate = Gate::new(&home);
+    gated_judge_scenario(&home, &gate);
+    curator_scenario(&home, fixture_output(), 0.0);
+    curator_run_by_the_tick(&home);
+
+    // The tick applies the result: the proposal, and the first replay turn, which waits at the
+    // gate. The tick does not wait for it, and the next ticks run while it runs.
+    tick(&home);
+    let name = proposals(&home)[0].clone();
+    let turns = replay_turns(&home);
+    assert_eq!(turns.len(), 1, "one replay turn at a time");
+    assert_eq!(stage(&home), "proposed");
+    assert!(
+        records::read::<Applied>(&home.ledger(), EVENT_APPLIED, &curator_turns(&home)[0])
+            .unwrap()
+            .is_some(),
+        "the run is applied before its replays end"
+    );
+    for _ in 0..2 {
+        let run = home.run(&["tick"]);
+        run.expect_code(0);
+        assert!(run.stdout.starts_with("tick done"), "{run:?}");
+    }
+    assert_eq!(replay_turns(&home), turns, "no second replay turn");
+    assert!(!vision::curator::runs::turn_ended(&home.ctx(), &turns[0]));
+
+    // The review shows that the replays run, and it still accepts and rejects.
+    let text = home.run(&["memory", "review"]);
+    text.expect_code(0);
+    assert!(
+        text.stdout.contains(&format!(
+            "Replay: the replays of the Judge still run: the replay with the proposed memory runs (turn {})",
+            turns[0]
+        )),
+        "{text:?}"
+    );
+    let status: Value = serde_json::from_str(&home.run(&["status", "--json"]).stdout).unwrap();
+    assert!(
+        status["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "proposal"
+                && n["text"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("(its replays still run)")),
+        "{status:#}"
+    );
+    let run = home.run(&["memory", "review", "--reject", "4", "--why", "Keep P-004."]);
+    run.expect_code(0);
+    assert!(run.stdout.contains("Rejected change 4"), "{run:?}");
+
+    // The first replay ends: a tick reads it and starts the second one.
+    gate.open();
+    wait_replay_turn(&home, &turns[0]);
+    tick(&home);
+    let record = the_record(&home);
+    let replays = record.replays.clone().unwrap();
+    assert_eq!(replays.proposed.as_ref().unwrap().agree, 2);
+    assert!(replays.today.is_none());
+    let turns = replay_turns(&home);
+    assert_eq!(turns.len(), 2);
+    assert_eq!(
+        replays.running.as_ref().unwrap().started.turn,
+        turns[1],
+        "the record names the running turn"
+    );
+
+    // The second replay ends: the next tick marks the proposal as ready for review.
+    wait_replay_turn(&home, &turns[1]);
+    tick(&home);
+    let replays = the_record(&home).replays.unwrap();
+    assert!(replays.is_done(), "{replays:#?}");
+    assert!(replays.running.is_none());
+    assert_eq!(replays.today.as_ref().unwrap().agree, 1);
+    assert_eq!(replays.changed().len(), 1);
+    let text = home.run(&["memory", "review"]);
+    assert!(
+        text.stdout
+            .contains("with the proposed memory, it gets 2 of 3 right"),
+        "{text:?}"
+    );
+    assert!(!text.stdout.contains("still run"), "{text:?}");
+    tick(&home);
+    assert_eq!(replay_turns(&home).len(), 2, "the replays run once");
+    assert_eq!(proposals(&home), [name]);
+}
+
+#[test]
+fn a_crash_at_each_point_of_the_replays_is_repaired_by_the_next_tick() {
+    let home = TestHome::new();
+    seed(&home);
+    answered_cards(&home);
+    let gate = Gate::new(&home);
+    gated_judge_scenario(&home, &gate);
+    curator_scenario(&home, fixture_output(), 0.0);
+    curator_run_by_the_tick(&home);
+    let crash = |point: &str| {
+        let run = home.run_with(&["tick"], &[("VISION_TEST_CRASH", point)], None);
+        run.expect_code(vision::pipeline::CRASH_CODE);
+    };
+
+    // A stop after the proposal branch is built, before its record: the next tick takes the
+    // branch, and builds no second one.
+    crash("curator-proposal-built");
+    let built = proposals(&home);
+    assert_eq!(built.len(), 1);
+    assert!(
+        records::read::<ProposalRecord>(&home.ledger(), EVENT_PROPOSAL, &built[0])
+            .unwrap()
+            .is_none()
+    );
+    // A stop after the replays are planned, before the first turn starts.
+    crash("curator-replays-planned");
+    assert_eq!(
+        proposals(&home),
+        built,
+        "the branch of the stopped run, and no second one"
+    );
+    assert_eq!(
+        the_record(&home).dropped.len(),
+        1,
+        "the dropped change is kept"
+    );
+    assert_eq!(stage(&home), "proposed");
+    assert!(replay_turns(&home).is_empty());
+    assert!(
+        records::read::<Applied>(&home.ledger(), EVENT_APPLIED, &curator_turns(&home)[0])
+            .unwrap()
+            .is_none(),
+        "the run is not applied yet"
+    );
+    // The next tick starts the first replay, and stops right after it.
+    crash("curator-replay-started");
+    let first = replay_turns(&home);
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        the_record(&home)
+            .replays
+            .unwrap()
+            .running
+            .unwrap()
+            .started
+            .turn,
+        first[0],
+        "the record of the turn came with its row"
+    );
+    tick(&home);
+    assert_eq!(
+        replay_turns(&home),
+        first,
+        "no second turn of the same replay"
+    );
+    assert!(
+        records::read::<Applied>(&home.ledger(), EVENT_APPLIED, &curator_turns(&home)[0])
+            .unwrap()
+            .is_some(),
+        "the run is applied, with the same proposal"
+    );
+
+    // A stop after the first turn ended, before its numbers are stored: they are read again.
+    gate.open();
+    wait_replay_turn(&home, &first[0]);
+    crash("curator-replay-ended");
+    assert!(the_record(&home).replays.unwrap().proposed.is_none());
+    // A stop after the numbers are stored, before the second turn starts.
+    crash("curator-replay-read");
+    let replays = the_record(&home).replays.unwrap();
+    assert_eq!(replays.proposed.as_ref().unwrap().agree, 2);
+    assert!(replays.running.is_none());
+    assert_eq!(stage(&home), "today");
+    tick(&home);
+    let turns = replay_turns(&home);
+    assert_eq!(turns.len(), 2);
+    wait_replay_turn(&home, &turns[1]);
+    tick(&home);
+    let replays = the_record(&home).replays.unwrap();
+    assert!(replays.is_done());
+    assert_eq!(replays.today.as_ref().unwrap().agree, 1);
+    assert_eq!(replays.proposed.as_ref().unwrap().agree, 2);
+    assert_eq!(proposals(&home).len(), 1, "no second proposal");
+    assert_eq!(replay_turns(&home).len(), 2, "no lost and no second replay");
+}
+
+#[test]
+fn a_replay_turn_above_the_time_limit_is_killed_by_a_later_tick() {
+    let home = TestHome::new();
+    seed(&home);
+    answered_cards(&home);
+    let gate = Gate::new(&home);
+    gated_judge_scenario(&home, &gate);
+    curator_scenario(&home, fixture_output(), 0.0);
+    curator_run_by_the_tick(&home);
+    tick(&home);
+    let turns = replay_turns(&home);
+    assert_eq!(turns.len(), 1);
+    // The turn started long ago, as the record says: the next tick kills it, and a later tick
+    // reads it as timed out and goes on.
+    let name = proposals(&home)[0].clone();
+    let ledger = home.ledger();
+    let mut record = the_record(&home);
+    record
+        .replays
+        .as_mut()
+        .unwrap()
+        .running
+        .as_mut()
+        .unwrap()
+        .started
+        .started = "2026-01-01T00:00:00Z".into();
+    records::put(&ledger, "tick", EVENT_PROPOSAL, &name, &record).unwrap();
+    tick(&home);
+    assert!(the_record(&home).replays.unwrap().running.unwrap().killed);
+    wait_replay_turn(&home, &turns[0]);
+    tick(&home);
+    let replays = the_record(&home).replays.unwrap();
+    let proposed = replays.proposed.unwrap();
+    assert!(proposed.timed_out, "{proposed:#?}");
+    assert_eq!(
+        proposed.to_person, 3,
+        "a killed replay sends each card to the person"
+    );
+    assert_eq!(stage(&home), "today");
+    gate.open();
+    let turns = replay_turns(&home);
+    assert_eq!(turns.len(), 2);
+    wait_replay_turn(&home, &turns[1]);
+    tick(&home);
+    assert!(the_record(&home).replays.unwrap().is_done());
+}
+
+#[test]
+fn curate_waits_for_the_replays_without_the_lock_of_the_tick() {
+    let home = TestHome::new();
+    seed(&home);
+    answered_cards(&home);
+    let gate = Gate::new(&home);
+    gated_judge_scenario(&home, &gate);
+    curator_scenario(&home, fixture_output(), 0.0);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_vision"));
+    command
+        .arg("curate")
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", &home.user_home)
+        .env("VISION_HOME", &home.vision)
+        .env("VISION_CLAUDE_BIN", turn_support::fake_claude())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(tmp) = std::env::var_os("TMPDIR") {
+        command.env("TMPDIR", tmp);
+    }
+    let curate = command.spawn().unwrap();
+    // The first replay turn starts, and curate waits for it.
+    let first = wait_for(Duration::from_secs(60), "the first replay turn", || {
+        replay_turns(&home).into_iter().next()
+    });
+    // The tick runs while curate waits: curate holds the lock of the tick only for a moment,
+    // after the start of the turn, and never while the turn runs.
+    wait_for(Duration::from_secs(60), "a tick while curate waits", || {
+        let run = home.run(&["tick"]);
+        run.expect_code(0);
+        run.stdout.starts_with("tick done").then_some(())
+    });
+    assert!(!vision::curator::runs::turn_ended(&home.ctx(), &first));
+    assert_eq!(replay_turns(&home), std::slice::from_ref(&first));
+    gate.open();
+    let output = curate.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("The Judge replays the last answers of the person for"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Replay of 3 answers: today 1 right, 1 wrong, 1 to the person; proposed 2 right, 0 wrong, 1 to the person; 1 card(s) changed side."),
+        "{stdout}"
+    );
+    assert!(the_record(&home).replays.unwrap().is_done());
+    assert_eq!(replay_turns(&home).len(), 2);
 }

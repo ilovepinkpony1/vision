@@ -7,7 +7,9 @@
 //! the lint, `r` rejects (with an optional reason), `s` skips, and `q` leaves.
 //!
 //! Without a terminal it prints the open proposals and exits; `--json` prints them as JSON.
-//! `--accept N|all` and `--reject N|all [--why TEXT]` act without a terminal.
+//! `--accept N|all [--answer TEXT]` and `--reject N|all [--why TEXT]` act without a terminal.
+//! An answer to a question that names exactly one decision with an empty section `## Why`
+//! becomes that reason, as a commit of the person.
 //!
 //! An accepted change reaches `main` as one commit of the person; a candidate principle
 //! becomes active with the person as `by`. Each verdict is a `human` row, so that the next run
@@ -65,6 +67,9 @@ pub struct ChangeOverview {
     pub commit: Option<String>,
     pub evidence: Vec<EvidenceView>,
     pub diffs: Vec<FileDiff>,
+    /// A question that names exactly one decision as evidence, whose section `## Why` is empty:
+    /// the answer of the person becomes the reason of that decision.
+    pub answer_fills: Option<String>,
 }
 
 /// One proposal, for the review.
@@ -116,6 +121,7 @@ fn build_overview(
             commit: c.change.commit.clone(),
             evidence: evidence(memory, &c.change),
             diffs: c.diffs.clone(),
+            answer_fills: answer_fills(memory, &c.change).map(|d| d.to_string()),
         })
         .collect();
     let replays = record.as_ref().and_then(|r| r.replays.clone());
@@ -171,6 +177,27 @@ fn evidence(memory: &Memory, change: &ProposalChange) -> Vec<EvidenceView> {
             }
         })
         .collect()
+}
+
+/// The decision whose empty section `## Why` the answer to a question gets: the question
+/// names exactly one decision as evidence, and that decision has no reason yet.
+pub fn answer_fills(memory: &Memory, change: &ProposalChange) -> Option<DecisionId> {
+    if change.op != Op::Question {
+        return None;
+    }
+    let mut decisions: Vec<DecisionId> = Vec::new();
+    for id in &change.evidence {
+        if let Ok(d) = DecisionId::parse(id.trim()) {
+            if !decisions.contains(&d) {
+                decisions.push(d);
+            }
+        }
+    }
+    let [only] = decisions.as_slice() else {
+        return None;
+    };
+    let decision = memory.decision(*only).ok()?;
+    decision.why.trim().is_empty().then_some(*only)
 }
 
 /// The proposals with an open change, or the one that `only` names.
@@ -241,8 +268,31 @@ fn object(name: &str, n: usize) -> String {
     format!("{name} change {n}")
 }
 
+/// What the acceptance of one change did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptedChange {
+    pub accepted: Accepted,
+    /// The decision whose empty section `## Why` got the answer of the person, as a commit of
+    /// the person.
+    pub reason_of: Option<DecisionId>,
+}
+
+impl AcceptedChange {
+    /// The line for people about the reason that the answer wrote, or the empty text.
+    pub fn reason_text(&self) -> String {
+        match self.reason_of {
+            Some(id) => format!(
+                " Your answer is now the reason (## Why) of {id}, in a commit of yours in the memory."
+            ),
+            None => String::new(),
+        }
+    }
+}
+
 /// Accepts one change, and records the verdict. `answer` is the answer of the person to a
-/// question of the Curator.
+/// question of the Curator: the next Curator run reads it, and when the question names exactly
+/// one decision with an empty section `## Why`, it becomes that reason first, as a commit of
+/// the person. An answer to a change that is not a question is an error.
 pub fn accept(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -251,9 +301,35 @@ pub fn accept(
     change: &ProposalChange,
     answer: Option<&str>,
     edited: bool,
-) -> Result<Accepted> {
-    let accepted = memory.accept_change(name, change.n)?;
+) -> Result<AcceptedChange> {
     let answer = answer.map(str::trim).filter(|a| !a.is_empty());
+    if answer.is_some() && change.op != Op::Question {
+        bail!(
+            "change {} of {name} is not a question ({}), so it takes no answer. Accept it without --answer",
+            change.n,
+            change.describe()
+        );
+    }
+    // The reason comes before the verdict: when it cannot be written, the change stays open.
+    let mut reason_of = None;
+    if let (Some(text), Some(id)) = (answer, answer_fills(memory, change)) {
+        if memory
+            .fill_decision_why(id, text, memory.person())
+            .with_context(|| {
+                format!(
+                    "could not write your answer as the reason of {id}, so change {} stays open",
+                    change.n
+                )
+            })?
+        {
+            reason_of = Some(id);
+            ctx.log(&format!(
+                "curator: the answer to change {} of {name} is the reason of {id}",
+                change.n
+            ));
+        }
+    }
+    let accepted = memory.accept_change(name, change.n)?;
     ledger.add_human(&HumanRow {
         at: time::now_rfc3339(),
         ticket: None,
@@ -263,6 +339,7 @@ pub fn accept(
             json!({
                 "op": change.op, "path": accepted.path, "commit": accepted.commit,
                 "question": change.question, "edited": edited,
+                "reason_of": reason_of.map(|d| d.to_string()),
             })
             .to_string(),
         ),
@@ -270,7 +347,10 @@ pub fn accept(
         seconds: None,
     })?;
     ctx.log(&format!("curator: accepted change {} of {name}", change.n));
-    Ok(accepted)
+    Ok(AcceptedChange {
+        accepted,
+        reason_of,
+    })
 }
 
 /// Rejects one change, and records it with the reason of the person for the next Curator run.
@@ -409,7 +489,7 @@ pub fn command(ctx: &Ctx, args: ReviewArgs) -> Result<()> {
         }
         out.push('\n');
     }
-    out.push_str("Run `vision memory review` in a terminal, or use --accept N|all and --reject N|all [--why TEXT].\n");
+    out.push_str("Run `vision memory review` in a terminal, or use --accept N|all [--answer TEXT] and --reject N|all [--why TEXT].\n");
     print!("{out}");
     Ok(())
 }
@@ -453,17 +533,47 @@ fn targets(view: &ProposalView, pick: Pick) -> Result<Vec<ProposalChange>> {
 
 /// `--accept N|all` or `--reject N|all [--why TEXT]`.
 fn act(ctx: &Ctx, ledger: &Ledger, memory: &Memory, args: &ReviewArgs) -> Result<()> {
+    if args.answer.is_some() && args.accept.is_none() {
+        bail!("--answer goes with --accept N, the number of a question of the Curator");
+    }
     let name = pick_proposal(memory, args.proposal.as_deref())?;
     let view = memory.proposal(&name)?;
     let mut failed = 0;
     if let Some(pick) = args.accept {
-        for change in targets(&view, pick)? {
-            match accept(ctx, ledger, memory, &name, &change, None, false) {
-                Ok(accepted) => println!(
-                    "Accepted change {}: {}{}.",
+        let changes = targets(&view, pick)?;
+        if args.answer.is_some() {
+            if let Some(other) = changes.iter().find(|c| c.op != Op::Question) {
+                bail!(
+                    "--answer is for a question of the Curator, and change {} of {name} is not one ({}). Accept it without --answer, or name the question with --accept N",
+                    other.n,
+                    other.describe()
+                );
+            }
+            // One answer is for one question: the same text for two questions can become the
+            // reason of a decision that it does not fit.
+            if changes.len() > 1 {
+                bail!(
+                    "--answer is the answer to one question, and {name} has {} open questions. Name the question with --accept N",
+                    changes.len()
+                );
+            }
+        }
+        for change in changes {
+            match accept(
+                ctx,
+                ledger,
+                memory,
+                &name,
+                &change,
+                args.answer.as_deref(),
+                false,
+            ) {
+                Ok(done) => println!(
+                    "Accepted change {}: {}{}.{}",
                     change.n,
                     change.describe(),
-                    commit_text(&accepted)
+                    commit_text(&done.accepted),
+                    done.reason_text()
                 ),
                 Err(e) => {
                     failed += 1;
@@ -516,6 +626,11 @@ pub fn proposal_text(view: &Overview) -> String {
         out.push_str(&format!("The Curator says: {}\n", view.summary.trim()));
     }
     match &view.replays {
+        Some(replays) if !replays.is_done() => {
+            if let Some(line) = replays.running_text() {
+                out.push_str(&format!("Replay: {line}.\n"));
+            }
+        }
         Some(replays) => {
             if let (Some(today), Some(proposed)) = (&replays.today, &replays.proposed) {
                 out.push_str(&format!(
@@ -573,6 +688,11 @@ pub fn change_text(change: &ChangeOverview, total: usize) -> String {
     out.push_str(&format!("  Reason: {}\n", change.reason.trim()));
     if let Some(note) = &change.note {
         out.push_str(&format!("  Note: {note}\n"));
+    }
+    if let Some(id) = &change.answer_fills {
+        out.push_str(&format!(
+            "  {id} has no reason yet, so your answer becomes its section ## Why.\n"
+        ));
     }
     if !change.evidence.is_empty() {
         out.push_str("  Evidence:\n");
@@ -824,22 +944,29 @@ fn one_change(
         match key {
             Key::Char('a') => {
                 let answer = if change.op == Op::Question {
-                    write!(
-                        out,
-                        "Your answer, for the next Curator run (Enter for none): "
-                    )?;
+                    match answer_fills(memory, change) {
+                        Some(id) => write!(
+                            out,
+                            "Your answer. It becomes the reason of {id}, and the next Curator run reads it (Enter for none): "
+                        )?,
+                        None => write!(
+                            out,
+                            "Your answer, for the next Curator run (Enter for none): "
+                        )?,
+                    }
                     out.flush()?;
                     keys.line()?
                 } else {
                     None
                 };
                 match accept(ctx, ledger, memory, name, change, answer.as_deref(), false) {
-                    Ok(accepted) => {
+                    Ok(done) => {
                         writeln!(
                             out,
-                            "Accepted change {}{}.",
+                            "Accepted change {}{}.{}",
                             change.n,
-                            commit_text(&accepted)
+                            commit_text(&done.accepted),
+                            done.reason_text()
                         )?;
                         return Ok(Choice::Next);
                     }
@@ -856,12 +983,12 @@ fn one_change(
                 };
                 match edit(memory, name, change, editor) {
                     Ok(_) => match accept(ctx, ledger, memory, name, change, None, true) {
-                        Ok(accepted) => {
+                        Ok(done) => {
                             writeln!(
                                 out,
                                 "Accepted your text of change {}{}.",
                                 change.n,
-                                commit_text(&accepted)
+                                commit_text(&done.accepted)
                             )?;
                             return Ok(Choice::Next);
                         }

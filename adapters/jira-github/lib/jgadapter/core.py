@@ -170,6 +170,15 @@ class Config:
             raise Failure("`%s` in the [adapter] table must be a number above 0" % key)
         return value
 
+    def flag(self, key, default):
+        """A key that is true or false."""
+        value = self.table.get(key)
+        if value is None:
+            return default
+        if not isinstance(value, bool):
+            raise Failure("`%s` in the [adapter] table must be true or false" % key)
+        return value
+
     def logins(self, key):
         """A list of GitHub logins, lowercase."""
         value = self.get(key, [])
@@ -202,7 +211,9 @@ class Config:
         return self.number("http_timeout", DEFAULT_HTTP_TIMEOUT)
 
     def envs(self):
-        """The staging envs: a list of tables with `name` and `branch`."""
+        """The staging envs: a list of tables with `name` and `branch`, and the optional
+        `deployment`: the name of a GitHub environment whose deployments tell which commit the
+        env runs."""
         value = self.get("envs", [])
         if isinstance(value, dict):
             value = [dict(v, name=k) for k, v in value.items() if isinstance(v, dict)]
@@ -212,7 +223,14 @@ class Config:
         for item in value:
             if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not isinstance(item.get("branch"), str):
                 raise Failure("each item of `envs` needs `name` and `branch`, such as { name = \"staging\", branch = \"staging\" }")
-            out.append({"name": item["name"], "branch": item["branch"]})
+            env = {"name": item["name"], "branch": item["branch"]}
+            deployment = item.get("deployment")
+            if deployment is not None:
+                if not isinstance(deployment, str) or not deployment.strip():
+                    raise Failure("`deployment` of the env %s must be the name of a GitHub environment, such as \"staging\""
+                                  % clean(item["name"], 40))
+                env["deployment"] = deployment.strip()
+            out.append(env)
         return out
 
 

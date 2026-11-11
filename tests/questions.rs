@@ -1176,6 +1176,93 @@ fn two_ticks_in_a_row_and_a_tick_after_a_crash_create_nothing_twice() {
 }
 
 #[test]
+fn a_crash_after_the_decision_of_the_person_keeps_its_human_row() {
+    let home = TestHome::new();
+    judge_scenario(
+        &home,
+        json!([judge_result(vec![
+            entry("Q-0001", "ask", "none", &[], false, None),
+            entry("Q-0002", "ask", "none", &[], false, None),
+        ])]),
+    );
+    ask(
+        &home,
+        "crash",
+        vec![card(1, &[]), card(2, &[])],
+        resumed_steps(),
+    );
+    judge_round(&home);
+    assert_eq!(states(&home), ["asked", "asked"]);
+    let humans = |id: &str| {
+        home.ledger()
+            .human_rows(id)
+            .unwrap()
+            .into_iter()
+            .filter(|h| h.kind == "answer")
+            .collect::<Vec<_>>()
+    };
+
+    // The process stops after the commit of the decision file and before its row is answered.
+    let run = home.run_with(
+        &[
+            "answer",
+            "Q-0001",
+            "--choice",
+            "2",
+            "--why",
+            "Sheets keep formulas.",
+        ],
+        &[("VISION_TEST_CRASH", "decision-committed")],
+        None,
+    );
+    run.expect_code(vision::pipeline::CRASH_CODE);
+    assert_eq!(decision_files(&home), ["D-0001.md"]);
+    assert!(memory_file(&home, "decisions/D-0001.md").contains("by: user"));
+    assert_eq!(row(&home, "Q-0001").state, "recording");
+    let rows_now = humans("Q-0001");
+    assert_eq!(rows_now.len(), 1, "the human row came first");
+    assert_eq!(rows_now[0].value.as_deref(), Some("XLSX"));
+    assert_eq!(rows_now[0].reason.as_deref(), Some("Sheets keep formulas."));
+
+    // A later tick ends the recording with the same file, and writes no second human row.
+    home.ledger()
+        .conn()
+        .execute(
+            "UPDATE questions SET answered = '2026-01-01T00:00:00Z' WHERE id = 'Q-0001'",
+            [],
+        )
+        .unwrap();
+    tick(&home);
+    let q1 = row(&home, "Q-0001");
+    assert_eq!(q1.state, "answered");
+    assert_eq!(q1.decision.as_deref(), Some("D-0001"));
+    assert_eq!(decision_files(&home), ["D-0001.md"]);
+    assert_eq!(humans("Q-0001").len(), 1);
+
+    // A stop right after the start of the recording: the row and its human row, and no file.
+    let run = home.run_with(
+        &["answer", "Q-0002", "--choice", "1"],
+        &[("VISION_TEST_CRASH", "answer-recording")],
+        None,
+    );
+    run.expect_code(vision::pipeline::CRASH_CODE);
+    assert_eq!(decision_files(&home), ["D-0001.md"]);
+    assert_eq!(humans("Q-0002").len(), 1);
+    home.ledger()
+        .conn()
+        .execute(
+            "UPDATE questions SET answered = '2026-01-01T00:00:00Z' WHERE id = 'Q-0002'",
+            [],
+        )
+        .unwrap();
+    tick(&home);
+    assert_eq!(row(&home, "Q-0002").state, "answered");
+    assert_eq!(decision_files(&home), ["D-0001.md", "D-0002.md"]);
+    assert!(memory_file(&home, "decisions/D-0002.md").contains("by: user"));
+    assert_eq!(humans("Q-0002").len(), 1);
+}
+
+#[test]
 fn a_command_that_waits_for_the_tick_says_so() {
     let home = TestHome::new();
     judge_scenario(&home, json!([[{"do": "init"}, {"do": "hang"}]]));

@@ -7,10 +7,14 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 from fixtures import HEAD, REPO_PATH, GitHubWorld, comment, issue_comment, pull, review_with, run
 from support import SECRETS, AdapterTest, git
+
+from jgadapter import jobs
 
 # A test is a plain script: it exits with 0 when it passes.
 TEST_COMMAND = "python3 -B"
@@ -192,6 +196,73 @@ class Proof(AdapterTest):
         self.assertIn("setup_command failed", answer["detail"])
         self.assert_no_worktree_left()
 
+    def canary_rows(self, answer):
+        return [(c["kind"], c["result"], c["command"], c["cause"]) for c in answer["checks"] if c["kind"] == "proof-canary"]
+
+    def test_a_canary_that_passes_guards_the_run_on_the_base(self):
+        self.repo.write({"calc.py": CALC_SUB, "tests/test_sub.py": TEST_SUB})
+        head = self.repo.commit("add sub")
+        answer = self.proof(head, test_canary="tests/test_add.py")
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual([c["kind"] for c in answer["checks"]], ["proof-head", "proof-canary", "proof-base"],
+                         "the canary runs before the changed tests on the base")
+        self.assertEqual(self.canary_rows(answer), [("proof-canary", "pass", "python3 -B tests/test_add.py", "")])
+        self.assertNotIn("no canary", answer["detail"])
+        self.assertIn("the canary tests/test_add.py on the base", answer["documents"][0]["content"])
+        # With no test_canary, the proof works as before, with a note at the end of its detail.
+        answer = self.proof(head)
+        self.assertTrue(answer["ok"], answer)
+        self.assertTrue(answer["detail"].endswith("; no canary guards the run on the base (set test_canary)"), answer)
+        self.assertEqual(self.canary_rows(answer), [])
+        self.assert_no_worktree_left()
+
+    def test_a_broken_setup_fails_the_canary_and_the_proof_does_not_hold(self):
+        self.repo.write({"calc.py": CALC_SUB, "tests/test_sub.py": TEST_SUB})
+        head = self.repo.commit("add sub")
+        # The setup breaks the worktree of the base: no test can import calc there. Without a
+        # canary, the changed test fails on the base for that wrong reason, and the proof holds.
+        broken = "rm calc.py"
+        answer = self.proof(head, setup_command=broken)
+        self.assertTrue(answer["ok"], answer)
+        answer = self.proof(head, setup_command=broken, test_canary=["tests/test_add.py"])
+        self.assertFalse(answer["ok"], answer)
+        self.assertEqual(self.canary_rows(answer), [("proof-canary", "fail", "python3 -B tests/test_add.py", "env")])
+        self.assertFalse([c for c in answer["checks"] if c["kind"] == "proof-base"], "no changed test runs on the base")
+        detail = answer["detail"]
+        self.assertIn("the worktree of the base commit %s cannot run tests" % self.repo.base[:12], detail)
+        self.assertIn("the canary tests/test_add.py fails there", detail)
+        self.assertIn("Fix setup_command", detail)
+        self.assert_no_worktree_left()
+
+    def test_a_missing_canary_file_and_a_canary_that_is_a_changed_test(self):
+        self.repo.write({"calc.py": CALC_SUB, "tests/test_sub.py": TEST_SUB})
+        head = self.repo.commit("add sub")
+        answer = self.proof(head, test_canary="tests/test_smoke.py")
+        self.assertFalse(answer["ok"], answer)
+        self.assertEqual(self.canary_rows(answer), [("proof-canary", "fail", "python3 -B tests/test_smoke.py", "env")])
+        self.assertIn("the canary tests/test_smoke.py is missing there", answer["detail"])
+        self.assertIn("Fix setup_command", answer["detail"])
+        self.assertFalse([c for c in answer["checks"] if c["kind"] == "proof-base"])
+        # A changed test is never a canary: it is skipped, and the log says so.
+        answer = self.proof(head, test_canary=["tests/test_sub.py"])
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual(self.canary_rows(answer), [])
+        self.assertIn("the canary tests/test_sub.py is a changed test, so it is no canary: skipped",
+                      answer["documents"][0]["content"])
+        self.assertIn("no canary guards the run on the base, because each one is a changed test", answer["detail"])
+        answer = self.proof(head, test_canary=["./tests/test_sub.py", "tests/test_add.py"])
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual(self.canary_rows(answer), [("proof-canary", "pass", "python3 -B tests/test_add.py", "")])
+        # No test runs on the base: no canary runs either.
+        answer = self.proof(head, args={"green": True}, test_canary="tests/test_smoke.py")
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual(self.canary_rows(answer), [])
+        result = self.job("proof", config=self.config(test_command=TEST_COMMAND, test_glob="tests/*.py", test_canary=3),
+                          clone=self.repo.clone, base=self.repo.base, head=head)
+        self.assertEqual(result.code, 1)
+        self.assertIn("`test_canary` in the [adapter] table must be a test file or a list of test files", result.stderr)
+        self.assert_no_worktree_left()
+
     def test_missing_keys_are_named(self):
         result = self.job("proof", config=self.config(test_glob="tests/*.py"), clone=self.repo.clone,
                           base=self.repo.base, head=self.repo.base)
@@ -333,6 +404,37 @@ class Comments(AdapterTest):
         self.assertEqual([(r["kind"], r["id"]) for r in rows],
                          [("inline", 20), ("inline", 30), ("inline", 50), ("inline", 70),
                           ("review", 40), ("conversation", 60), ("conversation", 61)])
+        # An entry with a kind: only that kind of comment of the login never waits.
+        result = self.job("comments", pr=7, secrets=SECRETS, config=self.config(ignore_logins=["CI-Bot:conversation"]))
+        self.assertEqual(result.code, 0, result)
+        rows = json.loads(result.json["documents"][0]["content"])
+        self.assertEqual([(r["kind"], r["id"]) for r in rows],
+                         [("inline", 20), ("inline", 30), ("inline", 50), ("inline", 70),
+                          ("review", 40), ("conversation", 61)])
+        result = self.job("comments", pr=7, secrets=SECRETS,
+                          config=self.config(ignore_logins=["ci-bot:inline", "ci-bot:review"]))
+        rows = json.loads(result.json["documents"][0]["content"])
+        self.assertEqual([(r["kind"], r["id"]) for r in rows],
+                         [("inline", 20), ("inline", 30), ("inline", 50), ("conversation", 60), ("conversation", 61)])
+
+    def test_an_ignored_login_with_a_kind_splits_at_the_last_colon(self):
+        w = self.world
+        w.reviews = [review_with(40, "review-bot[bot]", "COMMENTED", "Two findings below.")]
+        w.comments += [comment(80, "review-bot[bot]", "A null check is missing.", line=3)]
+        w.issue_comments = [issue_comment(60, "review-bot[bot]", "Review in progress.")]
+        result = self.job("comments", pr=7, secrets=SECRETS,
+                          config=self.config(ignore_logins=["review-bot[bot]:conversation"]))
+        self.assertEqual(result.code, 0, result)
+        rows = json.loads(result.json["documents"][0]["content"])
+        self.assertEqual([(r["kind"], r["id"]) for r in rows],
+                         [("inline", 20), ("inline", 30), ("inline", 80), ("review", 40)],
+                         "the review and the inline comment of the bot still wait")
+        calls = len(self.server.calls())
+        result = self.job("comments", pr=7, secrets=SECRETS, config=self.config(ignore_logins=["review-bot[bot]:status"]))
+        self.assertEqual(result.code, 1)
+        self.assertIn("inline, review, or conversation", result.stderr)
+        self.assertIn("review-bot[bot]:status", result.stderr)
+        self.assertEqual(len(self.server.calls()), calls, "a bad entry is refused before any call")
 
     def test_no_pull_request_and_a_missing_key(self):
         self.world.pr = None
@@ -494,6 +596,130 @@ class AppStart(AdapterTest):
         result = self.job("app-start", config=self.config(app_health_url=self.health), clone=self.clone)
         self.assertEqual(result.code, 1)
         self.assertIn("app_start_command", result.stderr)
+        result = self.job("app-start", config=self.config(app_start_command="exit 1", app_health_url=self.health,
+                                                          app_restart="yes"), clone=self.clone)
+        self.assertEqual(result.code, 1)
+        self.assertIn("`app_restart` in the [adapter] table must be true or false", result.stderr)
+
+    # The app and a new commit: the job remembers the app that it started.
+
+    def commit(self, text):
+        if not os.path.isdir(os.path.join(self.clone, ".git")):
+            git(["init", "--quiet"], self.clone)
+        with open(os.path.join(self.clone, "app.txt"), "w") as handle:
+            handle.write(text)
+        git(["add", "app.txt"], self.clone)
+        git(["commit", "--quiet", "-m", text], self.clone)
+        return git(["rev-parse", "HEAD"], self.clone)
+
+    def state_files(self):
+        return sorted(n for n in os.listdir(self.scratch) if n.startswith("vision-app-") and n.endswith(".json"))
+
+    def state_path(self):
+        with mock.patch.object(tempfile, "tempdir", self.scratch):
+            return jobs.app_state_path(self.clone, "local")
+
+    def test_a_new_head_restarts_the_app_that_the_job_started(self):
+        first = self.commit("one")
+        answer, info = self.start_app()
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual((info["head"], info["restarted"]), (first, False))
+        self.assertEqual(self.state_files(), [os.path.basename(self.state_path())])
+        with open(self.state_path()) as handle:
+            state = json.load(handle)
+        self.assertEqual((state["pid"], state["head"], state["log"]), (info["pid"], first, info["log"]))
+        self.assertTrue(state["started"])
+        # The same head: the app runs on.
+        again, same = self.start("exit 9")
+        self.assertTrue(again["ok"], again)
+        self.assertIn("the app that Vision started (process id %d) already answers" % info["pid"], again["detail"])
+        self.assertEqual((same["started"], same["pid"], same["head"]), (False, info["pid"], first))
+        # A fix commit: the job stops the app of the old head and starts the app at the new one.
+        second = self.commit("two")
+        answer, fresh = self.start(self.app_command())
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual((fresh["started"], fresh["restarted"], fresh["head"]), (True, True, second))
+        self.assertNotEqual(fresh["pid"], info["pid"])
+        self.assertFalse(alive(info["pid"]), "the app of the old head is gone")
+        self.assertTrue(alive(fresh["pid"]))
+        self.assertIn("It stopped the app of the head %s first" % first[:12], answer["detail"])
+        with open(self.state_path()) as handle:
+            self.assertEqual(json.load(handle)["pid"], fresh["pid"])
+
+    def test_app_restart_false_keeps_the_app_of_an_older_head(self):
+        self.commit("one")
+        answer, info = self.start_app()
+        self.assertTrue(answer["ok"], answer)
+        second = self.commit("two")
+        again, same = self.start(self.app_command(), app_restart=False)
+        self.assertTrue(again["ok"], again)
+        self.assertFalse(same["started"])
+        self.assertEqual(same["pid"], info["pid"])
+        self.assertIn("app_restart is false", again["detail"])
+        self.assertIn(second[:12], again["detail"])
+        self.assertTrue(alive(info["pid"]))
+
+    def test_an_app_that_the_person_started_is_left_as_it_is(self):
+        self.commit("one")
+        person = subprocess.Popen([sys.executable, "-B", "-u", self.app, str(self.port)], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, start_new_session=True)
+        self.addCleanup(end, person)
+        self.assertIn(b"listening", person.stdout.readline(), "the app of the person listens")
+        answer, info = self.start(self.app_command())
+        self.assertTrue(answer["ok"], answer)
+        self.assertFalse(info["started"])
+        self.assertIsNone(info["head"])
+        self.assertIn("Vision did not start it, so it can run older code than the head", answer["detail"])
+        self.assertEqual(self.state_files(), [])
+        self.assertIsNone(person.poll(), "the app of the person runs on")
+
+    def test_a_process_id_that_names_a_different_process_is_never_stopped(self):
+        self.commit("one")
+        other = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(end, other)
+        # The state of an app that ended: the system gave its process id to a different process,
+        # which started at a different time.
+        with open(self.state_path(), "w") as handle:
+            json.dump({"pid": other.pid, "started": "Mon Jan  1 00:00:00 2001", "head": "0" * 40, "log": None}, handle)
+        answer, info = self.start_app()
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual((info["started"], info["restarted"]), (True, False))
+        self.assertIsNone(other.poll(), "a process that the job did not start lives on")
+        with open(self.state_path()) as handle:
+            self.assertEqual(json.load(handle)["pid"], info["pid"])
+
+    def test_a_state_file_that_another_user_can_write_is_never_trusted(self):
+        self.commit("one")
+        other = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(end, other)
+        # The state names a process that runs, with its true start time and an older head: the
+        # job would stop it. But each user can write the file, so the job does not trust it.
+        state = {"pid": other.pid, "started": jobs.running_since(other.pid), "head": "0" * 40, "log": None}
+        self.assertTrue(state["started"], "the system reports the start time of a process that runs")
+        with open(self.state_path(), "w") as handle:
+            json.dump(state, handle)
+        os.chmod(self.state_path(), 0o666)
+        self.assertIsNone(jobs.read_app_state(self.state_path()))
+        answer, info = self.start_app()
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual((info["started"], info["restarted"]), (True, False))
+        self.assertIsNone(other.poll(), "a process of a state file that is not trusted lives on")
+        # The job wrote its own state in the place of that file, for this user only.
+        self.assertEqual(os.stat(self.state_path()).st_mode & 0o777, 0o600)
+        with open(self.state_path()) as handle:
+            self.assertEqual(json.load(handle)["pid"], info["pid"])
+        stop(info["pid"])
+        # A link at the name of the state file is not followed, whatever it points to.
+        real = os.path.join(self.scratch, "planted.json")
+        with open(real, "w") as handle:
+            json.dump(state, handle)
+        os.remove(self.state_path())
+        os.symlink(real, self.state_path())
+        self.assertIsNone(jobs.read_app_state(self.state_path()))
+        os.remove(self.state_path())
+        # The same content in a plain file of this user is the state of the job.
+        os.chmod(real, 0o600)
+        self.assertEqual(jobs.read_app_state(real)["pid"], other.pid)
 
 
 def alive(pid):
@@ -503,6 +729,14 @@ def alive(pid):
         return False
     # A zombie of a finished child counts as gone.
     return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], stdout=subprocess.PIPE).stdout.decode().strip()[:1] not in ("Z", "")
+
+
+def end(proc):
+    """Ends a process that the test started, and its pipe."""
+    stop(proc.pid)
+    proc.wait()
+    if proc.stdout:
+        proc.stdout.close()
 
 
 def stop(pid):

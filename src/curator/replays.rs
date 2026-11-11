@@ -6,23 +6,32 @@
 //! person accepted each change: a candidate principle that the proposal writes is active there.
 //! The replay against `main` is stored for one commit, one model, and one set of cards, so that
 //! the next proposal of the same day reuses it.
+//!
+//! The replays run over several ticks ([`begin`], then [`advance`] at each tick): a tick starts
+//! one replay turn, and a later tick reads it and starts the next one. No tick holds its lock
+//! while a replay turn runs.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use ::time::OffsetDateTime;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::records::{self, EVENT_BASELINE};
+use super::records::{self, ProposalRecord, EVENT_BASELINE, EVENT_PROPOSAL};
 use crate::ctx::Ctx;
 use crate::ledger::Ledger;
 use crate::memory::doc::Doc;
 use crate::memory::front::Value;
 use crate::memory::{ChangeState, Memory, Op, ProposalView, Status};
 use crate::models;
-use crate::questions::{replay, ReplayOptions, ReplayReport, JUDGE};
+use crate::questions::{
+    replay_end, replay_ended, replay_kill, replay_start, ReplayOptions, ReplayReport,
+    ReplayStarted, JUDGE,
+};
+use crate::turn::Refusal;
 use crate::util::fs::{atomic_write, ensure_dir};
-use crate::util::{git, ids};
+use crate::util::{git, ids, time};
 
 /// One replayed card, as the ledger keeps it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -108,12 +117,59 @@ impl StoredReplay {
     }
 }
 
+/// Which replay of a proposal runs or starts next. The tick moves a proposal through the
+/// stages, one replay turn at a time, and never waits for a turn while it holds its lock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    /// The replay with the proposed memory runs, or starts at the next tick.
+    Proposed,
+    /// The replay with the memory of today runs, or starts at the next tick.
+    Today,
+    /// Each replay ended or could not run: the review shows the numbers. A record of an older
+    /// Vision has no stage, and its replays are done.
+    #[default]
+    Done,
+}
+
+impl Stage {
+    /// The memory of the replay of this stage, for people.
+    pub fn memory_text(self) -> &'static str {
+        match self {
+            Stage::Proposed => "the proposed memory",
+            Stage::Today => "the memory of today",
+            Stage::Done => "no memory",
+        }
+    }
+
+    fn next(self) -> Stage {
+        match self {
+            Stage::Proposed => Stage::Today,
+            Stage::Today | Stage::Done => Stage::Done,
+        }
+    }
+}
+
+/// The replay turn of a proposal that runs now.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunningReplay {
+    pub started: ReplayStarted,
+    /// For the replay of today: the key of its stored baseline.
+    #[serde(default)]
+    pub baseline: Option<String>,
+    /// True when the tick killed the turn at the time limit `caps.judge_minutes`.
+    #[serde(default)]
+    pub killed: bool,
+}
+
 /// Both replays of a proposal.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Replays {
     /// The number of cards that the replays answer.
     pub cards: usize,
+    /// The ids of those cards: both replays answer the same cards.
+    pub card_ids: Vec<String>,
     /// The replay with the memory of today (`main`).
     pub today: Option<StoredReplay>,
     /// The replay with the proposed memory.
@@ -122,6 +178,10 @@ pub struct Replays {
     pub today_stored: bool,
     /// Why a replay did not run, or what went wrong.
     pub notes: Vec<String>,
+    /// The replay that runs or starts next.
+    pub stage: Stage,
+    /// The replay turn that runs now.
+    pub running: Option<RunningReplay>,
 }
 
 /// A card that changed side between the two replays.
@@ -137,6 +197,32 @@ pub struct Changed {
 }
 
 impl Replays {
+    /// True when each replay ended or could not run.
+    pub fn is_done(&self) -> bool {
+        self.stage == Stage::Done
+    }
+
+    /// One line for people while the replays run, or `None` when they are done.
+    pub fn running_text(&self) -> Option<String> {
+        if self.is_done() {
+            return None;
+        }
+        let what = match &self.running {
+            Some(running) => format!(
+                "the replay with {} runs (turn {})",
+                self.stage.memory_text(),
+                running.started.turn
+            ),
+            None => format!(
+                "the replay with {} starts at the next tick",
+                self.stage.memory_text()
+            ),
+        };
+        Some(format!(
+            "the replays of the Judge still run: {what}. The numbers come when they end; you can accept or reject each change now"
+        ))
+    }
+
     /// The cards whose side differs between today and the proposal.
     pub fn changed(&self) -> Vec<Changed> {
         let (Some(today), Some(proposed)) = (&self.today, &self.proposed) else {
@@ -163,9 +249,9 @@ impl Replays {
     }
 }
 
-/// Runs the replays of a proposal: with its memory, and with `main` unless a stored baseline
-/// fits. A replay that cannot run leaves a note, never an error.
-pub fn run(ctx: &Ctx, ledger: &Ledger, memory: &Memory, view: &ProposalView) -> Result<Replays> {
+/// The replays of a new proposal, before the first one starts: the cards to replay, or a note
+/// that says why no replay runs. A replay turn starts in [`advance`].
+pub fn begin(ctx: &Ctx, ledger: &Ledger, view: &ProposalView) -> Result<Replays> {
     let config = ctx.config()?;
     let n = config.curator.replay.max(1);
     let mut replays = Replays::default();
@@ -192,65 +278,219 @@ pub fn run(ctx: &Ctx, ledger: &Ledger, memory: &Memory, view: &ProposalView) -> 
             .push("the proposal changes no file, so the answers stay as they are".into());
         return Ok(replays);
     }
-    let key = super::runs::key()?;
-    let options = |dir: PathBuf| ReplayOptions {
-        n,
-        memory: dir,
-        model: None,
-        effort: None,
-        key: key.clone(),
-        wait: None,
-    };
+    replays.card_ids = cards;
+    replays.stage = Stage::Proposed;
+    Ok(replays)
+}
 
-    let dir = ctx
-        .paths
-        .ticket_dir(&key)
-        .join("proposals")
-        .join(view.file.name.replace('/', "-"));
-    let exported = export(memory, view, &dir.join("memory"));
-    match exported {
-        Ok(folder) => match replay(ctx, ledger, &options(folder)) {
-            Ok(report) => replays.proposed = Some(StoredReplay::from_report(&report)),
-            Err(e) => replays.notes.push(format!(
-                "the replay with the proposed memory did not run: {e:#}"
-            )),
-        },
-        Err(e) => replays.notes.push(format!(
-            "the proposed memory could not be written for the replay: {e:#}"
-        )),
-    }
-    let _ = fs::remove_dir_all(&dir);
-
-    let choice = models::choice(config, JUDGE)?;
-    let head = memory.head()?;
-    let baseline = ids::sha256_hex(
-        format!(
-            "{head}\n{}\n{}\n{}",
-            choice.model,
-            choice.effort,
-            cards.join(",")
-        )
-        .as_bytes(),
-    );
-    let baseline = &baseline[..16];
-    if let Some(stored) = records::read::<StoredReplay>(ledger, EVENT_BASELINE, baseline)? {
-        replays.today = Some(stored);
-        replays.today_stored = true;
-    } else {
-        match replay(ctx, ledger, &options(memory.dir().to_path_buf())) {
-            Ok(report) => {
-                let stored = StoredReplay::from_report(&report);
-                if !stored.timed_out {
-                    records::add(ledger, "tick", EVENT_BASELINE, baseline, &stored)?;
+/// Moves the replays of an open proposal one step on, and stores the record after each step:
+/// a replay turn that ended gets its numbers, and the next replay turn starts. A turn that runs
+/// longer than `caps.judge_minutes` is killed, and the next tick reads it. The call never waits
+/// for a turn. A crash between two steps leaves a record that the next call goes on from: a
+/// running turn is in the record from the transaction that wrote its row, and an ended turn is
+/// read again until its numbers are stored.
+pub fn advance(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    memory: &Memory,
+    record: &mut ProposalRecord,
+    now: OffsetDateTime,
+) -> Result<()> {
+    let config = ctx.config()?;
+    let limit = i64::from(config.caps.judge_minutes) * 60;
+    loop {
+        let Some(replays) = record.replays.as_mut() else {
+            return Ok(());
+        };
+        if replays.is_done() {
+            return Ok(());
+        }
+        if let Some(running) = replays.running.clone() {
+            let ended = replay_ended(ctx, &running.started)?;
+            if ended {
+                crate::pipeline::crash_point("curator-replay-ended");
+            } else {
+                let since = time::parse_rfc3339(&running.started.started).ok();
+                let late = since.is_some_and(|at| time::seconds_between(at, now) >= limit);
+                if late && !running.killed {
+                    if let Err(e) = replay_kill(ctx, &running.started) {
+                        ctx.log(&format!(
+                            "curator: could not kill the late replay {}: {e:#}",
+                            running.started.turn
+                        ));
+                    }
+                    if let Some(r) = replays.running.as_mut() {
+                        r.killed = true;
+                    }
+                    save(ledger, record)?;
                 }
-                replays.today = Some(stored);
+                return Ok(());
             }
-            Err(e) => replays.notes.push(format!(
-                "the replay with the memory of today did not run: {e:#}"
-            )),
+            let stage = replays.stage;
+            match replay_end(ctx, ledger, &running.started, running.killed) {
+                Ok(report) => {
+                    let stored = StoredReplay::from_report(&report);
+                    if stage == Stage::Today && !stored.timed_out {
+                        if let Some(baseline) = &running.baseline {
+                            records::add(ledger, "tick", EVENT_BASELINE, baseline, &stored)?;
+                        }
+                    }
+                    match stage {
+                        Stage::Proposed => replays.proposed = Some(stored),
+                        _ => replays.today = Some(stored),
+                    }
+                }
+                Err(e) => replays.notes.push(format!(
+                    "the replay with {} could not be read: {e:#}",
+                    stage.memory_text()
+                )),
+            }
+            replays.running = None;
+            replays.stage = stage.next();
+            save(ledger, record)?;
+            ctx.log(&format!(
+                "curator: {}: the replay with {} ended",
+                record.proposal,
+                stage.memory_text()
+            ));
+            crate::pipeline::crash_point("curator-replay-read");
+            continue;
+        }
+        let stage = replays.stage;
+        let cards = replays.card_ids.clone();
+        let started = match stage {
+            Stage::Proposed => {
+                let view = memory.proposal(&record.proposal)?;
+                let dir = ctx
+                    .paths
+                    .ticket_dir(&super::runs::key()?)
+                    .join("proposals")
+                    .join(record.proposal.replace('/', "-"));
+                let started = export(memory, &view, &dir.join("memory"))
+                    .context("the proposed memory could not be written for the replay")
+                    .and_then(|folder| start_side(ctx, ledger, record, folder, &cards, None));
+                let _ = fs::remove_dir_all(&dir);
+                started
+            }
+            Stage::Today => {
+                let choice = models::choice(config, JUDGE)?;
+                let head = memory.head()?;
+                let baseline = ids::sha256_hex(
+                    format!(
+                        "{head}\n{}\n{}\n{}",
+                        choice.model,
+                        choice.effort,
+                        cards.join(",")
+                    )
+                    .as_bytes(),
+                )[..16]
+                    .to_string();
+                if let Some(stored) =
+                    records::read::<StoredReplay>(ledger, EVENT_BASELINE, &baseline)?
+                {
+                    if let Some(replays) = record.replays.as_mut() {
+                        replays.today = Some(stored);
+                        replays.today_stored = true;
+                        replays.stage = Stage::Done;
+                    }
+                    save(ledger, record)?;
+                    continue;
+                }
+                let folder = memory.dir().to_path_buf();
+                start_side(ctx, ledger, record, folder, &cards, Some(baseline))
+            }
+            Stage::Done => return Ok(()),
+        };
+        match started {
+            Ok(()) => {
+                crate::pipeline::crash_point("curator-replay-started");
+                return Ok(());
+            }
+            Err(e) if e.downcast_ref::<Refusal>().is_some() => {
+                // A limit or a budget: the next tick tries again.
+                ctx.log(&format!(
+                    "curator: the replay with {} of {} waits: {e:#}",
+                    stage.memory_text(),
+                    record.proposal
+                ));
+                return Ok(());
+            }
+            Err(e) => {
+                if let Some(replays) = record.replays.as_mut() {
+                    replays.notes.push(format!(
+                        "the replay with {} did not run: {e:#}",
+                        stage.memory_text()
+                    ));
+                    replays.stage = stage.next();
+                }
+                save(ledger, record)?;
+            }
         }
     }
-    Ok(replays)
+}
+
+/// Starts the replay turn of the stage of `record` against the memory folder `folder`. The
+/// record with the running turn is stored in the transaction that writes the turn row.
+fn start_side(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    record: &mut ProposalRecord,
+    folder: PathBuf,
+    cards: &[String],
+    baseline: Option<String>,
+) -> Result<()> {
+    let config = ctx.config()?;
+    let options = ReplayOptions {
+        n: config.curator.replay.max(1),
+        memory: folder,
+        model: None,
+        effort: None,
+        key: super::runs::key()?,
+        wait: None,
+    };
+    let mut claimed = record.clone();
+    let started = replay_start(ctx, ledger, &options, Some(cards), |ledger, started| {
+        if let Some(replays) = claimed.replays.as_mut() {
+            replays.running = Some(RunningReplay {
+                started: started.clone(),
+                baseline: baseline.clone(),
+                killed: false,
+            });
+        }
+        save(ledger, &claimed)
+    })?;
+    *record = claimed;
+    ctx.log(&format!(
+        "curator: {}: started the replay {} with {}",
+        record.proposal,
+        started.turn,
+        record
+            .replays
+            .as_ref()
+            .map_or("a memory", |r| r.stage.memory_text())
+    ));
+    Ok(())
+}
+
+fn save(ledger: &Ledger, record: &ProposalRecord) -> Result<()> {
+    records::put(ledger, "tick", EVENT_PROPOSAL, &record.proposal, record)
+}
+
+/// Runs the replays of a proposal to their end, and waits for each turn: the form of a caller
+/// that holds no lock of the tick, such as a test. The tick uses [`advance`].
+pub fn run_to_end(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    memory: &Memory,
+    record: &mut ProposalRecord,
+) -> Result<()> {
+    loop {
+        advance(ctx, ledger, memory, record, time::now())?;
+        if record.replays.as_ref().is_none_or(Replays::is_done) {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 /// Writes the proposed memory into `to`: the files of `main`, the files that the proposal

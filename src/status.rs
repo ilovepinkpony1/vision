@@ -308,7 +308,7 @@ fn ticket_table(tickets: &[TicketView]) -> String {
             ticket
                 .pr
                 .map_or_else(|| "-".to_string(), |pr| pr.to_string()),
-            format!("${:.2}", ticket.cost_usd),
+            crate::pipeline::money(ticket.cost_usd),
         ]);
     }
     let widths: Vec<usize> = (0..6)

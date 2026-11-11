@@ -79,6 +79,24 @@ pub struct Visit {
     /// A wait step: when the visit began to watch, after its `start` verbs. The `limit` of the
     /// step counts from here.
     pub since: Option<String>,
+    /// A turn step: the `before` entries that are done in this visit, each as
+    /// `<index>:<label>`, so that each one runs one time for a visit, also while a later entry
+    /// waits for an approval or a reconcile.
+    pub before_done: Vec<String>,
+}
+
+impl Visit {
+    /// The mark of the `before` entry `index` with this label in [`Visit::before_done`].
+    pub fn before_mark(index: usize, label: &str) -> String {
+        format!("{index}:{label}")
+    }
+
+    /// True when the `before` entry `index` with this label is done in this visit.
+    pub fn before_is_done(&self, index: usize, label: &str) -> bool {
+        self.before_done
+            .iter()
+            .any(|m| *m == Visit::before_mark(index, label))
+    }
 }
 
 /// Why a flag is set.

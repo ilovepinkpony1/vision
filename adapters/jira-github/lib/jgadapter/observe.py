@@ -80,7 +80,10 @@ def ticket(config, request):
     for env in config.envs():
         tip = gh.branch_head(env["branch"])
         holds = gh.holds(env["branch"], head) if head and tip else False
-        envs[env["name"]] = {"branch": env["branch"], "head": tip, "holds": bool(holds)}
+        facts = {"branch": env["branch"], "head": tip, "holds": bool(holds)}
+        if env.get("deployment"):
+            facts.update(deployed_facts(gh, env["deployment"], head))
+        envs[env["name"]] = facts
     return {
         "issue": issue,
         "tracker_status": issue["status"],
@@ -89,3 +92,15 @@ def ticket(config, request):
         "ci": ci,
         "envs": envs,
     }
+
+
+def deployed_facts(gh, environment, head):
+    """The facts of the newest deployment of a GitHub environment: `deployed` is true when its
+    commit holds the head of the ticket (the same test as `holds`), with `deployment_sha` and
+    `deployed_at`. With no deployment, `deployed` is false and the two others are null."""
+    latest = gh.latest_deployment(environment)
+    sha = latest.get("sha") if latest else None
+    sha = sha if isinstance(sha, str) and core.COMMIT.match(sha) else None
+    at = latest.get("created_at") if latest else None
+    deployed = bool(gh.commit_holds(sha, head)) if sha and head else False
+    return {"deployed": deployed, "deployment_sha": sha, "deployed_at": at if isinstance(at, str) else None}

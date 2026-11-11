@@ -652,6 +652,31 @@ impl Memory {
         Ok(true)
     }
 
+    /// Writes `why` into the empty section `## Why` of a decision, in one commit of `writer`,
+    /// such as the answer of the person to a question of the Curator. Gives false, and changes
+    /// nothing, when the section already has a text.
+    pub fn fill_decision_why(&self, id: DecisionId, why: &str, writer: &Writer) -> Result<bool> {
+        let why = why.trim();
+        if why.is_empty() {
+            bail!("the reason for {id} is empty");
+        }
+        let _lock = self.lock()?;
+        self.check_main()?;
+        let (mut doc, file) = self.load(id.into())?;
+        let MemoryFile::Decision(decision) = file else {
+            bail!("{id} is not a decision");
+        };
+        if !decision.why.trim().is_empty() {
+            return Ok(false);
+        }
+        doc.set_section("Why", why);
+        let change = Change::write(id.path(), doc.to_text());
+        self.check_changes(std::slice::from_ref(&change))?;
+        let message = format!("Write the reason of {id}: {}", short(why, 50));
+        self.write_commit(&[change], &message, writer)?;
+        Ok(true)
+    }
+
     /// Retires a file in one commit. It stays, and no turn loads it.
     pub fn retire(&self, id: MemoryId, why: &str, writer: &Writer) -> Result<bool> {
         self.set_status(id, Status::Retired, Some(why), writer)

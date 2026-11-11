@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::judge::{self, JudgeInput};
@@ -26,7 +26,7 @@ use crate::config::Effort;
 use crate::ctx::Ctx;
 use crate::ledger::Ledger;
 use crate::memory::{DecisionId, MemoryFile, MemoryId, Status};
-use crate::paths::TicketKey;
+use crate::paths::{TicketKey, TurnId};
 use crate::turn::{self, TurnState};
 use crate::util::fs::ensure_dir;
 use crate::util::time;
@@ -99,8 +99,60 @@ pub struct ReplayReport {
     pub timed_out: bool,
 }
 
-/// Replays the last answers of the person. See the module text.
+/// A replay turn that runs: what [`replay_end`] needs to read its answers.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ReplayStarted {
+    pub turn: String,
+    /// The reserved key of the turn.
+    pub key: String,
+    /// The cards that the turn answers, by id: the same cards when the turn ends.
+    pub cards: Vec<String>,
+    /// The copy of the memory that the Judge reads.
+    pub memory: PathBuf,
+    pub model: String,
+    pub effort: Effort,
+    /// When the turn started, RFC 3339 UTC.
+    pub started: String,
+}
+
+/// Replays the last answers of the person, and waits for the end. See the module text.
 pub fn replay(ctx: &Ctx, ledger: &Ledger, options: &ReplayOptions) -> Result<ReplayReport> {
+    let config = ctx.config()?;
+    let started = replay_start(ctx, ledger, options, None, |_, _| Ok(()))?;
+    let limit = options
+        .wait
+        .unwrap_or_else(|| Duration::from_secs(u64::from(config.caps.judge_minutes) * 60));
+    let clock = Instant::now();
+    let mut timed_out = false;
+    loop {
+        if replay_ended(ctx, &started)? {
+            break;
+        }
+        if clock.elapsed() >= limit {
+            timed_out = true;
+            replay_kill(ctx, &started)?;
+            let until = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < until && !replay_ended(ctx, &started)? {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    replay_end(ctx, ledger, &started, timed_out)
+}
+
+/// Starts the replay turn and gives what [`replay_end`] needs. `cards` names the cards to
+/// replay; `None` takes the last `options.n` answers of the person. `claim` runs in the
+/// transaction that writes the turn row, so that a crash never leaves a replay turn that its
+/// caller did not record, or a record of a turn that does not exist.
+pub fn replay_start(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    options: &ReplayOptions,
+    cards: Option<&[String]>,
+    claim: impl FnOnce(&Ledger, &ReplayStarted) -> Result<()>,
+) -> Result<ReplayStarted> {
     ctx.require_setup()?;
     if !options.key.is_reserved() {
         bail!(
@@ -116,8 +168,17 @@ pub fn replay(ctx: &Ctx, ledger: &Ledger, options: &ReplayOptions) -> Result<Rep
     }
     let config = ctx.config()?;
     let mut agents = Agents::default();
-    let questions = ledger
-        .questions_answered_by_person(options.n)?
+    let rows = match cards {
+        None => ledger.questions_answered_by_person(options.n)?,
+        Some(ids) => {
+            let mut rows = Vec::new();
+            for id in ids {
+                rows.extend(ledger.question(id)?);
+            }
+            rows
+        }
+    };
+    let questions = rows
         .into_iter()
         .map(|row| Question::load(ledger, row, &mut agents))
         .collect::<Result<Vec<_>>>()?;
@@ -159,46 +220,72 @@ pub fn replay(ctx: &Ctx, ledger: &Ledger, options: &ReplayOptions) -> Result<Rep
     request.model = options.model.clone();
     request.effort = options.effort;
     request.no_retry = true;
-    let started = Instant::now();
-    let launched = turn::launch(ctx, ledger, &request)?;
-
-    let limit = options
-        .wait
-        .unwrap_or_else(|| Duration::from_secs(u64::from(config.caps.judge_minutes) * 60));
-    let status = launched.dir.join("turn.json");
-    let mut timed_out = false;
-    loop {
-        if TurnState::read(&status)
-            .ok()
-            .flatten()
-            .is_some_and(|s| s.is_ended())
-        {
-            break;
-        }
-        if started.elapsed() >= limit {
-            timed_out = true;
-            turn::kill_turn(ctx, &options.key, &launched.id)?;
-            let until = Instant::now() + Duration::from_secs(10);
-            while Instant::now() < until
-                && !TurnState::read(&status)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|s| s.is_ended())
-            {
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
+    let cards: Vec<String> = questions.iter().map(|q| q.row.id.clone()).collect();
+    let mut started = None;
+    let launched = super::launch_claimed(ctx, ledger, &request, |ledger, launched| {
+        let info = ReplayStarted {
+            turn: launched.id.to_string(),
+            key: options.key.to_string(),
+            cards: cards.clone(),
+            memory: copy.clone(),
+            model: launched.model.clone(),
+            effort: launched.effort,
+            started: time::rfc3339(now),
+        };
+        claim(ledger, &info)?;
+        started = Some(info);
+        Ok(())
+    });
+    if launched.is_err() {
+        let _ = fs::remove_dir_all(&base);
     }
-    let seconds = started.elapsed().as_secs_f64();
-    let outcome = turn::outcome(ctx, ledger, &launched.id)?;
+    launched?;
+    started.context("the replay turn was written with no record")
+}
+
+/// True when the replay turn ended: its `turn.json` says so.
+pub fn replay_ended(ctx: &Ctx, started: &ReplayStarted) -> Result<bool> {
+    let key = TicketKey::parse(&started.key)?;
+    let id = TurnId::parse(&started.turn)?;
+    Ok(TurnState::read(&ctx.paths.turn(&key, &id).status)
+        .ok()
+        .flatten()
+        .is_some_and(|s| s.is_ended()))
+}
+
+/// Kills the replay turn after its time limit.
+pub fn replay_kill(ctx: &Ctx, started: &ReplayStarted) -> Result<()> {
+    let key = TicketKey::parse(&started.key)?;
+    let id = TurnId::parse(&started.turn)?;
+    turn::kill_turn(ctx, &key, &id)?;
+    Ok(())
+}
+
+/// Reads the answers of an ended replay turn, applies the rules in code, and reports how many
+/// agree with the person. `timed_out` says that the caller killed the turn at its time limit.
+pub fn replay_end(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    started: &ReplayStarted,
+    timed_out: bool,
+) -> Result<ReplayReport> {
+    let config = ctx.config()?;
+    let id = TurnId::parse(&started.turn)?;
+    let mut agents = Agents::default();
+    let mut questions = Vec::new();
+    for card in &started.cards {
+        if let Some(row) = ledger.question(card)? {
+            questions.push(Question::load(ledger, row, &mut agents)?);
+        }
+    }
+    let outcome = turn::outcome(ctx, ledger, &id)?;
     let result = if timed_out {
         None
     } else {
         valid_result(ctx, outcome.result.as_ref())
     };
-    let entries = judge::entries(ctx, &launched.id.to_string(), result.as_ref());
+    let entries = judge::entries(ctx, &started.turn, result.as_ref());
+    let copy = started.memory.clone();
     let active = |id: &str| active_in(&copy, id);
 
     let mut items = Vec::new();
@@ -247,26 +334,42 @@ pub fn replay(ctx: &Ctx, ledger: &Ledger, options: &ReplayOptions) -> Result<Rep
         .iter()
         .filter(|i| i.outcome == Outcome::Propose && i.agree)
         .count();
+    let key = TicketKey::parse(&started.key)?;
+    let dir = ctx.paths.turn(&key, &id).dir;
+    let seconds = seconds_of(started, &outcome);
     ctx.log(&format!(
         "questions: replay {} of {} answer(s): {agree} agree, {disagree} disagree, {to_person} to the person",
-        launched.id,
+        started.turn,
         items.len()
     ));
     Ok(ReplayReport {
-        turn: launched.id.to_string(),
-        model: launched.model.clone(),
-        effort: launched.effort,
+        turn: started.turn.clone(),
+        model: started.model.clone(),
+        effort: started.effort,
         memory: copy,
         items,
         agree,
         disagree,
         to_person,
         proposals_agree,
-        cost_usd: stream_cost(&launched.dir.join("stream.jsonl")),
+        cost_usd: stream_cost(&dir.join("stream.jsonl")),
         seconds,
         reason: outcome.reason.map(|r| r.to_string()),
         timed_out,
     })
+}
+
+/// The seconds of a replay turn: from its start to its end, or to now.
+fn seconds_of(started: &ReplayStarted, outcome: &turn::TurnOutcome) -> f64 {
+    let Ok(from) = time::parse_rfc3339(&started.started) else {
+        return 0.0;
+    };
+    let to = outcome
+        .ended
+        .as_deref()
+        .and_then(|e| time::parse_rfc3339(e).ok())
+        .unwrap_or_else(time::now);
+    (to - from).as_seconds_f64().max(0.0)
 }
 
 /// The result object when it fits the schema of the Judge.

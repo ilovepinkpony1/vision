@@ -280,35 +280,70 @@ fn show(ctx: &Ctx, json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
-    let mut table: Vec<Vec<String>> = vec![[
-        "AGENT",
-        "MODEL",
-        "EFFORT",
-        "SOURCE",
-        "RECOMMENDATION",
-        "REASON",
-    ]
-    .map(String::from)
-    .to_vec()];
-    for row in &rows {
-        // A pinned agent shows the default that it left, so that the reason reads right.
-        let reason = match agent(&row.agent) {
-            Some(spec) if row.source != Source::Default.text() => {
-                format!("default: {} {}. {}", spec.model, spec.effort, row.reason)
-            }
-            _ => row.reason.clone(),
-        };
+    print!("{}", render_model_rows(&rows));
+    Ok(())
+}
+
+/// The width of the text of `vision model`.
+pub const WIDTH: usize = 100;
+
+/// The text of `vision model`: one row for each agent with its model, its effort, and its
+/// source, and under it the reason of the default and the recommendation, each wrapped to
+/// [`WIDTH`] columns.
+pub fn render_model_rows(rows: &[ModelRow]) -> String {
+    let mut table: Vec<Vec<String>> = vec![["AGENT", "MODEL", "EFFORT", "SOURCE"]
+        .map(String::from)
+        .to_vec()];
+    for row in rows {
         table.push(vec![
             row.agent.clone(),
             row.model.clone(),
             row.effort.to_string(),
             row.source.clone(),
-            row.recommendation.clone(),
-            reason,
         ]);
     }
-    print!("{}", render_rows(&table));
-    Ok(())
+    let lines: Vec<String> = render_rows(&table).lines().map(str::to_string).collect();
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", lines[0]);
+    for (row, line) in rows.iter().zip(&lines[1..]) {
+        let _ = writeln!(out, "{line}");
+        // A pinned agent shows the default that it left, so that the reason reads right.
+        let reason = match agent(&row.agent) {
+            Some(spec) if row.source != Source::Default.text() => format!(
+                "reason of the default {} {}: {}",
+                spec.model, spec.effort, row.reason
+            ),
+            _ => format!("reason of the default: {}", row.reason),
+        };
+        for text in [reason, format!("recommendation: {}", row.recommendation)] {
+            for part in wrap(&text, "  ", "    ", WIDTH) {
+                let _ = writeln!(out, "{part}");
+            }
+        }
+    }
+    out
+}
+
+/// The lines of `text` with at most `width` characters each: the first one starts with
+/// `first`, each later one with `rest`. A word longer than a line stays whole.
+fn wrap(text: &str, first: &str, rest: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = first.to_string();
+    let mut empty = true;
+    for word in text.split_whitespace() {
+        let fits = line.chars().count() + usize::from(!empty) + word.chars().count() <= width;
+        if !empty && !fits {
+            lines.push(std::mem::replace(&mut line, rest.to_string()));
+            empty = true;
+        }
+        if !empty {
+            line.push(' ');
+        }
+        line.push_str(word);
+        empty = false;
+    }
+    lines.push(line);
+    lines
 }
 
 /// `vision model set AGENT MODEL [--effort E]`: pins the model in `[agents.<agent>]` with
@@ -518,6 +553,82 @@ mod tests {
         assert_eq!(judge.model, "claude-opus-5-5");
         assert_eq!(judge.effort, Effort::High);
         assert_eq!(judge.source.text(), "yours since 2026-11-16");
+    }
+
+    #[test]
+    fn the_model_table_fits_100_columns_and_keeps_each_fact() {
+        let mut config = Config::default();
+        config.agents.insert(
+            "judge".into(),
+            AgentPin {
+                model: Some("claude-haiku-5-5[1m]".into()),
+                effort: Some(Effort::Low),
+                pinned_at: Some("2026-11-16T14:30:00Z".into()),
+            },
+        );
+        let rows: Vec<ModelRow> = AGENTS
+            .iter()
+            .map(|spec| {
+                let choice = choice(&config, spec.name).unwrap();
+                ModelRow {
+                    agent: spec.name.to_string(),
+                    model: choice.model.clone(),
+                    effort: choice.effort,
+                    source: choice.source.text(),
+                    pinned_at: None,
+                    recommendation:
+                        "fewer than 10 measured turns for a second model, so the default stays"
+                            .into(),
+                    recommended_model: None,
+                    reason: spec.reason.to_string(),
+                }
+            })
+            .collect();
+        let text = render_model_rows(&rows);
+        for line in text.lines() {
+            assert!(line.chars().count() <= WIDTH, "{line}");
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[0].starts_with("AGENT"), "{text}");
+        let judge = lines.iter().position(|l| l.starts_with("judge ")).unwrap();
+        let cells: Vec<&str> = lines[judge].split_whitespace().collect();
+        assert_eq!(
+            cells,
+            [
+                "judge",
+                "claude-haiku-5-5[1m]",
+                "low",
+                "yours",
+                "since",
+                "2026-11-16"
+            ]
+        );
+        let below = lines[judge + 1..].join("\n");
+        assert!(
+            below.starts_with("  reason of the default claude-fable-5-2 high: It can answer alone"),
+            "{text}"
+        );
+        let builder = lines
+            .iter()
+            .position(|l| l.starts_with("builder "))
+            .unwrap();
+        assert!(lines[builder].ends_with("default"), "{text}");
+        let reason = format!("{} {}", lines[builder + 1], lines[builder + 2].trim());
+        assert_eq!(
+            reason,
+            format!(
+                "  reason of the default: {}",
+                agent("builder").unwrap().reason
+            )
+        );
+        assert!(text.contains("  recommendation: fewer than 10 measured turns"));
+    }
+
+    #[test]
+    fn wrap_keeps_each_word() {
+        let lines = wrap("one two three four", "> ", "  ", 9);
+        assert_eq!(lines, ["> one two", "  three", "  four"]);
+        assert_eq!(wrap("averyverylongword", "", "", 4), ["averyverylongword"]);
     }
 
     #[test]

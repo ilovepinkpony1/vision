@@ -123,12 +123,14 @@ pub(crate) fn record(
     let id = match earlier {
         Some(id) => id,
         None => {
-            memory
+            let id = memory
                 .add_decision(&new)
                 .with_context(|| {
                     format!("could not write the decision file of {}", question.row.id)
                 })?
-                .id
+                .id;
+            crate::pipeline::crash_point("decision-committed");
+            id
         }
     };
     ledger.finish_recording(&question.row.id, &id.to_string())?;

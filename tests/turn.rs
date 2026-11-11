@@ -239,6 +239,39 @@ fn a_worker_turn_gets_the_sandbox_and_the_worker_git_configuration() {
 }
 
 #[test]
+fn attribution_false_turns_off_the_lines_of_claude_code_in_each_turn() {
+    let home = TestHome::new();
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&home.work)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    home.edit_config(|doc| {
+        doc["claude"]["attribution"] = toml_edit::value(false);
+    });
+    for (agent, step, kind) in [
+        ("builder", "build", TurnKind::Worker),
+        ("scout", "refine", TurnKind::Reader),
+    ] {
+        let scenario = home.scenario(
+            agent,
+            json!([[{"do": "init"}, {"do": "result", "structured_output": result_object("ok")}]]),
+        );
+        let launched = home.launch(&home.request("DEMO-12", agent, step, kind, &scenario));
+        home.wait_ended(&launched);
+        let settings: Value =
+            serde_json::from_str(&home.turn_file(&launched, "settings.json")).unwrap();
+        assert_eq!(
+            settings["attribution"],
+            json!({"commit": "", "pr": ""}),
+            "{settings}"
+        );
+        home.collect();
+    }
+}
+
+#[test]
 fn a_reader_gets_no_sandbox_and_a_judge_gets_only_its_role_file() {
     let home = TestHome::new();
     let scenario = home.scenario(

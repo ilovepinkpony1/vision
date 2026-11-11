@@ -455,7 +455,8 @@ pub enum MemoryCommand {
     },
 }
 
-/// `vision memory review [--json] [--proposal NAME] [--accept N|all | --reject N|all [--why TEXT]]`.
+/// `vision memory review [--json] [--proposal NAME] [--accept N|all [--answer TEXT] | --reject N|all
+/// [--why TEXT]]`.
 /// Without `--accept` and `--reject`, a terminal gets the interactive review.
 #[derive(Debug, Args)]
 pub struct ReviewArgs {
@@ -474,6 +475,10 @@ pub struct ReviewArgs {
     /// Why you reject it. The next run of the Curator reads it
     #[arg(long, value_name = "TEXT", requires = "reject")]
     pub why: Option<String>,
+    /// Your answer to a question of the Curator, with --accept N. The next run of the Curator
+    /// reads it. When the question names one decision with no reason, the answer becomes it
+    #[arg(long, value_name = "TEXT", requires = "accept", conflicts_with_all = ["reject", "json"])]
+    pub answer: Option<String>,
 }
 
 /// One change of a proposal by its number, or each open change.

@@ -8,11 +8,13 @@ of an argument list, never inside the text of a shell command.
 """
 
 import contextlib
+import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -134,6 +136,25 @@ def globs_of(value):
     return [glob_regex(v) for v in value if v]
 
 
+def canaries_of(value):
+    """`test_canary`: one test file, or a list of test files, that exist on the base commit and
+    pass there. An empty list when the key is missing."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise core.Failure("`test_canary` in the [adapter] table must be a test file or a list of test files, "
+                           "such as \"tests/test_smoke.py\"")
+    out = []
+    for item in value:
+        path = item.strip()
+        path = path[2:] if path.startswith("./") else path
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
 def paths_of(value):
     """The files that the plan declares green: a list, or a text with one path on each line."""
     if isinstance(value, str):
@@ -208,6 +229,7 @@ def proof(config, request):
     globs = globs_of(config.get("test_glob"))
     clone, base, head = need_commits(request, what)
     timeout = config.number("test_timeout", 600)
+    canaries = canaries_of(config.get("test_canary"))
     args = request.get("args") or {}
     # The plan (args.plan, the text of approved-plan.md) declares the proof green, and the
     # older form args.green does too: true, or the test files.
@@ -245,6 +267,7 @@ def proof(config, request):
         if not ran.passed:
             problems.append("%s fails at the head" % path)
     on_base = [p for p in tests if not green_all and p not in green]
+    canary_note = ""
     if on_base:
         with worktree(clone, base) as tree:
             setup = config.text("setup_command")
@@ -257,6 +280,25 @@ def proof(config, request):
                                    "seconds": ran.seconds, "cause": "env"})
                     problems.append("setup_command failed in the base worktree")
                     on_base = []
+            if on_base:
+                # A canary proves that the base worktree can run tests at all, so that a broken
+                # setup never passes the base half of the proof for the wrong reason.
+                guards = []
+                for canary in canaries:
+                    if canary in tests:
+                        log.append("== the canary %s is a changed test, so it is no canary: skipped ==" % canary)
+                    else:
+                        guards.append(canary)
+                if not guards and canaries:
+                    canary_note = "; no canary guards the run on the base, because each one is a changed test"
+                elif not guards:
+                    canary_note = "; no canary guards the run on the base (set test_canary)"
+                for canary in guards:
+                    failure = run_canary(command, canary, tree, base, timeout, checks, log)
+                    if failure:
+                        problems.append(failure)
+                        on_base = []
+                        break
             for path in on_base:
                 target = os.path.join(tree, path)
                 inside = os.path.realpath(tree) + os.sep
@@ -287,16 +329,39 @@ def proof(config, request):
     elif green & set(tests):
         green_note = "; the plan declares %s green" % ", ".join(sorted(green & set(tests)))
     if problems:
-        detail = "the proof does not hold: " + "; ".join(problems)
+        detail = "the proof does not hold: " + "; ".join(problems) + canary_note
     else:
-        detail = "the proof holds: %d changed test file(s) pass at %s, %d of them fail on the base %s%s" % (
-            len(tests), core.short(head), len(on_base), core.short(base), green_note)
+        detail = "the proof holds: %d changed test file(s) pass at %s, %d of them fail on the base %s%s%s" % (
+            len(tests), core.short(head), len(on_base), core.short(base), green_note, canary_note)
     return {
         "ok": not problems,
         "detail": detail,
         "documents": [{"name": "proof.txt", "content": "\n\n".join(log) + "\n"}],
         "checks": checks,
     }
+
+
+def run_canary(command, canary, tree, base, timeout, checks, log):
+    """Runs one canary of `test_canary` in the worktree of the base commit, with a check row of
+    the kind proof-canary. Gives the problem when the worktree cannot run it, else None."""
+    label = "%s %s" % (command, canary)
+    target = os.path.join(tree, canary)
+    inside = os.path.realpath(tree) + os.sep
+    if not os.path.realpath(target).startswith(inside) or not os.path.isfile(target):
+        checks.append({"kind": "proof-canary", "result": "fail", "command": label, "seconds": 0, "cause": "env"})
+        log.append("== the canary %s is missing in the base worktree %s ==" % (canary, core.short(base)))
+        return ("the worktree of the base commit %s cannot run tests: the canary %s is missing there. "
+                "Fix setup_command (or the path in test_canary), then run vision retry" % (core.short(base), canary))
+    ran = run(shell(command, [canary]), tree, timeout)
+    checks.append({"kind": "proof-canary", "result": "pass" if ran.passed else "fail", "command": label,
+                   "seconds": ran.seconds, "cause": "" if ran.passed else "env"})
+    log.append("== the canary %s on the base %s: %s (%d s) ==\n%s" % (
+        canary, core.short(base), "pass" if ran.passed else "fail", ran.seconds, ran.output[-OUTPUT_KEEP:]))
+    if ran.passed:
+        return None
+    return ("the worktree of the base commit %s cannot run tests: the canary %s fails there, so no changed test "
+            "ran on the base. Fix setup_command so that the tests run in that worktree, then run vision retry"
+            % (core.short(base), canary))
 
 
 # second-review --------------------------------------------------------------------------------
@@ -346,14 +411,14 @@ def comments(config, request):
     own = config.logins("own_logins")
     if not own:
         raise core.Failure("%s needs the key `own_logins` in the [adapter] table" % why)
+    ignore = forge.Ignore(config.logins("ignore_logins"))
     gh = forge.GitHub(config, why)
     pull = gh.find_pr(request.get("pr"), request.get("branch") or "")
     if not pull:
         return {"ok": True, "detail": "no pull request, so no comment waits",
                 "documents": [{"name": "comments.json", "content": "[]\n"}]}
     number = pull["number"]
-    rows = forge.waiting_rows(gh.reviews(number), gh.review_comments(number), gh.issue_comments(number), own,
-                              config.logins("ignore_logins"))
+    rows = forge.waiting_rows(gh.reviews(number), gh.review_comments(number), gh.issue_comments(number), own, ignore)
     kinds = ", ".join("%d %s" % (sum(1 for r in rows if r["kind"] == k), k) for k in forge.KINDS)
     return {
         "ok": True,
@@ -443,7 +508,20 @@ def answers(url, timeout=2.0):
 def app_start(config, request):
     """Starts the app of the clone for QA, and waits until its health address answers. The app
     runs in its own session with a plain environment, so it outlives the job and gets no secret.
-    An app that already answers is left as it is."""
+
+    The job remembers the app that it started in a state file of the temporary folder (see
+    `app_state_path`): the process id, the start time of that process as the system reports it,
+    the head commit, and the log. At the next call for the same clone and env:
+
+    - The app of the state file still runs, and the head commit changed: the job stops its
+      process group and starts the app again at the new head (unless `app_restart` is false,
+      for an app that loads new code by itself).
+    - The address answers, and no app of the job runs: the person started it. The job leaves it
+      as it is and says that it can run older code.
+
+    The job never stops a process that it did not start: it compares the start time of the
+    process with the start time of the state file first, so that a process id that the system
+    gave to a different process is never taken for the app."""
     what = "app-start"
     command = config.text("app_start_command", what)
     health = config.text("app_health_url", what)
@@ -452,60 +530,212 @@ def app_start(config, request):
         raise core.Failure("`app_health_url` must be an http or https address, such as http://localhost:3000/health")
     app_url = config.text("app_url") or urllib.parse.urlunsplit((parts.scheme, parts.netloc, "/", "", ""))
     timeout = config.number("app_start_timeout", 120)
-    env = str((request.get("args") or {}).get("env") or "local")
-    if not re.match(r"^[A-Za-z0-9_-]{1,40}$", env):
+    restart = config.flag("app_restart", True)
+    env_name = str((request.get("args") or {}).get("env") or "local")
+    if not re.match(r"^[A-Za-z0-9_-]{1,40}$", env_name):
         raise core.Failure("args.env of app-start must be a plain name, such as local")
     clone = request.get("clone")
     if not isinstance(clone, str) or not os.path.isdir(clone):
         raise core.Failure("app-start needs the clone of the ticket")
-    info = {"env": env, "url": app_url, "health": health, "started": False, "pid": None, "log": None}
-    name = "app-%s.json" % env
+    head = clone_head(clone)
+    info = {"env": env_name, "url": app_url, "health": health, "started": False, "pid": None, "log": None,
+            "head": None, "restarted": False}
+    name = "app-%s.json" % env_name
 
     def answer(ok, detail):
         return {"ok": ok, "detail": detail, "documents": [{"name": name, "content": json.dumps(info, indent=2) + "\n"}]}
 
-    if answers(health):
-        return answer(True, "the app already answers at %s, so nothing was started" % health)
+    state_path = app_state_path(clone, env_name)
+    state = read_app_state(state_path)
+    ours = state is not None and running_since(state["pid"]) == state["started"]
+    if state is not None and not ours:
+        # The app of the state file ended, or its process id now names a different process.
+        remove_file(state_path)
+        state = None
+    restarted_from = None
+    if ours:
+        info.update({"pid": state["pid"], "log": state["log"], "head": state["head"]})
+        same = state["head"] == head
+        if (same or not restart) and answers(health):
+            if same:
+                return answer(True, "the app that Vision started (process id %d) already answers at %s, at the head %s, so nothing was started" % (
+                    state["pid"], health, core.short(head or "") or "-"))
+            return answer(True, "the app that Vision started (process id %d) already answers at %s. The head is %s now, and app_restart is false, so it runs on: it loads the new code by itself" % (
+                state["pid"], health, core.short(head or "") or "-"))
+        # A new head, or an app of the job that no longer answers: stop it, then start again.
+        if running_since(state["pid"]) != state["started"]:
+            remove_file(state_path)
+        else:
+            stop_group(state["pid"], started=state["started"])
+            remove_file(state_path)
+            restarted_from = state["head"]
+            if not wait_silent(health, 10):
+                info.update({"pid": None, "log": None, "head": None})
+                return answer(False, "Vision stopped its app (process id %d), but %s still answers, so a different process answers there. Stop that process, then run vision retry" % (
+                    state["pid"], health))
+        info.update({"pid": None, "log": None, "head": None})
+    elif answers(health):
+        return answer(True, "the app already answers at %s, but Vision did not start it, so it can run older code than the head %s. Stop it to let Vision start the app at the head, or restart it yourself" % (
+            health, core.short(head or "") or "-"))
     key = core.check_key(request.get("key"))
-    log_path = os.path.join(tempfile.gettempdir(), "vision-app-%s-%s.log" % (key, core.stamp()))
+    # The log is a new file that only this user can read. Its name has a random part, so that
+    # no other user of a shared temporary folder can put a link at that name first.
+    log_fd, log_path = tempfile.mkstemp(prefix="vision-app-%s-%s-" % (key, core.stamp()), suffix=".log")
     started = time.monotonic()
     deadline = started + timeout
     # A Python app writes its output at once, so that its log shows how far it came even when
     # it is stopped: a stopped process loses the output that waits in its buffer.
-    env = dict(core.plain_env(), PYTHONUNBUFFERED="1")
-    with open(log_path, "ab") as log:
-        proc = subprocess.Popen(["sh", "-c", command], cwd=clone, env=env, stdin=subprocess.DEVNULL,
+    proc_env = dict(core.plain_env(), PYTHONUNBUFFERED="1")
+    with os.fdopen(log_fd, "ab") as log:
+        proc = subprocess.Popen(["sh", "-c", command], cwd=clone, env=proc_env, stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    info.update({"started": True, "pid": proc.pid, "log": log_path})
+    info.update({"started": True, "pid": proc.pid, "log": log_path, "head": head,
+                 "restarted": restarted_from is not None})
+    since = running_since(proc.pid)
+    if since:
+        write_app_state(state_path, {"clone": clone, "env": env_name, "pid": proc.pid, "started": since,
+                                     "head": head, "log": log_path, "at": core.now()})
+    again = ""
+    if restarted_from is not None:
+        again = " It stopped the app of the head %s first, so QA tests the code of the head %s." % (
+            core.short(restarted_from or "") or "-", core.short(head or "") or "-")
     while True:
         # One probe never runs past the time limit, and the last probe comes at the limit.
         left = deadline - time.monotonic()
         if answers(health, timeout=max(0.2, min(2.0, left))):
-            return answer(True, "started the app (process id %d) in %d s; it answers at %s. Its log is %s" % (
-                proc.pid, int(time.monotonic() - started), health, log_path))
+            return answer(True, "started the app (process id %d) in %d s; it answers at %s. Its log is %s.%s" % (
+                proc.pid, int(time.monotonic() - started), health, log_path, again))
         code = proc.poll()
         if code is not None:
+            remove_file(state_path)
             return answer(False, "the app ended with exit code %d before it answered at %s. The end of its log: %s" % (
                 code, health, core.clean(tail_of(log_path), 1500)))
         if time.monotonic() >= deadline:
             stop_group(proc)
+            remove_file(state_path)
             return answer(False, "the app did not answer at %s in %d s, so it was stopped. The end of its log: %s" % (
                 health, timeout, core.clean(tail_of(log_path), 1500) or "(empty)"))
         time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
 
 
-def stop_group(proc, grace=3):
-    """Stops the process group of the app: SIGTERM, then SIGKILL after `grace` seconds. It waits
-    for the end of the app, so that the log holds each line that the app wrote."""
-    with contextlib.suppress(OSError):
-        os.killpg(proc.pid, signal.SIGTERM)
+def clone_head(clone):
+    """The head commit of the clone, or None when it has none."""
+    proc = core.git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd=clone, check=False)
+    text = proc.stdout.decode("utf-8", "replace").strip()
+    return text if proc.returncode == 0 and core.COMMIT.match(text) else None
+
+
+def app_state_path(clone, env_name):
+    """The state file of the app of one clone and env: `vision-app-<hash>.json` in the temporary
+    folder, where the hash is of the real path of the clone and the name of the env."""
+    text = "%s\0%s" % (os.path.realpath(clone), env_name)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:24]
+    return os.path.join(tempfile.gettempdir(), "vision-app-%s.json" % digest)
+
+
+def read_app_state(path):
+    """The state of an app that an earlier call started, or None for a missing or broken file.
+
+    The job stops the process that this file names, and other users can write into a shared
+    temporary folder. So the file counts only when it is a plain file of this user that no
+    other user can write. The job never follows a link at that name."""
     try:
-        proc.wait(timeout=grace)
-    except subprocess.TimeoutExpired:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            meta = os.fstat(handle.fileno())
+            if not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.getuid() or meta.st_mode & 0o022:
+                return None
+            state = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict) or not isinstance(state.get("pid"), int) or state["pid"] <= 1:
+        return None
+    if not isinstance(state.get("started"), str) or not state["started"]:
+        return None
+    head = state.get("head")
+    return {"pid": state["pid"], "started": state["started"], "head": head if isinstance(head, str) else None,
+            "log": state.get("log") if isinstance(state.get("log"), str) else None}
+
+
+def write_app_state(path, state):
+    """Writes the state file for this user only: to a new temporary name first, and then a
+    rename. Gives False when the folder does not let it, such as a file of a different user at
+    that name. The job then has no state, so it never stops that app at a later call."""
+    temp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        remove_file(temp)
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2)
+            handle.write("\n")
+        os.replace(temp, path)
+    except OSError:
+        remove_file(temp)
+        return False
+    return True
+
+
+def remove_file(path):
+    with contextlib.suppress(OSError):
+        os.remove(path)
+
+
+def running_since(pid):
+    """The start time of a running process as the system reports it (`ps -o lstart=`, on macOS
+    and on Linux), or None when no such process runs. A zombie counts as gone."""
+    try:
+        proc = subprocess.run(["ps", "-o", "stat=", "-o", "lstart=", "-p", str(int(pid))],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              env=dict(core.plain_env(), LC_ALL="C", LANG="C"), timeout=30)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    parts = proc.stdout.decode("utf-8", "replace").split(None, 1)
+    if proc.returncode != 0 or len(parts) != 2 or parts[0].startswith("Z"):
+        return None
+    return " ".join(parts[1].split())
+
+
+def wait_silent(url, seconds):
+    """Waits until the address no longer answers. Gives False when it still answers after
+    `seconds`."""
+    deadline = time.monotonic() + seconds
+    while answers(url, timeout=1.0):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+    return True
+
+
+def stop_group(proc, grace=3, started=None):
+    """Stops the process group of the app: SIGTERM, then SIGKILL after `grace` seconds. It waits
+    for the end of the app, so that the log holds each line that the app wrote.
+
+    `proc` is the process of this job, or the process id of an app that an earlier call
+    started. For a process id, `started` is its start time from the state file: the group is
+    signalled only while the process with that id still has that start time."""
+    if isinstance(proc, subprocess.Popen):
         with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        with contextlib.suppress(subprocess.TimeoutExpired):
+            os.killpg(proc.pid, signal.SIGTERM)
+        try:
             proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=grace)
+        return
+    pid = int(proc)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not started or running_since(pid) != started:
+            return
+        with contextlib.suppress(OSError):
+            os.killpg(pid, sig)
+        deadline = time.monotonic() + grace
+        while running_since(pid) == started and time.monotonic() < deadline:
+            time.sleep(0.1)
 
 
 def tail_of(path, size=4000):

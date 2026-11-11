@@ -29,7 +29,10 @@ use crate::snapshot::Need;
 use crate::tick::{Action, FlagSet, Pass, TurnStart};
 use crate::turn::LaunchRequest;
 
-pub use commands::{hash_fits, report_of, timeline, LogEntry, Measures, Report, BY_HAND};
+pub use commands::{
+    hash_fits, money, render_report, report_of, step_order, timeline, LogEntry, Measures, Report,
+    BY_HAND,
+};
 pub use machine::{crash_point, CRASH_CODE, CRASH_ENV};
 pub use view::{plan_hash, TicketView, SHORT_HASH};
 

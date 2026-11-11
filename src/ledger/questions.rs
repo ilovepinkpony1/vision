@@ -315,37 +315,57 @@ impl Ledger {
     }
 
     /// Starts the answer of the person: a row that waits for the person gets `recording` with
-    /// the answer. Gives false when the row no longer waited for the person.
+    /// the answer, and the `human` row of the answer is written in the same transaction. So a
+    /// crash after the commit of the decision file never loses the `human` row: the row comes
+    /// first, and a later tick ends the recording. Gives false, and writes nothing, when the row
+    /// no longer waited for the person.
     pub fn start_person_answer(
         &self,
         id: &str,
         answer: &str,
         took_proposal: Option<bool>,
         at: &str,
+        human: &HumanRow,
     ) -> Result<bool> {
-        Ok(self.conn().execute(
-            "UPDATE questions SET state = ?2, answer = ?3, took_proposal = ?4, answered = ?5
-             WHERE id = ?1 AND state IN (?6, ?7)",
-            params![
-                id,
-                STATE_RECORDING,
-                answer,
-                took_proposal.map(i64::from),
-                at,
-                STATE_PROPOSED,
-                STATE_ASKED
-            ],
-        )? == 1)
+        self.in_transaction(|ledger| {
+            let started = ledger.conn().execute(
+                "UPDATE questions SET state = ?2, answer = ?3, took_proposal = ?4, answered = ?5
+                 WHERE id = ?1 AND state IN (?6, ?7)",
+                params![
+                    id,
+                    STATE_RECORDING,
+                    answer,
+                    took_proposal.map(i64::from),
+                    at,
+                    STATE_PROPOSED,
+                    STATE_ASKED
+                ],
+            )? == 1;
+            if started {
+                ledger.add_human(human)?;
+            }
+            Ok(started)
+        })
     }
 
-    /// Undoes [`Ledger::start_person_answer`] after the decision file could not be written.
-    pub fn undo_person_answer(&self, id: &str, state: &str) -> Result<()> {
-        self.conn().execute(
-            "UPDATE questions SET state = ?2, answer = NULL, took_proposal = NULL, answered = NULL
-             WHERE id = ?1 AND state = ?3",
-            params![id, state, STATE_RECORDING],
-        )?;
-        Ok(())
+    /// Undoes [`Ledger::start_person_answer`] after the decision file could not be written: the
+    /// row waits for the person again, and the `human` row of that answer goes.
+    pub fn undo_person_answer(&self, id: &str, state: &str, human: &HumanRow) -> Result<()> {
+        self.in_transaction(|ledger| {
+            let undone = ledger.conn().execute(
+                "UPDATE questions SET state = ?2, answer = NULL, took_proposal = NULL, answered = NULL
+                 WHERE id = ?1 AND state = ?3",
+                params![id, state, STATE_RECORDING],
+            )?;
+            if undone == 1 {
+                ledger.conn().execute(
+                    "DELETE FROM human WHERE id = (SELECT max(id) FROM human
+                     WHERE object = ?1 AND kind = ?2 AND at = ?3)",
+                    params![id, human.kind, human.at],
+                )?;
+            }
+            Ok(())
+        })
     }
 
     /// Ends a recording: the row gets its decision file and the state `answered`.

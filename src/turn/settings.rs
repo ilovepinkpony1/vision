@@ -109,20 +109,53 @@ pub fn render(
     }))
 }
 
+/// The key of `settings.json` that turns off the lines that Claude Code adds about itself: the
+/// co-author trailer of a commit and the line in the text of a pull request. It has only the
+/// two keys that each version of Claude Code with the key `attribution` knows, because a
+/// version that refuses a settings file ignores the whole file, and the sandbox of the turn is
+/// in that file. A turn of Vision is a local session, so it has no session link to hide.
+pub fn attribution_off() -> Value {
+    json!({"commit": "", "pr": ""})
+}
+
+/// Sets the key `attribution` of a settings object for `claude.attribution = false`. With true,
+/// the object stays as it is, so the file has no such key.
+fn apply_attribution(value: &mut Value, attribution: bool) {
+    if attribution {
+        return;
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.entry("attribution").or_insert_with(attribution_off);
+    }
+}
+
 /// The text of `settings.json` for one turn: `$VISION_HOME/sandbox/<kind>.json` when it exists
-/// (it replaces the rendered file), else the rendered value.
-pub fn settings_text(paths: &Paths, kind: TurnKind, rendered: &Value) -> Result<String> {
+/// (it replaces the rendered file), else the rendered value. With `attribution` false, each
+/// form gets the key of [`attribution_off`]. A file of the home that has its own key
+/// `attribution` keeps it.
+pub fn settings_text(
+    paths: &Paths,
+    kind: TurnKind,
+    rendered: &Value,
+    attribution: bool,
+) -> Result<String> {
     let custom = paths.sandbox_settings(kind);
     if let Some(text) = read_optional(&custom)? {
-        serde_json::from_str::<Value>(&text).with_context(|| {
+        let mut value = serde_json::from_str::<Value>(&text).with_context(|| {
             format!(
                 "{} is not valid JSON. Fix it, or remove it to use the settings that Vision renders",
                 custom.display()
             )
         })?;
-        return Ok(text);
+        if attribution || value.get("attribution").is_some() || !value.is_object() {
+            return Ok(text);
+        }
+        apply_attribution(&mut value, attribution);
+        return Ok(format!("{}\n", serde_json::to_string_pretty(&value)?));
     }
-    Ok(format!("{}\n", serde_json::to_string_pretty(rendered)?))
+    let mut value = rendered.clone();
+    apply_attribution(&mut value, attribution);
+    Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
 }
 
 /// `$VISION_HOME/worker.gitconfig`: `GIT_CONFIG_GLOBAL` of a worker and a tester, whose sandbox
@@ -332,7 +365,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path());
         let rendered = json!({"permissions": {}});
-        let text = settings_text(&paths, TurnKind::Worker, &rendered).unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, true).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), rendered);
         std::fs::create_dir_all(paths.sandbox_dir()).unwrap();
         std::fs::write(
@@ -340,11 +373,43 @@ mod tests {
             "{\"sandbox\": {}}",
         )
         .unwrap();
-        let text = settings_text(&paths, TurnKind::Worker, &rendered).unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, true).unwrap();
         assert_eq!(text, "{\"sandbox\": {}}");
+        // With attribution off, the file of the home gets the key too.
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, false).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&text).unwrap(),
+            json!({"sandbox": {}, "attribution": attribution_off()})
+        );
+        // A file of the home with its own key keeps it.
+        std::fs::write(
+            paths.sandbox_settings(TurnKind::Worker),
+            "{\"attribution\": {\"commit\": \"x\"}}",
+        )
+        .unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, false).unwrap();
+        assert_eq!(text, "{\"attribution\": {\"commit\": \"x\"}}");
         std::fs::write(paths.sandbox_settings(TurnKind::Worker), "{").unwrap();
-        let err = settings_text(&paths, TurnKind::Worker, &rendered).unwrap_err();
+        let err = settings_text(&paths, TurnKind::Worker, &rendered, true).unwrap_err();
         assert!(err.to_string().contains("is not valid JSON"), "{err}");
+    }
+
+    #[test]
+    fn attribution_off_adds_the_key_and_on_leaves_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        let rendered = json!({"permissions": {"deny": ["Bash"]}});
+        let on: Value = serde_json::from_str(
+            &settings_text(&paths, TurnKind::Reader, &rendered, true).unwrap(),
+        )
+        .unwrap();
+        assert!(on.get("attribution").is_none(), "{on}");
+        let off: Value = serde_json::from_str(
+            &settings_text(&paths, TurnKind::Reader, &rendered, false).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(off["attribution"], json!({"commit": "", "pr": ""}));
+        assert_eq!(off["permissions"], rendered["permissions"]);
     }
 
     #[test]

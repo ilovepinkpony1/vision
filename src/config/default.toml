@@ -6,6 +6,7 @@ clones = []                   # absolute paths of the clones that Vision owns
 bin = "claude"
 config_dir = "~/.vision/claude"   # "" means: use the default login
 env_pass = []                     # more environment names that a session gets
+attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 
 [budget]                      # dollars at list price, as Claude Code reports them
 reader = 3

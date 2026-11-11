@@ -102,17 +102,10 @@ pub fn answer_card(
     };
     let at = time::now_rfc3339();
     let previous = question.row.state.clone();
-    if !ledger.start_person_answer(&id, &serde_json::to_string(&answer)?, took, &at)? {
-        bail!("{id} got an answer from a different command meanwhile");
-    }
-    let decision = match record::record(ctx, ledger, memory, &question, &answer, false) {
-        Ok(decision) => decision,
-        Err(e) => {
-            ledger.undo_person_answer(&id, &previous)?;
-            return Err(e.context(format!("{id} still waits for your answer")));
-        }
-    };
-    ledger.add_human(&HumanRow {
+    // The `human` row comes with the start of the recording, before the commit of the decision
+    // file: a crash between the two then leaves a row in `recording`, which a later tick ends,
+    // and never a decision of the person with no `human` row.
+    let human = HumanRow {
         at: at.clone(),
         ticket: Some(question.row.ticket.clone()),
         kind: "answer".into(),
@@ -120,7 +113,19 @@ pub fn answer_card(
         value: Some(answer.text.clone()),
         reason: (!answer.why.is_empty()).then(|| answer.why.clone()),
         seconds: given.seconds,
-    })?;
+    };
+    if !ledger.start_person_answer(&id, &serde_json::to_string(&answer)?, took, &at, &human)? {
+        bail!("{id} got an answer from a different command meanwhile");
+    }
+    crate::pipeline::crash_point("answer-recording");
+    let decision = match record::record(ctx, ledger, memory, &question, &answer, false) {
+        Ok(decision) => decision,
+        Err(e) => {
+            ledger.undo_person_answer(&id, &previous, &human)?;
+            return Err(e.context(format!("{id} still waits for your answer")));
+        }
+    };
+    crate::pipeline::crash_point("answer-recorded");
     if took == Some(true) {
         let sources = question
             .view
@@ -477,21 +482,30 @@ pub fn correct_card(
     };
     let old = current;
     let at = time::now_rfc3339();
-    ledger.set_question_correction(&qid, &serde_json::to_string(&answer)?, &new.to_string())?;
-    let already = ledger
-        .human_rows(&qid)?
-        .iter()
-        .any(|h| h.kind == "correct" && h.value.as_deref() == Some(answer.text.as_str()));
+    // The row of the card and the `human` row change together. A stop after the commit of the
+    // memory leaves both as they were, and `vision correct` again finds the decision that the
+    // first try wrote.
+    let answer_text = serde_json::to_string(&answer)?;
+    let already = ledger.in_transaction(|ledger| {
+        ledger.set_question_correction(&qid, &answer_text, &new.to_string())?;
+        let already = ledger
+            .human_rows(&qid)?
+            .iter()
+            .any(|h| h.kind == "correct" && h.value.as_deref() == Some(answer.text.as_str()));
+        if !already {
+            ledger.add_human(&HumanRow {
+                at: at.clone(),
+                ticket: Some(question.row.ticket.clone()),
+                kind: "correct".into(),
+                object: qid.clone(),
+                value: Some(answer.text.clone()),
+                reason: (!answer.why.is_empty()).then(|| answer.why.clone()),
+                seconds: None,
+            })?;
+        }
+        Ok(already)
+    })?;
     if !already {
-        ledger.add_human(&HumanRow {
-            at: at.clone(),
-            ticket: Some(question.row.ticket.clone()),
-            kind: "correct".into(),
-            object: qid.clone(),
-            value: Some(answer.text.clone()),
-            reason: (!answer.why.is_empty()).then(|| answer.why.clone()),
-            seconds: None,
-        })?;
         let sources = judge_entry.map(|e| e.sources).unwrap_or_default();
         count(ctx, memory, &sources, UseKind::Corrected, memory.person());
     }

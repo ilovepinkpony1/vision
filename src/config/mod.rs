@@ -83,6 +83,9 @@ pub struct Claude {
     pub config_dir: Option<String>,
     /// More environment names that a session gets.
     pub env_pass: Vec<String>,
+    /// True keeps the lines that Claude Code adds about itself: a co-author trailer in each
+    /// commit and a line in the text of a pull request. False turns them off in `settings.json`.
+    pub attribution: bool,
 }
 
 impl Default for Claude {
@@ -91,6 +94,7 @@ impl Default for Claude {
             bin: "claude".into(),
             config_dir: None,
             env_pass: Vec::new(),
+            attribution: true,
         }
     }
 }
@@ -479,6 +483,10 @@ mod tests {
         assert_eq!(config.gates.max_diff_lines, 3000);
         assert_eq!(config.sandbox.allow_domains, ["localhost", "127.0.0.1"]);
         assert!(config.sandbox.allow_read.is_empty());
+        assert!(config.claude.attribution);
+        let off = Config::parse("[claude]\nattribution = false\n").unwrap();
+        assert!(!off.claude.attribution);
+        assert!(Config::parse("[claude]\nattribution = \"no\"\n").is_err());
     }
 
     #[test]

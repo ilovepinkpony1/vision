@@ -31,6 +31,7 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
             "fix-ci",
             "ready",
             "comments",
+            "ci-review",
             "ready-to-merge",
             "done"
         ]
@@ -73,6 +74,24 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
     assert_eq!(ci.on["red"], "fix-ci");
     assert_eq!(ci.start[0].name, "ci.run");
     assert_eq!(adapter.step("ready").unwrap().on["false"], "comments");
+    // A commit of the Shepherd goes through CI again before the merge, and each loop goes
+    // through a turn step with a cap.
+    assert_eq!(
+        adapter.step("comments").unwrap().next.as_deref(),
+        Some("ci-review")
+    );
+    let ci_review = adapter.step("ci-review").unwrap();
+    assert_eq!(ci_review.start[0].name, "ci.run");
+    assert_eq!(ci_review.on["green"], "ready-to-merge");
+    assert_eq!(ci_review.on["red"], "fix-ci");
+    assert_eq!(
+        adapter.step("comments").unwrap().cap.as_deref(),
+        Some("comments")
+    );
+    assert_eq!(
+        adapter.step("fix-ci").unwrap().cap.as_deref(),
+        Some("ci_fix")
+    );
     // Each wait step names the values that mean "not yet", and has a limit.
     for wait in adapter
         .steps
@@ -167,7 +186,7 @@ fn doctor_tests_that_the_adapter_of_the_project_loads() {
         .unwrap_or_else(|| panic!("no adapter line: {run:?}"));
     assert!(line.starts_with("ok"), "{line}");
     assert!(line.contains("demo from"), "{line}");
-    assert!(line.contains("11 steps, 6 verbs, 4 jobs"), "{line}");
+    assert!(line.contains("12 steps, 6 verbs, 4 jobs"), "{line}");
 
     let broken = home.user_home.join("broken");
     std::fs::create_dir_all(&broken).unwrap();

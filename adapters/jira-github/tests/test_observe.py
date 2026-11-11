@@ -143,7 +143,36 @@ class Ticket(AdapterTest):
         self.assertTrue(facts["pr"]["closed"])
         w.pr = pull(draft=False, mergeable_state="dirty")
         w.comments = []
-        self.assertTrue(self.observe_ticket()["pr"]["conflict"])
+        facts = self.observe_ticket()
+        self.assertTrue(facts["pr"]["conflict"])
+        self.assertEqual(facts["review"]["state"], "changes", "the changes of lead come before the conflict")
+
+    def test_a_conflict_with_the_base_is_its_own_state_in_its_order(self):
+        w = self.world
+        # merged, closed, comments, changes, conflict, approved, waiting
+        w.pr, w.reviews, w.comments = pull(draft=False, mergeable_state="dirty"), [], []
+        facts = self.observe_ticket()
+        self.assertTrue(facts["pr"]["conflict"])
+        self.assertEqual(facts["review"]["state"], "conflict")
+        w.reviews = [review(1, "lead", "APPROVED")]
+        self.assertEqual(self.observe_ticket()["review"]["state"], "conflict", "a conflict comes before approved")
+        w.reviews.append(review(2, "lead", "CHANGES_REQUESTED"))
+        self.assertEqual(self.observe_ticket()["review"]["state"], "changes", "changes come before a conflict")
+        w.reviews = [review(1, "lead", "APPROVED")]
+        w.comments = [comment(10, "lead", "Rename this")]
+        self.assertEqual(self.observe_ticket()["review"]["state"], "comments", "a comment comes before a conflict")
+        w.comments = []
+        w.pr = pull(draft=False, mergeable=False)
+        self.assertEqual(self.observe_ticket()["review"]["state"], "conflict", "mergeable false is a conflict")
+        w.pr = pull(draft=False, mergeable_state="dirty", state="closed", merged=True)
+        self.assertEqual(self.observe_ticket()["review"]["state"], "merged")
+        w.pr = pull(draft=False, mergeable_state="dirty", state="closed")
+        self.assertEqual(self.observe_ticket()["review"]["state"], "closed")
+        # GitHub has not computed it yet: no conflict.
+        w.pr = pull(draft=False, mergeable=None, mergeable_state="unknown")
+        facts = self.observe_ticket()
+        self.assertFalse(facts["pr"]["conflict"])
+        self.assertEqual(facts["review"]["state"], "approved")
 
     def test_each_kind_of_comment_waits_and_the_state_agrees(self):
         w = self.world
@@ -171,6 +200,17 @@ class Ticket(AdapterTest):
         facts = self.observe_ticket(ignore_logins=["ci-bot"])
         self.assertEqual(facts["pr"]["comments_waiting"], 0)
         self.assertEqual(facts["review"]["state"], "approved")
+        # An entry with a kind: the status comment never waits, and a review of the bot still does.
+        facts = self.observe_ticket(ignore_logins=["ci-bot:conversation"])
+        self.assertEqual(facts["review"]["state"], "approved")
+        w.reviews.append(review_with(2, "ci-bot", "COMMENTED", "A null check is missing."))
+        facts = self.observe_ticket(ignore_logins=["ci-bot:conversation"])
+        self.assertEqual(facts["pr"]["comments_waiting"], 1)
+        self.assertEqual(facts["review"]["state"], "comments")
+        result = self.observe({"what": "ticket", "key": KEY, "branch": BRANCH, "pr": 7,
+                               "config": self.config(ignore_logins=["ci-bot:other"])})
+        self.assertEqual(result.code, 1)
+        self.assertIn("inline, review, or conversation", result.stderr)
 
     def test_any_reviewer_counts_when_approvers_is_empty(self):
         self.world.reviews = [review(1, "someone", "APPROVED")]
@@ -225,6 +265,56 @@ class Ticket(AdapterTest):
             "demo": {"branch": "demo", "head": HEAD, "holds": True},
             "gone": {"branch": "gone", "head": None, "holds": False},
         })
+
+    def test_the_deployment_of_an_env_tells_whether_the_env_runs_the_head(self):
+        deployments = REPO_PATH + "/deployments"
+        for branch in ("staging", "demo"):
+            self.server.json_route("GET", REPO_PATH + "/git/ref/heads/" + branch, {"object": {"sha": HEAD}})
+            self.server.json_route("GET", REPO_PATH + "/compare/%s...%s" % (branch, HEAD), {"status": "identical"})
+        envs = [{"name": "staging", "branch": "staging", "deployment": "staging-env"},
+                {"name": "demo", "branch": "demo"}]
+
+        # No deployment of the environment yet.
+        self.server.json_route("GET", deployments, [])
+        facts = self.observe_ticket(envs=envs)["envs"]
+        self.assertEqual(facts["staging"], {"branch": "staging", "head": HEAD, "holds": True, "deployed": False,
+                                            "deployment_sha": None, "deployed_at": None})
+        self.assertEqual(facts["demo"], {"branch": "demo", "head": HEAD, "holds": True},
+                         "an env with no deployment key gets no new fact")
+        calls = self.server.calls("GET", deployments)
+        self.assertEqual(len(calls), 1, "one call for the one env with a deployment")
+        self.assertEqual(calls[0]["query"], {"environment": "staging-env", "per_page": "1"})
+
+        # The newest deployment runs an older commit: the env does not run the head yet.
+        self.server.json_route("GET", deployments, [
+            {"id": 3, "sha": OTHER, "environment": "staging-env", "created_at": "2026-11-02T10:00:00Z"}])
+        self.server.json_route("GET", REPO_PATH + "/compare/%s...%s" % (OTHER, HEAD), {"status": "ahead"})
+        staging = self.observe_ticket(envs=envs)["envs"]["staging"]
+        self.assertEqual((staging["deployed"], staging["deployment_sha"], staging["deployed_at"]),
+                         (False, OTHER, "2026-11-02T10:00:00Z"))
+
+        # A newer commit that holds the head, and then the head itself, with no compare.
+        newer = "c" * 40
+        self.server.json_route("GET", deployments, [
+            {"id": 4, "sha": newer, "environment": "staging-env", "created_at": "2026-11-03T10:00:00Z"}])
+        self.server.json_route("GET", REPO_PATH + "/compare/%s...%s" % (newer, HEAD), {"status": "behind"})
+        staging = self.observe_ticket(envs=envs)["envs"]["staging"]
+        self.assertEqual((staging["deployed"], staging["deployment_sha"]), (True, newer))
+        self.server.json_route("GET", deployments, [
+            {"id": 5, "sha": HEAD, "environment": "staging-env", "created_at": "2026-11-04T10:00:00Z"}])
+        compares = len(self.server.calls("GET", REPO_PATH + "/compare/%s...%s" % (HEAD, HEAD)))
+        staging = self.observe_ticket(envs=envs)["envs"]["staging"]
+        self.assertEqual((staging["deployed"], staging["deployed_at"]), (True, "2026-11-04T10:00:00Z"))
+        self.assertEqual(len(self.server.calls("GET", REPO_PATH + "/compare/%s...%s" % (HEAD, HEAD))), compares)
+        self.assertFalse([c for c in self.server.calls() if "/statuses" in c["path"]],
+                         "the statuses of a deployment are not read")
+        self.assertEqual(len(self.server.calls("GET", deployments)), 4, "one call for each look")
+
+        # A bad deployment key is named.
+        result = self.observe({"what": "ticket", "key": KEY, "branch": BRANCH, "pr": 7,
+                               "config": self.config(envs=[{"name": "staging", "branch": "staging", "deployment": 3}])})
+        self.assertEqual(result.code, 1)
+        self.assertIn("`deployment` of the env staging", result.stderr)
 
     def test_an_http_error_names_the_call_and_the_status_never_a_header(self):
         self.server.json_route("GET", "/rest/api/3/issue/" + KEY,

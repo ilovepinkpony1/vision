@@ -229,21 +229,26 @@ fn a_pinned_agent_shows_the_default_that_it_left() {
         .expect_code(0);
     let run = home.run(&["model"]);
     run.expect_code(0);
-    let builder = run
-        .stdout
-        .lines()
-        .find(|l| l.starts_with("builder"))
-        .unwrap();
-    assert!(
-        builder.ends_with(
-            "default: claude-opus-5-5 xhigh. It writes the code and uses the most tokens. This model costs half as much as the top model."
-        ),
+    // The reason of the default has its own line under the row of the agent (with a second
+    // line when it is long), so that the table fits 100 columns.
+    let reason_of = |agent: &str| {
+        let lines: Vec<&str> = run.stdout.lines().collect();
+        let at = lines.iter().position(|l| l.starts_with(agent)).unwrap();
+        let mut text = lines[at + 1].trim().to_string();
+        for more in lines[at + 2..].iter().take_while(|l| l.starts_with("    ")) {
+            text.push(' ');
+            text.push_str(more.trim());
+        }
+        text
+    };
+    assert_eq!(
+        reason_of("builder"),
+        "reason of the default claude-opus-5-5 xhigh: It writes the code and uses the most tokens. This model costs half as much as the top model.",
         "{run:?}"
     );
-    let scout = run.stdout.lines().find(|l| l.starts_with("scout")).unwrap();
-    assert!(
-        scout.ends_with("A wrong reading of the ticket costs the full build. Its turns are short."),
+    assert_eq!(
+        reason_of("scout"),
+        "reason of the default: A wrong reading of the ticket costs the full build. Its turns are short.",
         "{run:?}"
     );
-    assert!(!scout.contains("default: "), "{run:?}");
 }
