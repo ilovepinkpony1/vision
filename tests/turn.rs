@@ -554,10 +554,11 @@ fn the_environment_of_a_session_is_an_allow_list() {
         let mut list = toml_edit::Array::new();
         list.push("EXTRA_PASS");
         doc["claude"]["env_pass"] = toml_edit::value(list);
+        doc["claude"]["env"]["FIXED_NAME"] = toml_edit::value("a fixed value");
     });
     let scenario = home.scenario(
         "env",
-        json!([[{"do": "init"}, {"do": "env", "show": ["EXTRA_PASS"]},
+        json!([[{"do": "init"}, {"do": "env", "show": ["EXTRA_PASS", "FIXED_NAME"]},
                 {"do": "result", "structured_output": result_object("ok")}]]),
     );
     let ctx = home.ctx();
@@ -609,6 +610,8 @@ fn the_environment_of_a_session_is_an_allow_list() {
         );
     }
     assert_eq!(env["values"]["EXTRA_PASS"], "passed");
+    // A fixed value of `claude.env` reaches the session.
+    assert_eq!(env["values"]["FIXED_NAME"], "a fixed value");
     let again = home.run(&["turn-run", &prepared.id.to_string()]);
     again.expect_code(1);
     assert!(again.stderr.contains("already ended"), "{again:?}");

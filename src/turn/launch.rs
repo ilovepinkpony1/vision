@@ -157,7 +157,8 @@ pub struct Plan {
     pub workdir: PathBuf,
     /// The names of `claude.env_pass`.
     pub env_pass: Vec<String>,
-    /// Values that the runner sets: `CLAUDE_CONFIG_DIR`, and `GIT_CONFIG_GLOBAL` of a worker.
+    /// The fixed values of `claude.env`, and the values that the runner sets:
+    /// `CLAUDE_CONFIG_DIR`, and `GIT_CONFIG_GLOBAL` of a worker.
     pub env_set: BTreeMap<String, String>,
     pub first_message: String,
     pub time_limit_secs: u64,
@@ -409,7 +410,8 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         copy_view(&workdir, &id, &request.view)?;
         exclude_view(ctx, &workdir);
 
-        let mut env_set = BTreeMap::new();
+        // The fixed values of `claude.env` come first, so that a value of the runner wins.
+        let mut env_set = config.claude.env.clone();
         if let Some(dir) = config.claude_config_dir(paths)? {
             env_set.insert("CLAUDE_CONFIG_DIR".into(), dir.display().to_string());
         }

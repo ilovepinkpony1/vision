@@ -109,6 +109,7 @@ clones = []                   # absolute paths of the clones that Vision owns
 bin = "claude"
 config_dir = "~/.vision/claude"   # a missing key means the folder claude/ of the home. "" means the default login.
 env_pass = []                     # more environment names that a session gets
+env = {}                          # more variables with a fixed value that a session gets. Never a secret.
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 
 [budget]                      # dollars at list price, as Claude Code reports them
@@ -305,6 +306,8 @@ and each name in claude.env_pass
 ```
 
 The supervisor drops each other name, so that a token of the executor never reaches a session.
+
+The key `claude.env` gives each session more variables with a fixed value. One example is a variable that names the test database of the clone, for a project that separates its clones in this way. A value that the runner sets wins over a value of this key. A session can read its environment, so a secret never goes there.
 
 The runner renders `settings.json` for each turn. For a worker and a tester, it turns the sandbox on. It denies reads of the home folder, and it allows the clone, the folders of `sandbox.allow_read`, and the domains and sockets of `[sandbox]`. A reader gets no Bash tool, so its file needs no sandbox. Its file denies the Bash tool and the web tools.
 

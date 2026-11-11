@@ -83,6 +83,10 @@ pub struct Claude {
     pub config_dir: Option<String>,
     /// More environment names that a session gets.
     pub env_pass: Vec<String>,
+    /// More variables with a fixed value that a session gets, such as the name of a test
+    /// database of the clone. A value of the runner wins over one of them. A session can read
+    /// its environment, so a secret never goes here.
+    pub env: BTreeMap<String, String>,
     /// True keeps the lines that Claude Code adds about itself: a co-author trailer in each
     /// commit and a line in the text of a pull request. False turns them off in `settings.json`.
     pub attribution: bool,
@@ -94,6 +98,7 @@ impl Default for Claude {
             bin: "claude".into(),
             config_dir: None,
             env_pass: Vec::new(),
+            env: BTreeMap::new(),
             attribution: true,
         }
     }
@@ -432,9 +437,29 @@ impl Config {
                 bail!("{key} is {value}, but it must be a part between 0 and 1, such as 0.60");
             }
         }
+        for (name, value) in &self.claude.env {
+            let valid = !name.is_empty()
+                && name.chars().enumerate().all(|(at, c)| {
+                    c == '_' || c.is_ascii_alphabetic() || (at > 0 && c.is_ascii_digit())
+                });
+            if !valid {
+                bail!(
+                    "claude.env has the name `{name}`, but the name of a variable has only letters, digits, and `_`, and it starts with no digit"
+                );
+            }
+            if RUNNER_ENV.contains(&name.as_str()) {
+                bail!("claude.env cannot set {name}, because the runner sets it for each session");
+            }
+            if value.contains(['\0', '\n', '\r']) {
+                bail!("claude.env.{name} must be one line of text");
+            }
+        }
         Ok(())
     }
 }
+
+/// The variables that the runner sets for a session. `claude.env` cannot set them.
+pub const RUNNER_ENV: [&str; 2] = ["CLAUDE_CONFIG_DIR", "GIT_CONFIG_GLOBAL"];
 
 /// `vision config [--json]`: prints the configuration in use, with the defaults of missing keys.
 pub fn show(ctx: &Ctx, json: bool) -> Result<()> {
@@ -484,6 +509,23 @@ mod tests {
         assert_eq!(config.sandbox.allow_domains, ["localhost", "127.0.0.1"]);
         assert!(config.sandbox.allow_read.is_empty());
         assert!(config.claude.attribution);
+        assert!(config.claude.env.is_empty());
+        let fixed =
+            Config::parse("[claude]\nenv = { TEST_DB = \"app_test_2\", A1 = \"\" }\n").unwrap();
+        assert_eq!(fixed.claude.env["TEST_DB"], "app_test_2");
+        for (text, part) in [
+            ("env = { \"1A\" = \"x\" }", "starts with no digit"),
+            (
+                "env = { \"A-B\" = \"x\" }",
+                "has only letters, digits, and `_`",
+            ),
+            ("env = { GIT_CONFIG_GLOBAL = \"x\" }", "the runner sets it"),
+            ("env = { A = \"x\\ny\" }", "must be one line"),
+            ("env = { A = 1 }", ""),
+        ] {
+            let err = Config::parse(&format!("[claude]\n{text}\n")).unwrap_err();
+            assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
+        }
         let off = Config::parse("[claude]\nattribution = false\n").unwrap();
         assert!(!off.claude.attribution);
         assert!(Config::parse("[claude]\nattribution = \"no\"\n").is_err());

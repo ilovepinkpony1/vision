@@ -1127,10 +1127,12 @@ fn the_signals_start_at_the_mark_of_the_last_good_run() {
 fn the_tick_starts_a_curator_turn_after_a_merge_and_never_two_at_once() {
     let home = TestHome::new();
     seed(&home);
+    // The fake turn runs long enough for a tick and `vision curate` to meet it on a loaded
+    // machine: with 1.5 seconds, the turn ended first under a high load.
     curator_scenario(
         &home,
         json!({"summary": "Nothing to change.", "changes": []}),
-        1.5,
+        5.0,
     );
     tick(&home);
     assert!(curator_turns(&home).is_empty(), "no merge and no week yet");
