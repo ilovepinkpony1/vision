@@ -48,7 +48,7 @@ $VISION_HOME/
   running.json           the job or the operation that a pass runs now. It is gone when nothing runs.
   log/vision.log         one line for each tick action
   log/app.err            what library code prints to standard error while the app runs
-  loader.ans             optional: your picture for the loader of the app (section 15.3)
+  loader.ans             optional: your picture for the loader of the app, at most 240 x 120 cells (section 15.3)
   claude/                CLAUDE_CONFIG_DIR of the sessions, with its own login
   sandbox/               optional: <kind>.json replaces the settings file that Vision renders
   skills/                copies of the skills that the role files name
@@ -1038,7 +1038,9 @@ The loader shows an android while the data loads. Its four stages are real: the 
 - The person pressed a key.
 - The tracker stage took more than 10 seconds. The load then continues, and Home shows the queue later.
 
-If the home folder has the file `loader.ans`, the loader shows that picture in place of the android. The file is text with color codes, as a tool such as `chafa` writes it. The app reads the file as data. Only the codes of color and bold count. Each other escape sequence and each control character goes away. The picture keeps at most 64 columns and 18 rows. A file that is empty, larger than 256 KB, or not valid UTF-8 counts as no file.
+If the home folder has the file `loader.ans`, the loader shows that picture in place of the android. The file is text with color codes, as a tool such as `chafa` writes it. The app reads the file as data. Only the codes of color and bold count. Each other escape sequence and each control character goes away. The picture keeps at most 240 columns and 120 rows. A file that is empty, larger than 1 MiB, or not valid UTF-8 counts as no file.
+
+The room for the picture is the rows above the title and the width of the window less 4 columns. A picture that fits the room shows cell for cell. A larger picture shrinks until all of it fits the room. Its columns and its rows shrink by the same factor, so its shape stays. A picture never grows. A picture of only spaces and blocks of quadrants and halves shrinks as pixels. Each cell holds two by two pixels, and each new pixel is the mean color of the pixels that it covers. Each new cell gets the block and the two colors that show its four pixels best, and a part with no color stays with no color. Any other picture, such as text or braille, keeps the nearest cell. The app fits the picture once for each size of the window.
 
 Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or opens the start card for a ticket of the queue. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
 

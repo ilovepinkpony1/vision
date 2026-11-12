@@ -1,14 +1,15 @@
 //! The picture of the loader, `loader.ans`: the colors of each kind, the escape sequences that
 //! go away and leave clean cells, the limits of its size, the files that count as no file, the
-//! loader that shows the picture in place of the android, and no picture with no color.
+//! fit of a picture to a room, the loader that shows the picture in place of the android, and
+//! no picture with no color.
 
 use vision::app::model::App;
 use vision::app::msg::{Effect, Msg};
 use vision::app::picture::{
-    index_color, parse, read, Cell, Picture, MAX_BYTES, MAX_COLS, MAX_ROWS,
+    index_color, parse, read, Cell, Picture, BLANK, BLOCKS, MAX_BYTES, MAX_COLS, MAX_ROWS,
 };
 use vision::app::update::start;
-use vision::app::view::theme::{ColorMode, Rgb};
+use vision::app::view::theme::{ColorMode, Rgb, T};
 
 use super::support::*;
 
@@ -102,17 +103,24 @@ fn other_escape_sequences_and_control_characters_give_clean_cells() {
 }
 
 #[test]
-fn the_picture_keeps_at_most_64_columns_and_18_rows() {
+fn the_picture_keeps_at_most_240_columns_and_120_rows() {
+    assert_eq!((MAX_COLS, MAX_ROWS), (240, 120));
     let wide = "x".repeat(100);
-    let rows = vec![wide.as_str(); 30].join("\n");
-    let p = parse(&rows).unwrap();
+    let p = parse(&vec![wide.as_str(); 50].join("\n")).unwrap();
+    assert_eq!(
+        (p.width(), p.height()),
+        (100, 50),
+        "a picture of 100 x 50 stays whole"
+    );
+    let wide = "x".repeat(300);
+    let p = parse(&vec![wide.as_str(); 150].join("\n")).unwrap();
     assert_eq!(p.height(), MAX_ROWS);
     assert_eq!(p.width(), MAX_COLS);
     // A wide character takes two columns, and one that does not fit goes away.
-    let p = parse(&format!("{}界界", "y".repeat(61))).unwrap();
-    assert_eq!(p.width(), 63);
-    assert_eq!(p.rows[0][61].ch, Some('界'));
-    assert_eq!(p.rows[0][62].ch, None);
+    let p = parse(&format!("{}界界", "y".repeat(237))).unwrap();
+    assert_eq!(p.width(), 239);
+    assert_eq!(p.rows[0][237].ch, Some('界'));
+    assert_eq!(p.rows[0][238].ch, None);
     // Empty rows at the end go away; rows in the middle stay.
     let p = parse("a\n\nb\n\n\n").unwrap();
     assert_eq!(text(&p), ["a", "", "b"]);
@@ -138,7 +146,8 @@ fn the_files_that_count_as_no_file() {
     std::fs::write(&file, [b'A', 0xff, 0xfe, b'B']).unwrap();
     assert_eq!(read(home), None, "a file that is not UTF-8");
     std::fs::write(&file, "x".repeat(MAX_BYTES as usize + 1)).unwrap();
-    assert_eq!(read(home), None, "a file over 256 KB");
+    assert_eq!(MAX_BYTES, 1024 * 1024);
+    assert_eq!(read(home), None, "a file over 1 MiB");
     std::fs::write(
         &file,
         format!("\x1b[32m{}", "x".repeat(MAX_BYTES as usize - 10)),
@@ -148,6 +157,178 @@ fn the_files_that_count_as_no_file() {
     std::fs::remove_file(&file).unwrap();
     std::fs::create_dir(&file).unwrap();
     assert_eq!(read(home), None, "a folder with the name");
+}
+
+/// A picture of `w` x `h` cells, with the cell of each column and row.
+fn picture_of(w: usize, h: usize, cell: impl Fn(usize, usize) -> Cell) -> Picture {
+    Picture {
+        rows: (0..h)
+            .map(|r| (0..w).map(|c| cell(c, r)).collect())
+            .collect(),
+    }
+}
+
+fn block(ch: char, fg: Rgb, bg: Option<Rgb>) -> Cell {
+    Cell {
+        ch: Some(ch),
+        fg: Some(fg),
+        bg,
+        bold: false,
+    }
+}
+
+/// The colors that the four quadrants of a block show, in the order of the bits of
+/// [`BLOCKS`], with `None` for the background of the app.
+fn quadrants(cell: Cell) -> [Option<Rgb>; 4] {
+    let mask = BLOCKS
+        .iter()
+        .position(|b| Some(*b) == cell.ch)
+        .unwrap_or_else(|| panic!("not a block: {cell:?}"));
+    std::array::from_fn(|q| {
+        if mask & (1 << q) != 0 {
+            Some(cell.fg.unwrap_or(T.fg))
+        } else {
+            cell.bg
+        }
+    })
+}
+
+fn size(picture: &Picture) -> (usize, usize) {
+    (picture.width(), picture.height())
+}
+
+#[test]
+fn fit_never_enlarges_a_picture() {
+    let p = picture_of(30, 10, |c, r| {
+        block(BLOCKS[(c + r) % 16], Rgb(c as u8, r as u8, 9), None)
+    });
+    assert_eq!(p.fit(30, 10), p, "a picture that fits stays as it is");
+    assert_eq!(p.fit(200, 100), p, "a picture never grows");
+    let text = parse("abc\ndef").unwrap();
+    assert_eq!(text.fit(80, 40), text);
+}
+
+#[test]
+fn fit_keeps_the_shape() {
+    let p = picture_of(60, 30, |_, _| block('█', Rgb(1, 2, 3), None));
+    assert_eq!(size(&p.fit(30, 100)), (30, 15));
+    assert_eq!(size(&p.fit(100, 10)), (20, 10));
+    assert_eq!(
+        size(&p.fit(59, 30)),
+        (59, 30),
+        "the rounded side never passes the room"
+    );
+    // A portrait of 66 x 43 in the room of a window of 110 x 32.
+    let p = picture_of(66, 43, |_, _| block('▀', Rgb(1, 2, 3), Some(Rgb(4, 5, 6))));
+    assert_eq!(size(&p.fit(106, 19)), (29, 19));
+    // A picture of text keeps its shape too.
+    let p = picture_of(60, 30, |_, _| block('x', Rgb(1, 2, 3), None));
+    assert_eq!(size(&p.fit(30, 100)), (30, 15));
+    // No room gives no picture.
+    assert_eq!(size(&p.fit(0, 10)), (0, 0));
+}
+
+#[test]
+fn a_block_picture_shrinks_as_pixels_with_mean_colors() {
+    // One color stays that color.
+    let green = Rgb(20, 200, 60);
+    let q = picture_of(4, 2, |_, _| block('█', green, None)).fit(2, 1);
+    assert_eq!(size(&q), (2, 1));
+    for cell in &q.rows[0] {
+        assert_eq!(quadrants(*cell), [Some(green); 4]);
+    }
+    // A factor that is not whole leaves one color as one color.
+    let q = picture_of(10, 18, |_, _| block('█', green, None)).fit(96, 16);
+    assert_eq!(size(&q), (9, 16));
+    assert!(q.rows.iter().flatten().all(|cell| *cell
+        == Cell {
+            bg: Some(green),
+            ..BLANK
+        }));
+    // Fine stripes of red and blue mix to purple.
+    let (red, blue) = (Rgb(200, 0, 0), Rgb(0, 0, 200));
+    let q = picture_of(4, 2, |_, _| block('▌', red, Some(blue))).fit(2, 1);
+    for cell in &q.rows[0] {
+        assert_eq!(quadrants(*cell), [Some(Rgb(100, 0, 100)); 4]);
+    }
+    // A red top and a blue bottom give a half block with both colors.
+    let p = picture_of(4, 4, |_, r| {
+        block('█', if r < 2 { red } else { blue }, None)
+    });
+    assert_eq!(p.fit(2, 1).rows, vec![vec![block('▀', red, Some(blue))]]);
+    // A larger picture of many blocks gives only blocks.
+    let p = picture_of(40, 20, |c, r| {
+        block(
+            BLOCKS[(c * 3 + r * 5) % 16],
+            Rgb(c as u8 * 6, 90, r as u8 * 12),
+            Some(Rgb(9, r as u8, c as u8)),
+        )
+    });
+    let q = p.fit(13, 13);
+    assert_eq!(size(&q), (13, 7));
+    assert!(q
+        .rows
+        .iter()
+        .flatten()
+        .all(|cell| cell.ch.is_some_and(|ch| BLOCKS.contains(&ch)) && !cell.bold));
+}
+
+#[test]
+fn a_transparent_area_stays_transparent() {
+    let red = Rgb(200, 0, 0);
+    // The first column has no color; the other three are red.
+    let p = picture_of(4, 2, |c, _| {
+        if c == 0 {
+            BLANK
+        } else {
+            block('█', red, None)
+        }
+    });
+    let q = p.fit(2, 1);
+    assert_eq!(
+        q.rows[0][0],
+        block('▐', red, None),
+        "the left half shows the app"
+    );
+    assert_eq!(quadrants(q.rows[0][1]), [Some(red); 4]);
+    // An area with no color at all gives a cell that shows nothing.
+    let p = picture_of(4, 2, |c, _| {
+        if c < 2 {
+            BLANK
+        } else {
+            block('█', red, None)
+        }
+    });
+    assert_eq!(p.fit(2, 1).rows[0][0], BLANK);
+}
+
+#[test]
+fn a_picture_of_text_keeps_the_nearest_cells() {
+    let p = parse("\x1b[1ma\x1b[22mbcdef\nghijkl\nmnopqr\nstuv\x1b[31mwx").unwrap();
+    let q = p.fit(3, 2);
+    // The first and the last row and column stay.
+    assert_eq!(text(&q), ["adf", "svx"]);
+    assert!(q.rows[0][0].bold, "a cell keeps its bold");
+    assert!(!q.rows[0][1].bold);
+    assert_eq!(q.rows[1][2].fg, Some(Rgb(205, 0, 0)));
+    // One cell of text among blocks: the blocks keep their cells and mix no color.
+    let (red, blue) = (Rgb(200, 0, 0), Rgb(0, 0, 200));
+    let p = picture_of(4, 2, |c, r| {
+        if (c, r) == (0, 0) {
+            block('x', red, None)
+        } else {
+            block('▌', red, Some(blue))
+        }
+    });
+    let q = p.fit(2, 1);
+    assert_eq!(
+        q.rows,
+        vec![vec![block('x', red, None), block('▌', red, Some(blue))]]
+    );
+    // A wide character keeps its two columns, and a lone second column is a space.
+    let q = parse("界界界界\n界界界界").unwrap().fit(3, 1);
+    let chars: Vec<Option<char>> = q.rows[0].iter().map(|c| c.ch).collect();
+    assert_eq!(chars, [Some('界'), None, Some(' ')]);
 }
 
 /// A small picture: a green square with a red mark.
@@ -186,8 +367,9 @@ fn the_loader_shows_the_picture_in_place_of_the_android() {
 }
 
 #[test]
-fn a_tall_picture_is_cut_to_the_rows_that_fit() {
-    let tall = parse(&vec!["\x1b[44m          \x1b[0m"; MAX_ROWS].join("\n")).unwrap();
+fn a_tall_picture_shrinks_to_the_rows_that_fit() {
+    // 18 rows of a blue color; the window of 100 x 28 leaves 16 rows for the art.
+    let tall = parse(&vec!["\x1b[44m          \x1b[0m"; 18].join("\n")).unwrap();
     let mut app = booting((100, 28));
     send(&mut app, 0.05, Msg::Picture(Box::new(Some(tall))));
     send(&mut app, 0.3, Msg::Setup(Ok(setup())));

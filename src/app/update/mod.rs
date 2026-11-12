@@ -46,6 +46,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::Resize { width, height } => {
             app.size = (width, height);
             app.dirty = true;
+            boot::fit_picture(app);
         }
         Msg::Key(key) => {
             app.dirty = true;
@@ -75,7 +76,9 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::Stats { week, data } => stats::on_stats(app, week, *data, &mut fx),
         Msg::Picture(picture) => {
             app.picture = Some(*picture);
+            app.picture_fit = None;
             app.dirty = true;
+            boot::fit_picture(app);
         }
         Msg::Setup(result) => boot::on_setup(app, result, &mut fx),
         Msg::Local(result) => data::on_local(app, result, &mut fx),

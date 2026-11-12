@@ -10,7 +10,7 @@
 
 pub mod android;
 mod ask_card;
-mod boot;
+pub mod boot;
 pub mod canvas;
 mod cards;
 mod chain_rows;

@@ -12,7 +12,7 @@ use super::model_table::ModelsState;
 use super::msg::{Job, JobKind};
 use super::needs::NeedsCard;
 use super::now::{self, Now, Pass};
-use super::picture::Picture;
+use super::picture::{Fitted, Picture};
 use super::stats::StatsState;
 use super::view::theme::ColorMode;
 use crate::pipeline::commands::PickRow;
@@ -480,6 +480,10 @@ pub struct App {
     pub chain: Option<Chain>,
     /// The picture of the loader: `None` while it loads, `Some(None)` for the android.
     pub picture: Option<Option<Picture>>,
+    /// The picture of the loader fit to the room that the window leaves for it. The update
+    /// makes it when the picture arrives and when the window changes size, so the view does
+    /// not shrink the picture on each frame.
+    pub picture_fit: Option<Fitted>,
     /// The last number given to a load of the needs or to a chain.
     pub seq: u64,
     pub notice: Option<Notice>,
@@ -508,6 +512,7 @@ impl App {
             stats: StatsState::default(),
             chain: None,
             picture: None,
+            picture_fit: None,
             seq: 0,
             notice: None,
             quit: false,

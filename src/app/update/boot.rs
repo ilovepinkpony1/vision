@@ -6,6 +6,9 @@
 //! the android has appeared and the stages have settled, when the person presses a key, or
 //! when the tracker took more than 10 seconds: the queue then still loads, and Home shows it
 //! when it arrives.
+//!
+//! The picture of the loader is fit to the room of the window when it arrives and when the
+//! window changes size, so the view draws a copy that is ready.
 
 use std::time::Duration;
 
@@ -14,8 +17,10 @@ use super::super::model::{
     STAGE_TRACKER,
 };
 use super::super::msg::{Effect, Key};
+use super::super::picture::Fitted;
 use super::super::text::count;
 use super::super::view::android::APPEAR_SECONDS;
+use super::super::view::boot::room;
 use super::{data, engine, leave};
 
 /// The loader stops waiting for the tracker after this time.
@@ -29,6 +34,22 @@ pub fn start(app: &mut App) -> Vec<Effect> {
         return vec![Effect::LoadSetup];
     }
     vec![Effect::LoadSetup, Effect::LoadPicture]
+}
+
+/// Fits the picture of the loader to the room of the window, once for each size. After the
+/// loader, a change of size drops the copy.
+pub fn fit_picture(app: &mut App) {
+    let room = room(i32::from(app.size.0), i32::from(app.size.1));
+    let fit = match &app.picture {
+        Some(Some(picture)) if app.screen == Screen::Boot => {
+            if app.picture_fit.as_ref().is_some_and(|f| f.room == room) {
+                return;
+            }
+            Some(Fitted::new(picture, room))
+        }
+        _ => None,
+    };
+    app.picture_fit = fit;
 }
 
 pub fn run_stage(app: &mut App, stage: usize) {

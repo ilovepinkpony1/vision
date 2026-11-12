@@ -1,10 +1,14 @@
 //! The loader with a clock that the test sets: the shortest stay, the key that skips, the limit
-//! of the tracker stage, a failed stage, and a home that is not set up.
+//! of the tracker stage, a failed stage, a home that is not set up, and a picture that fits the
+//! room of the window.
 
+use ratatui::buffer::Buffer;
 use vision::app::model::{
-    Screen, SetupError, StageState, STAGE_ENGINE, STAGE_LEDGER, STAGE_TRACKER,
+    App, Screen, SetupError, StageState, STAGE_ENGINE, STAGE_LEDGER, STAGE_TRACKER,
 };
 use vision::app::msg::{Effect, Key, Msg};
+use vision::app::picture::{Cell, Picture, BLOCKS};
+use vision::app::view::theme::{Rgb, T};
 
 use super::support::*;
 
@@ -135,4 +139,146 @@ fn the_loader_animates_and_home_waits_quietly() {
         !app.animating(),
         "nothing moves on Home after the first pass"
     );
+}
+
+const TOP: Rgb = Rgb(250, 40, 40);
+const BOTTOM: Rgb = Rgb(40, 250, 40);
+
+/// A portrait of 66 x 43 cells of blocks: a band of one color in the first 3 rows, a band of
+/// another color in the last 3 rows, and quadrants of many colors between them.
+fn portrait() -> Picture {
+    let cell = |c: usize, r: usize| -> Cell {
+        let (ch, fg, bg) = match r {
+            0..=2 => ('▀', Some(TOP), Some(TOP)),
+            40.. => (' ', None, Some(BOTTOM)),
+            _ => (
+                BLOCKS[(r * 7 + c * 3) % 16],
+                Some(Rgb(30, 60 + r as u8, 120 + c as u8)),
+                Some(Rgb(10, 20 + c as u8, 40 + r as u8)),
+            ),
+        };
+        Cell {
+            ch: Some(ch),
+            fg,
+            bg,
+            bold: false,
+        }
+    };
+    Picture {
+        rows: (0..43)
+            .map(|r| (0..66).map(|c| cell(c, r)).collect())
+            .collect(),
+    }
+}
+
+fn loader_with_portrait(size: (u16, u16)) -> App {
+    let mut app = booting(size);
+    send(&mut app, 0.05, Msg::Picture(Box::new(Some(portrait()))));
+    send(&mut app, 0.3, Msg::Setup(Ok(setup())));
+    send(&mut app, 0.6, Msg::Tick);
+    app
+}
+
+/// The rows of the screen with a cell in a color.
+fn rows_with(buf: &Buffer, color: Rgb) -> Vec<u16> {
+    (0..buf.area.height)
+        .filter(|&y| {
+            (0..buf.area.width).any(|x| {
+                let cell = &buf[(x, y)];
+                cell.bg == color.color() || cell.fg == color.color()
+            })
+        })
+        .collect()
+}
+
+/// The row of the screen with the name of the tool.
+fn title_row(buf: &Buffer) -> u16 {
+    text(buf)
+        .lines()
+        .position(|line| line.contains("V  I  S  I  O  N"))
+        .expect("the title shows") as u16
+}
+
+#[test]
+fn a_portrait_larger_than_the_room_shows_whole_and_shrunk() {
+    // The window of 110 x 32 leaves 19 rows above the title for the art.
+    let buf = render(&loader_with_portrait((110, 32)));
+    let (top, bottom) = (rows_with(&buf, TOP), rows_with(&buf, BOTTOM));
+    assert_eq!(top.len(), 1, "the first rows of the art: {top:?}");
+    assert_eq!(bottom.len(), 1, "the last rows of the art: {bottom:?}");
+    assert_eq!(
+        bottom[0] - top[0],
+        18,
+        "the art takes the 19 rows of the room"
+    );
+    assert_eq!(
+        title_row(&buf),
+        bottom[0] + 2,
+        "the title shows below the art"
+    );
+    // The shape stays: 29 columns for 19 rows.
+    let columns = (0..110)
+        .filter(|&x| buf[(x, top[0])].bg == TOP.color())
+        .count();
+    assert_eq!(columns, 29);
+    let shown = text(&buf);
+    assert!(shown.contains("home folder"), "{shown}");
+    assert!(shown.contains("any key skips"), "{shown}");
+}
+
+#[test]
+fn a_portrait_that_fits_the_room_shows_cell_for_cell() {
+    // The window of 186 x 57 leaves 44 rows above the title. The block of the loader takes 56
+    // rows, so it starts at row 1.
+    let buf = render(&loader_with_portrait((186, 57)));
+    let (x0, y0) = ((186 - 66) / 2, 1);
+    for (r, row) in portrait().rows.iter().enumerate() {
+        for (col, cell) in row.iter().enumerate() {
+            let shown = &buf[((x0 + col) as u16, (y0 + r) as u16)];
+            let at = format!("column {col}, row {r}");
+            assert_eq!(shown.symbol(), cell.ch.unwrap().to_string(), "{at}");
+            assert_eq!(shown.fg, cell.fg.unwrap_or(T.fg).color(), "{at}");
+            assert_eq!(shown.bg, cell.bg.unwrap_or(T.bg).color(), "{at}");
+        }
+    }
+    assert_eq!(rows_with(&buf, TOP), [1, 2, 3]);
+    assert_eq!(rows_with(&buf, BOTTOM), [41, 42, 43]);
+    assert_eq!(title_row(&buf), 45);
+}
+
+#[test]
+fn the_update_fits_the_picture_once_for_each_size_of_the_window() {
+    let mut app = loader_with_portrait((110, 32));
+    let fit = app.picture_fit.clone().expect("a copy for the window");
+    assert_eq!(fit.room, (106, 19));
+    assert_eq!((fit.picture.width(), fit.picture.height()), (29, 19));
+    send(
+        &mut app,
+        0.7,
+        Msg::Resize {
+            width: 186,
+            height: 57,
+        },
+    );
+    let fit = app.picture_fit.clone().expect("a copy for the new size");
+    assert_eq!(fit.room, (182, 44));
+    assert_eq!(fit.picture, portrait());
+    // A window that changed size before the update heard of it: the view fits on its own.
+    let mut app = loader_with_portrait((110, 32));
+    app.size = (186, 57);
+    let buf = render(&app);
+    assert_eq!(rows_with(&buf, TOP), [1, 2, 3]);
+    // After the loader, a change of size drops the copy.
+    let mut app = loader_with_portrait((110, 32));
+    send(&mut app, 0.7, Msg::Key(Key::Char('x')));
+    assert_eq!(app.screen, Screen::Home);
+    send(
+        &mut app,
+        0.8,
+        Msg::Resize {
+            width: 120,
+            height: 40,
+        },
+    );
+    assert_eq!(app.picture_fit, None);
 }
