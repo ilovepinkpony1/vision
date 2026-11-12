@@ -12,6 +12,7 @@ mod events;
 mod health;
 mod limits;
 pub mod memory_use;
+pub mod notices;
 pub mod operations;
 pub mod pipeline;
 pub mod questions;
@@ -325,6 +326,44 @@ mod tests {
             .unwrap();
         let rows = ledger.tickets().unwrap();
         assert_eq!(rows[1].title.as_deref(), Some("Export the report"));
+    }
+
+    #[test]
+    fn migration_4_adds_the_notices_and_keeps_each_row_of_before() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.version <= 3) {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 3).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tickets (key, state, title) VALUES ('DEMO-1', 'qa', 'Export')",
+        )
+        .unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), Some(3));
+        let ledger = Ledger {
+            conn,
+            migrated_from: Some(3),
+        };
+        let old = ledger.ticket("DEMO-1").unwrap().unwrap();
+        assert_eq!(old.title.as_deref(), Some("Export"));
+        assert!(ledger.unread_notices().unwrap().is_empty());
+        let issues = [notices::NoticeIssue {
+            id: "ISSUE-001".into(),
+            severity: "low".into(),
+            title: "A typo".into(),
+        }];
+        let notice = notices::NewNotice {
+            ticket: "DEMO-1",
+            step: "qa",
+            turn: "T1",
+            gate: "qa",
+            doc: "qa.md",
+            issues: &issues,
+            note: None,
+            created: "2026-11-16T14:30:00Z",
+        };
+        assert!(ledger.add_notice(&notice).unwrap().is_some());
+        assert_eq!(ledger.unread_notices().unwrap().len(), 1);
     }
 
     #[test]

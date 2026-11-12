@@ -1334,3 +1334,192 @@ fn a_commit_of_the_shepherd_goes_through_ci_again_before_the_merge() {
     );
     assert_eq!(remote, fixed, "the commit is on the forge");
 }
+
+/// A sample report of `tests/fixtures/gates`.
+fn gate_fixture(name: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/gates")
+        .join(name);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+#[test]
+fn a_failed_gate_resumes_the_turn_and_a_qa_gate_with_low_issues_records_one_notice() {
+    let world = World::new();
+    world.write_adapter(|text| {
+        let scripts = text
+            .lines()
+            .find(|l| l.starts_with("scripts = "))
+            .unwrap()
+            .to_string();
+        format!(
+            r#"name = "demo"
+base = "origin/main"
+{scripts}
+
+[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{{ gate = "cr", doc = "cr.md", net_max = 4 }}]
+next = "qa"
+
+[[step]]
+id = "qa"
+kind = "turn"
+agent = "tester"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{{ gate = "qa", doc = "qa.md", block = ["critical", "high", "medium"], notify = true }}]
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+"#
+        )
+    });
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([
+            ends_with(result(
+                "Reviewed.",
+                &[("cr.md", &gate_fixture("cr-fails.md"))]
+            )),
+            ends_with(result(
+                "Fixed and reviewed again.",
+                &[("cr.md", &gate_fixture("cr-passes.md"))]
+            ))
+        ]),
+    );
+    world.scenario(
+        "tester",
+        "qa",
+        json!([ends_with(result(
+            "Tested.",
+            &[("qa.md", &gate_fixture("qa-low.md"))]
+        ))]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+
+    // The failed gate is a failed end fact: one resume with the failing findings.
+    let review = step_turns(&world, "review");
+    assert_eq!(review.len(), 2);
+    assert_eq!(review[0].end_fact.as_deref(), Some("failed:gate:cr:cr.md"));
+    assert_eq!(review[1].end_fact.as_deref(), Some("held"));
+    assert_eq!(review[1].resumes, review[0].session);
+    let message = facts_of(&world, &review[1].id)["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.contains("The end fact gate:cr:cr.md does not hold"),
+        "{message}"
+    );
+    assert!(
+        message.contains(
+            "finding 1 `1. [MAJOR][BLOCKING] app/models/report_export.rb:42` with Net +11"
+        ),
+        "{message}"
+    );
+    assert!(message.contains("finding 3 "), "{message}");
+    assert!(!message.contains("finding 2 "), "{message}");
+    let facts = facts_of(&world, &review[0].id);
+    assert_eq!(facts["expects"], json!(["gate:cr:cr.md"]));
+    assert_eq!(facts["expected_documents"], json!(["cr.md"]));
+    assert!(world.doc("cr.md").unwrap().contains("Net: -2 (undo)"));
+
+    // The qa gate passed with two low issues: one notice, and no flag.
+    assert!(world.flags().is_empty(), "{:?}", world.flags());
+    let qa = step_turns(&world, "qa");
+    assert_eq!(qa.len(), 1);
+    let notices = world.ledger().notices_of(KEY).unwrap();
+    assert_eq!(notices.len(), 1);
+    let notice = &notices[0];
+    assert_eq!(
+        (
+            notice.step.as_str(),
+            notice.turn.as_str(),
+            notice.doc.as_str()
+        ),
+        ("qa", qa[0].id.as_str(), "qa.md")
+    );
+    let issues: Vec<(&str, &str, &str)> = notice
+        .issues
+        .iter()
+        .map(|i| (i.id.as_str(), i.severity.as_str(), i.title.as_str()))
+        .collect();
+    assert_eq!(
+        issues,
+        [
+            ("ISSUE-001", "low", "The export button has a typo"),
+            (
+                "ISSUE-002",
+                "low",
+                "The hover color of the export button differs"
+            )
+        ]
+    );
+    assert!(world.event_kinds().contains(&"notice".to_string()));
+
+    // More passes add no second notice.
+    world.tick();
+    world.tick();
+    assert_eq!(world.ledger().notices_of(KEY).unwrap().len(), 1);
+
+    // It waits in the snapshot, in `vision status`, and in `vision needs`.
+    let name = notice.name();
+    let needs: Vec<Value> = status(&world)["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["kind"] == "notice")
+        .cloned()
+        .collect();
+    assert_eq!(needs.len(), 1);
+    assert_eq!(needs[0]["id"], name.as_str());
+    let run = world.run(&["needs"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout.contains("1 notice waits until you read it"),
+        "{run:?}"
+    );
+    assert!(
+        run.stdout
+            .contains("ISSUE-002 low: The hover color of the export button differs"),
+        "{run:?}"
+    );
+    assert!(
+        run.stdout
+            .contains(&format!("run: vision needs --read {name}")),
+        "{run:?}"
+    );
+    let json = world.run(&["needs", "--json"]).json();
+    assert_eq!(json["notices"][0]["id"], name.as_str());
+    assert_eq!(json["notices"][0]["issues"][0]["id"], "ISSUE-001");
+
+    // Marking it read removes it, and a second mark changes nothing.
+    let read = world.run(&["needs", "--read", &name]);
+    read.expect_code(0);
+    assert!(
+        read.stdout
+            .contains(&format!("Marked {name} of {KEY} as read")),
+        "{read:?}"
+    );
+    assert!(world.ledger().unread_notices().unwrap().is_empty());
+    let again = world.run(&["needs", "--read", &name]);
+    again.expect_code(0);
+    assert!(again.stdout.contains("Nothing changed"), "{again:?}");
+    let run = world.run(&["needs"]);
+    assert!(!run.stdout.contains(&name), "{run:?}");
+    let missing = world.run(&["needs", "--read", "N-99"]);
+    missing.expect_code(1);
+    assert!(
+        missing.stderr.contains("there is no notice N-99"),
+        "{missing:?}"
+    );
+}

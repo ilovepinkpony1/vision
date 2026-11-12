@@ -1,12 +1,14 @@
 //! The things that wait for the person, as the cards of the app show them: a question of an
 //! agent, a plan, a write that waits for an approval, the first write of a verb in the mode
-//! shadow or hold, a rule that stopped a ticket, a paused ticket, and a proposal of the Curator.
+//! shadow or hold, a rule that stopped a ticket, a paused ticket, a proposal of the Curator,
+//! and a notice of a gate.
 //! Plain data that [`super::load_needs`] reads, and the state of the card that shows them one at
 //! a time.
 
 use serde_json::Value;
 
 use super::line::Line;
+use crate::ledger::notices::NoticeRow;
 use crate::pipeline::PlanView;
 use crate::questions::CardView;
 
@@ -25,6 +27,9 @@ pub enum NeedItem {
     /// The flag `paused`: the person took over the session.
     Paused(FlagItem),
     Proposal(ProposalItem),
+    /// What a gate found that does not block the ticket, such as the low issues of a QA run.
+    /// It waits until the person marks it read.
+    Notice(NoticeRow),
 }
 
 impl NeedItem {
@@ -38,6 +43,7 @@ impl NeedItem {
             NeedItem::Flag(flag) => format!("flag:{}", flag.ticket),
             NeedItem::Paused(flag) => format!("paused:{}", flag.ticket),
             NeedItem::Proposal(proposal) => format!("proposal:{}", proposal.name),
+            NeedItem::Notice(notice) => format!("notice:{}", notice.name()),
         }
     }
 
@@ -49,6 +55,7 @@ impl NeedItem {
             NeedItem::Approval(write) | NeedItem::FirstWrite(write) => Some(&write.ticket),
             NeedItem::Flag(flag) | NeedItem::Paused(flag) => Some(&flag.ticket),
             NeedItem::Proposal(_) => None,
+            NeedItem::Notice(notice) => Some(&notice.ticket),
         }
     }
 
@@ -62,6 +69,7 @@ impl NeedItem {
             NeedItem::Flag(_) => "stopped by a rule",
             NeedItem::Paused(_) => "paused",
             NeedItem::Proposal(_) => "memory",
+            NeedItem::Notice(_) => "notice",
         }
     }
 }

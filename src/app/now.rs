@@ -398,6 +398,7 @@ pub fn need_line(need: &Need) -> String {
             format!("a rule stopped it: {reason}")
         }
         NeedKind::Proposal => "a change of the memory waits for your review".into(),
+        NeedKind::Notice => format!("a notice to read: {}", need.text),
     }
 }
 

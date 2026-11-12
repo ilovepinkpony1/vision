@@ -1,0 +1,28 @@
+ ◆ VISION                                         engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?    n needs
+
+  IN PROGRESS                              2 tickets · Vision moves them while this window is open
+ ╭──╭─ DEMO-12 · 1 of 2 · a notice · N-1 ──────────────────────────────────────────────────────╮──╮
+ │ ▸│                                                                                          │m │
+ │  │  The gate qa of the step qa passed, so the ticket went on. Its report qa.md has 2        │  │
+ │  │  issues that do not block:                                                               │  │
+ │  │                                                                                          │m │
+ │  │  ISSUE-001  low  The export button has a typo                                            │  │
+ ╰──│  ISSUE-002  low  The hover color of the export button differs from the color of each     │──╯
+    │                  other button on the page of a report                                    │
+  RE│                                                                                          │rt
+ ╭──│  A notice never stops a ticket. It stays until you mark it read. The turn was            │──╮
+ │  │  20261116T143000Z-DEMO-12-qa-1.                                                          │o │
+ │  │                                                                                          │t │
+ ╰──│  enter mark it read    esc later                                                         │──╯
+    │                                                                                          │
+    ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   q quit
+

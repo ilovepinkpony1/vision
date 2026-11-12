@@ -12,6 +12,7 @@ use super::msg::{Action, Given, Handoff};
 use super::needs::{FlagItem, PlanItem, ProposalItem, WriteItem};
 use crate::config::Mode;
 use crate::executor::{commit_arg, promoted, LADDER};
+use crate::ledger::notices::NoticeRow;
 use crate::pipeline::SHORT_HASH;
 use crate::questions::CardView;
 
@@ -67,6 +68,25 @@ pub fn answer(id: u64, card: &CardView, given: Given, why: &str) -> Chain {
         )],
         format!("{q} still waits for your answer."),
         done,
+    )
+}
+
+/// `vision needs --read ID`: the notice goes away from the things that wait.
+pub fn read_notice(id: u64, notice: &NoticeRow) -> Chain {
+    let name = notice.name();
+    Chain::new(
+        id,
+        Owner::Need(format!("notice:{name}")),
+        vec![Step::new(
+            Work::Act(Action::ReadNotice { id: name.clone() }),
+            format!("mark the notice {name} as read"),
+            format!("The notice {name} is read."),
+        )],
+        format!("The notice {name} still waits until you read it."),
+        format!(
+            "Marked the notice {name} as read. {} goes on as before.",
+            notice.ticket
+        ),
     )
 }
 

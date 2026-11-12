@@ -8,6 +8,7 @@ config_dir = "~/.vision/claude"   # "" means: use the default login
 env_pass = []                     # more environment names that a session gets
 env = {}                          # more variables with a fixed value that a session gets. Never a secret.
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
+plugins = []                      # folders of Claude Code plugins for each work turn: their skills, with the tool Skill. Never writable in a turn.
 
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"

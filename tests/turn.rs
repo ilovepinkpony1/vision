@@ -307,6 +307,121 @@ fn a_reader_gets_no_sandbox_and_a_judge_gets_only_its_role_file() {
 }
 
 #[test]
+fn a_work_turn_loads_the_plugins_and_no_turn_can_change_them() {
+    let home = TestHome::new();
+    // A skill that a person keeps outside the plugin, and a plugin whose skill folder links to it.
+    let shared = home.user_home.join("skills/qa");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("SKILL.md"), "---\nname: qa\n---\n").unwrap();
+    let plugin = home.user_home.join("plugins/mine");
+    std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name": "mine"}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(plugin.join("skills/review")).unwrap();
+    std::fs::write(plugin.join("skills/review/SKILL.md"), "review").unwrap();
+    std::os::unix::fs::symlink(&shared, plugin.join("skills/qa")).unwrap();
+    home.edit_config(|doc| {
+        let mut list = toml_edit::Array::new();
+        list.push(plugin.display().to_string());
+        doc["claude"]["plugins"] = toml_edit::value(list);
+    });
+    let real_shared = std::fs::canonicalize(&shared).unwrap();
+    let mut protected = vec![plugin.display().to_string()];
+    let real_plugin = std::fs::canonicalize(&plugin).unwrap();
+    if real_plugin != plugin {
+        protected.push(real_plugin.display().to_string());
+    }
+    protected.push(real_shared.display().to_string());
+
+    let scenario = home.scenario(
+        "tester",
+        json!([[
+            {"do": "init"},
+            {"do": "args"},
+            {"do": "result", "structured_output": result_object("Tested.")}
+        ]]),
+    );
+    let launched =
+        home.launch(&home.request("DEMO-12", "tester", "qa", TurnKind::Tester, &scenario));
+    let state = home.wait_ended(&launched);
+    assert_eq!(
+        state.reason,
+        Some(Reason::Result),
+        "the contract names the tool Skill: {state:?}"
+    );
+    let args = &home.events(&launched, "system", Some("fake_args"))[0];
+    let argv: Vec<String> = serde_json::from_value(args["argv"].clone()).unwrap();
+    let values_of = |flag: &str| -> Vec<String> {
+        argv.windows(2)
+            .filter(|w| w[0] == flag)
+            .map(|w| w[1].clone())
+            .collect()
+    };
+    assert_eq!(values_of("--plugin-dir"), [plugin.display().to_string()]);
+    assert_eq!(
+        values_of("--tools"),
+        ["Read,Grep,Glob,Task,Edit,Write,Bash,Skill"]
+    );
+    assert_eq!(values_of("--add-dir"), protected, "{argv:?}");
+
+    let settings: Value =
+        serde_json::from_str(&home.turn_file(&launched, "settings.json")).unwrap();
+    let rules: Vec<String> = protected
+        .iter()
+        .flat_map(|dir| [format!("Edit(/{dir}/**)"), format!("Write(/{dir}/**)")])
+        .collect();
+    assert_eq!(settings["permissions"]["deny"], json!(rules), "{settings}");
+    assert_eq!(settings["permissions"]["allow"], json!(["Bash"]));
+    assert_eq!(
+        settings["sandbox"]["filesystem"]["denyWrite"],
+        json!(protected)
+    );
+    let allow_read: Vec<String> =
+        serde_json::from_value(settings["sandbox"]["filesystem"]["allowRead"].clone()).unwrap();
+    for dir in &protected {
+        assert!(allow_read.contains(dir), "{dir} in {allow_read:?}");
+    }
+    home.collect();
+
+    // A turn of the Judge loads no plugin, so its tools and its settings stay as they were.
+    let scenario = home.scenario(
+        "judge",
+        json!([[{"do": "init"}, {"do": "args"}, {"do": "result", "structured_output": {"answers": []}}]]),
+    );
+    let judge =
+        home.launch(&home.request("DEMO-12", "judge", "judge", TurnKind::Reader, &scenario));
+    let state = home.wait_ended(&judge);
+    assert_eq!(state.reason, Some(Reason::Result), "{state:?}");
+    let args = &home.events(&judge, "system", Some("fake_args"))[0];
+    let argv: Vec<String> = serde_json::from_value(args["argv"].clone()).unwrap();
+    assert!(!argv.iter().any(|a| a == "--plugin-dir"), "{argv:?}");
+    assert!(!argv.iter().any(|a| a == "--add-dir"), "{argv:?}");
+    let tools_at = argv.iter().position(|a| a == "--tools").unwrap();
+    assert_eq!(argv[tools_at + 1], "Read,Grep,Glob,Task");
+    let settings: Value = serde_json::from_str(&home.turn_file(&judge, "settings.json")).unwrap();
+    assert_eq!(
+        settings,
+        json!({"permissions": {"deny": ["Bash", "WebFetch", "WebSearch"]}})
+    );
+    home.collect();
+
+    // A folder of the list that is gone refuses the next work turn with a clear reason.
+    std::fs::remove_dir_all(&plugin).unwrap();
+    let err = turn::launch(
+        &home.ctx(),
+        &home.ledger(),
+        &home.request("DEMO-12", "tester", "qa", TurnKind::Tester, &scenario),
+    )
+    .unwrap_err();
+    let err = format!("{err:#}");
+    assert!(err.contains("claude.plugins names"), "{err}");
+    assert!(err.contains("does not exist"), "{err}");
+}
+
+#[test]
 fn a_contract_mismatch_kills_the_group() {
     let home = TestHome::new();
     let scenario = home.scenario(

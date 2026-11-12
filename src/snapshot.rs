@@ -79,6 +79,9 @@ pub enum NeedKind {
     Flag,
     /// A proposal of the Curator that waits for `vision memory review`.
     Proposal,
+    /// A notice of a gate that waits until the person reads it with `vision needs --read`. It
+    /// never stops a ticket.
+    Notice,
 }
 
 /// The limits of section 4 with the newest reading of each window.
@@ -155,6 +158,7 @@ pub fn collect_needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     needs.extend(pipeline::needs(ctx, ledger)?);
     needs.extend(executor::needs(ctx, ledger)?);
     needs.extend(curator::needs(ctx, ledger)?);
+    needs.extend(pipeline::notice_needs(ledger)?);
     Ok(needs)
 }
 

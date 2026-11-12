@@ -63,7 +63,8 @@ pub const JUDGE_STEP: &str = "judge";
 /// `vision needs`, `answer`, `answers`, and `correct`.
 pub fn run(ctx: &Ctx, command: QuestionsCommand) -> Result<()> {
     match command {
-        QuestionsCommand::Needs { json } => view::needs_command(ctx, json),
+        QuestionsCommand::Needs { read: Some(id), .. } => view::read_notice_command(ctx, &id),
+        QuestionsCommand::Needs { json, read: None } => view::needs_command(ctx, json),
         QuestionsCommand::Answer(args) => commands::answer_command(ctx, args),
         QuestionsCommand::Answers { days, json } => commands::answers_command(ctx, days, json),
         QuestionsCommand::Correct { id, answer, why } => {

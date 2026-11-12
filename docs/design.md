@@ -119,6 +119,7 @@ config_dir = "~/.vision/claude"   # a missing key means the folder claude/ of th
 env_pass = []                     # more environment names that a session gets
 env = {}                          # more variables with a fixed value that a session gets. Never a secret.
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
+plugins = []                      # folders of Claude Code plugins for each work turn: their skills, with the tool Skill. Never writable in a turn.
 
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
@@ -229,6 +230,8 @@ Migration 2 adds `five_hour_resets` and `seven_day_resets` to `turns`. They hold
 
 Migration 3 adds `title` to `tickets`. `vision take` writes the title that the queue of the tracker gives, so the status view keeps the title after the ticket leaves the queue. A ticket from before migration 3 has no title. The app then shows the title of the queue while the queue lists the ticket.
 
+Migration 4 adds the table `notices (id, ticket, step, turn, gate, doc, issues, note, created, read)`. A gate qa with `notify = true` that passes writes one row in the transaction of the end fact, with its issues as JSON. One turn gives at most one row for each document. `read` holds the time when the person read it.
+
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
 ## 6. The tick
@@ -310,6 +313,7 @@ claude -p
   --session-id <uuid>            a new turn
   --resume <session id>          a turn that continues a session
   [--add-dir <folder>]...
+  [--plugin-dir <folder>]...     each folder of claude.plugins, for a work turn
 ```
 
 The environment of the session is an allow list:
@@ -334,6 +338,12 @@ A worker and a tester get the file `worker.gitconfig` of the home as `GIT_CONFIG
 Claude Code asks for an approval for some commands also in the sandbox. Two examples are a git command with the option `-c` and a command with a variable in front of it. A turn has nobody who can approve, so Claude Code denies such a command. So the `settings.json` of a worker and of a tester also has a rule that allows each Bash command. The sandbox stays the limit, because that file refuses each run outside it.
 
 A real test in `tests/real_claude.rs` shows both facts. Each of its calls asks for a run with no sandbox. The session still cannot read the home folder, write there, or reach an outside site. `agents/common.md` tells each agent the plain form of a commit, and the message after a failed fact `clean` or `commits` says it again.
+
+Each entry of `claude.plugins` is a Claude Code plugin folder, which has `.claude-plugin/plugin.json`, or a folder of such folders. If the list names a folder, each work turn (a reader, a worker, or a tester of a step) gets one `--plugin-dir` for each folder, and its tool list ends with `Skill`. The contract of 7.4 names `Skill` too. The Judge and the Curator get no plugin.
+
+A skill reads the files that it links, and a worker runs its scripts. So a turn can read each plugin folder and never write it. The runner gives the turn each folder, its real path, and the real path of each link in a skill folder that leads out of the plugin folder, as `--add-dir`. The runner also adds them to the read allow list of the sandbox of a worker and a tester. The `settings.json` of each work turn denies `Edit` and `Write` on each of these folders, such as `Edit(//<folder>/**)`, and the sandbox of a worker and a tester lists them in `denyWrite`. A file `sandbox/<kind>.json` of the home gets the same deny rules.
+
+A folder of `claude.plugins` that does not exist or that holds no plugin refuses the turn. `vision doctor` names each plugin and the number of its skills in its line `plugins`, and fails such a folder. With an empty list, there is no such line.
 
 ### 7.4 The supervisor
 
@@ -470,7 +480,7 @@ Each answer becomes one decision file. An answer of the Judge has the writer `ju
 ### 8.4 The person
 
 ```
-vision needs                         the cards and the approvals that wait, one at a time
+vision needs [--json] [--read ID]    the cards, the approvals, and the notices that wait, one at a time
 vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]
 vision answer ID --needless code|ticket|memory|no-matter
 vision answers [--days N]            the answers that the Judge gave alone, newest first
@@ -478,6 +488,7 @@ vision correct ID "RIGHT ANSWER" [--why "W"]
 ```
 
 - `needs` shows one card, reads one key or one line, and then asks for two short lines: why, and where the decision applies. Both can stay empty.
+- `needs` also lists each notice that waits, with its issues. `needs --read ID` marks the notice ID, such as `N-3`, as read. A notice that was read before stays as it is.
 - `--choice N` counts from 1, as the card shows the choices to the person. The index in the output of the Judge counts from 0.
 - `correct` writes a decision of the person that replaces the answer of the Judge. The old file gets the status `superseded`. If the ticket still runs, its next turn gets the correction as a message.
 - A decision with no reason is weaker. The Judge uses it only for a question with the same words and the same area.
@@ -830,12 +841,21 @@ A step can expect these end facts:
 - `clean`: the work tree of the clone is clean.
 - `job:<name>`: the job passes at the last commit. The table form gives the job its arguments.
 - `human:<action>`: the person did that action.
+- `{ gate = "cr", doc = "cr.md", net_max = 4 }`: code reads the report of a code review in the document of the result. Each finding is a numbered item whose first line is `N. [SEVERITY][BLOCKING|FOLLOW-UP] path:line`, and that has its own line `Net: +N`. The gate holds when no finding has a Net above `net_max` and no finding has the tag BLOCKING.
+- `{ gate = "qa", doc = "qa.md", block = ["critical", "high", "medium"], notify = true }`: code reads a QA report. Each issue is a heading with an id such as `ISSUE-003`, and a field of its entry whose label ends with `severity` gives critical, high, medium, or low. The gate holds when no issue has a severity of `block`.
+
+A missing `doc` is `<gate>.md`, a missing `net_max` is 4, a missing `block` is each severity but low, and a missing `notify` is false. Only a turn step can have a gate. The document of a gate is an expected document of the step.
+
+A gate fails when its document is missing or empty, when a finding has no readable first line or no line `Net:`, when a line `Net:` belongs to no finding, when an issue has no readable severity, or when a QA report states no severity at all. A failed gate is the failed end fact `gate:<kind>:<doc>`. Its message names each failing finding with its number, its first line, and its Net, or each blocking issue with its id, its severity, and its title.
+
+The count table of a QA report checks the issues. If the table counts more issues of a blocking severity than the entries show, the gate fails, because an entry that the gate cannot read can hide a blocking issue. Any other difference only adds a note. In a report with a section Issues or Findings, only a heading in that section starts an issue.
 
 ### 11.3 How a ticket moves
 
 The ticket row holds the id of its step in `state`, its flags, and its counters. One tick moves a ticket at most one step.
 
 - Entry of a turn step. The runner runs each `before` entry in order: a job or a verb. A job that does not pass sets the flag `needs-you`. A verb must reach the state `confirmed`. The visit remembers each entry that is done, so each one runs one time in a visit. The runner then asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
+- If each end fact holds and a gate qa has `notify = true`, the issues of its report that do not block become one notice for the person. A notice never stops a ticket and never sets a flag.
 - A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
 - A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
 - A turn that ends with `result`. The runner writes each expected document to the ticket folder. Then it tests each end fact.
@@ -1072,6 +1092,7 @@ Each kind of thing has its card:
 - A rule that stopped a ticket shows its reason. `r` tries the step again, `o` opens the session, and `x` stops the ticket.
 - A paused ticket takes Enter to continue.
 - A proposal of the Curator takes Enter. The app then gives the terminal to `vision memory review --proposal NAME`.
+- A notice lists the issues that a passing gate qa found and that do not block, each with its id, its severity, and its title. Enter marks it read. A notice stays until the person reads it. It never stops a ticket, never marks the ticket as one that needs the person, and comes after each other thing that waits.
 
 A key of a card can start a chain. A chain is a list of steps that run one after the other. A step is a command, a pass of the engine, or a check. A check reads the ledger and the configuration while no job runs, and no job starts during the read. The card shows each step with its mark. If a step fails, the chain stops, and the card says why and what is true for the ticket now. If the person quits the app, the rest of the chain does not run.
 

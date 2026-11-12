@@ -1,13 +1,14 @@
 //! The samples of the things that wait for the person, for the tests of the cards of part A3:
 //! a question with and without a proposal of the Judge, a plan, a write that waits, the first
-//! write of a verb, a rule that stopped a ticket, a paused ticket, and a proposal of the
-//! Curator. Also the helper that opens the card of `n` with a list of items.
+//! write of a verb, a rule that stopped a ticket, a paused ticket, a proposal of the Curator,
+//! and a notice of a gate. Also the helper that opens the card of `n` with a list of items.
 
 use serde_json::json;
 use vision::app::chain::{Check, CheckFacts, OpFacts};
 use vision::app::model::{App, Card};
 use vision::app::msg::{ChildResult, Effect, JobDone, JobKind, Key, Msg};
 use vision::app::needs::{FlagItem, NeedItem, NeedsCard, PlanItem, ProposalItem, WriteItem};
+use vision::ledger::notices::{NoticeIssue, NoticeRow};
 use vision::pipeline::PlanView;
 use vision::questions::{CardView, ChoiceView, ProposalView};
 
@@ -151,6 +152,36 @@ pub fn proposal(replaying: bool) -> NeedItem {
             .into(),
         open: 2,
         replaying,
+    })
+}
+
+/// A notice of the gate qa of DEMO-12 with two low issues. With `note`, the count table of
+/// its report disagreed with the issues.
+pub fn notice_item(note: bool) -> NeedItem {
+    let issue = |id: &str, title: &str| NoticeIssue {
+        id: id.into(),
+        severity: "low".into(),
+        title: title.into(),
+    };
+    NeedItem::Notice(NoticeRow {
+        id: 1,
+        ticket: "DEMO-12".into(),
+        step: "qa".into(),
+        turn: "20261116T143000Z-DEMO-12-qa-1".into(),
+        gate: "qa".into(),
+        doc: "qa.md".into(),
+        issues: vec![
+            issue("ISSUE-001", "The export button has a typo"),
+            issue(
+                "ISSUE-002",
+                "The hover color of the export button differs from the color of each other button on the page of a report",
+            ),
+        ],
+        note: note.then(|| {
+            "the count table says 0 critical, 0 high, 0 medium, 1 low, but the issues say 0 critical, 0 high, 0 medium, 2 low. The gate trusts the issues".into()
+        }),
+        created: "2026-11-16T14:40:00Z".into(),
+        read: None,
     })
 }
 

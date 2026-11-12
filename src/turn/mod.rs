@@ -11,11 +11,14 @@
 //! - [`running_turns`], [`kill_turn`], and [`kill_all`] control the running turns, and
 //!   [`tell`] sends a message to one.
 //! - [`collect_ended_turns`] and [`start_turn`] are the tick hooks.
+//! - [`resolve_plugins`] gives the plugin folders of `claude.plugins` that each work turn
+//!   loads and reads, and [`find_plugins`] the plugins in one folder, for `vision doctor`.
 
 mod collect;
 mod control;
 mod inbox;
 mod launch;
+mod plugins;
 mod roles;
 mod schema;
 mod settings;
@@ -41,6 +44,7 @@ pub use launch::{
     turn_paths, vision_bin, Contract, LaunchFile, LaunchRequest, Launched, Plan, Refusal, ViewFile,
     TURN_PLACEHOLDER,
 };
+pub use plugins::{find as find_plugins, resolve as resolve_plugins, Plugin, Plugins};
 pub use roles::{agents_dir, agents_file, compose_role, embedded_names, schema_name};
 pub use schema::problems as schema_problems;
 pub use settings::{gitconfig_path, identity, permission_mode, session_env, tools, ALLOWED_ENV};

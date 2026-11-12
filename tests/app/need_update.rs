@@ -832,6 +832,33 @@ fn the_keys_of_a_paused_ticket() {
 }
 
 #[test]
+fn enter_marks_a_notice_read_and_the_next_thing_shows() {
+    let mut app = open_with(SIZE, vec![notice_item(false), proposal(false)]);
+    // Another key does nothing on a notice.
+    assert!(jobs(&key(&mut app, 2.9, Key::Char('r'))).is_empty());
+    let fx = key(&mut app, 3.0, Key::Enter);
+    let done = drive(&mut app, 3.1, fx, None, none);
+    assert_eq!(done.actions, [args(&["needs", "--read", "N-1"])]);
+    assert_eq!(
+        notice(&app),
+        "Marked the notice N-1 as read. DEMO-12 goes on as before."
+    );
+    let card = need_card(&app);
+    assert_eq!(card.len(), 1);
+    assert!(matches!(card.item(), Some(NeedItem::Proposal(_))));
+
+    // A failed read keeps the notice on the card.
+    let mut app = open_with(SIZE, vec![notice_item(false)]);
+    let fx = key(&mut app, 3.0, Key::Enter);
+    drive(&mut app, 3.1, fx, Some("needs"), none);
+    assert!(matches!(need_card(&app).item(), Some(NeedItem::Notice(_))));
+    assert_eq!(
+        Action::ReadNotice { id: "N-1".into() }.label(),
+        "The read of the notice N-1"
+    );
+}
+
+#[test]
 fn enter_on_a_proposal_opens_its_review_and_the_card_comes_back() {
     let mut app = open_with(SIZE, vec![proposal(false)]);
     let fx = key(&mut app, 3.0, Key::Enter);

@@ -8,7 +8,7 @@
 use std::io::{self, BufRead, IsTerminal, Read, Write};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use super::card::{index_of_letter, letter};
@@ -16,8 +16,9 @@ use super::commands::{answer_card, answered_line, mark_needless, PersonAnswer};
 use super::{needless_text, Agents, Question, Reply};
 use crate::cli::Needless;
 use crate::ctx::Ctx;
+use crate::ledger::notices::{notice_name, parse_notice_name, NoticeIssue, NoticeRow};
 use crate::ledger::questions::{STATE_ASKED, STATE_PROPOSED};
-use crate::ledger::Ledger;
+use crate::ledger::{Event, Ledger};
 use crate::memory::store::short;
 use crate::memory::Memory;
 use crate::snapshot::{Need, NeedKind};
@@ -191,10 +192,49 @@ struct OtherView {
     command: String,
 }
 
+/// A notice as `vision needs --json` lists it.
+#[derive(Debug, Serialize)]
+struct NoticeView {
+    /// The id that `vision needs --read` takes, such as `N-3`.
+    id: String,
+    ticket: String,
+    step: String,
+    turn: String,
+    gate: String,
+    doc: String,
+    issues: Vec<NoticeIssue>,
+    note: Option<String>,
+    created: String,
+    command: String,
+}
+
+impl NoticeView {
+    fn of(notice: &NoticeRow) -> NoticeView {
+        NoticeView {
+            id: notice.name(),
+            ticket: notice.ticket.clone(),
+            step: notice.step.clone(),
+            turn: notice.turn.clone(),
+            gate: notice.gate.clone(),
+            doc: notice.doc.clone(),
+            issues: notice.issues.clone(),
+            note: notice.note.clone(),
+            created: notice.created.clone(),
+            command: read_command(&notice.name()),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct NeedsView {
     cards: Vec<CardView>,
     others: Vec<OtherView>,
+    notices: Vec<NoticeView>,
+}
+
+/// The command that marks a notice as read.
+fn read_command(id: &str) -> String {
+    format!("vision needs --read {id}")
 }
 
 fn waiting_cards(ledger: &Ledger) -> Result<Vec<Question>> {
@@ -225,6 +265,7 @@ pub(crate) fn command_for(need: &Need) -> String {
         NeedKind::Operation => format!("vision approve {ticket} {}", need.id),
         NeedKind::Flag => format!("vision log {ticket}, then vision retry {ticket}"),
         NeedKind::Proposal => format!("vision memory review --proposal {}", need.id),
+        NeedKind::Notice => read_command(&need.id),
     }
 }
 
@@ -235,6 +276,7 @@ fn kind_name(kind: NeedKind) -> &'static str {
         NeedKind::Operation => "operation",
         NeedKind::Flag => "flag",
         NeedKind::Proposal => "proposal",
+        NeedKind::Notice => "notice",
     }
 }
 
@@ -303,6 +345,7 @@ pub fn needs_command(ctx: &Ctx, json: bool) -> Result<()> {
     }
     let cards = waiting_cards(&ledger)?;
     let others = others(ctx, &ledger)?;
+    let notices = ledger.unread_notices()?;
     if json {
         let view = NeedsView {
             cards: cards.iter().map(card_view).collect(),
@@ -316,17 +359,95 @@ pub fn needs_command(ctx: &Ctx, json: bool) -> Result<()> {
                     command: command_for(n),
                 })
                 .collect(),
+            notices: notices.iter().map(NoticeView::of).collect(),
         };
         println!("{}", serde_json::to_string_pretty(&view)?);
         return Ok(());
     }
-    print!("{}", list_text(&cards, &others));
+    print!("{}", list_text(&cards, &others, &notices));
     Ok(())
 }
 
+/// `vision needs --read ID`: marks one notice as read, so that it no longer waits. A notice
+/// that was read before stays as it is.
+pub fn read_notice_command(ctx: &Ctx, id: &str) -> Result<()> {
+    ctx.require_setup()?;
+    let ledger = ctx.ledger()?;
+    let Some(number) = parse_notice_name(id) else {
+        bail!("`{id}` is not the id of a notice. A notice has an id such as N-3, and `vision needs` lists them");
+    };
+    let name = notice_name(number);
+    let Some(notice) = ledger.notice(number)? else {
+        bail!("there is no notice {name}. `vision needs` lists the notices that wait");
+    };
+    let at = crate::util::time::now_rfc3339();
+    let marked = ledger.in_transaction(|ledger| {
+        let marked = ledger.mark_notice_read(number, &at)?;
+        if marked {
+            ledger.add_event(
+                &Event::now("user", "notice-read")
+                    .ticket(&notice.ticket)
+                    .external_id(&format!("notice-read:{name}"))
+                    .detail(serde_json::json!({"notice": name, "turn": notice.turn})),
+            )?;
+        }
+        Ok(marked)
+    })?;
+    if marked {
+        println!(
+            "Marked {name} of {} as read. It no longer waits.",
+            notice.ticket
+        );
+    } else {
+        println!(
+            "{name} was read at {}. Nothing changed.",
+            notice.read.as_deref().unwrap_or("an earlier time")
+        );
+    }
+    Ok(())
+}
+
+/// The lines of the notices that wait, each with its issues and the command that marks it read.
+fn notices_text(notices: &[NoticeRow]) -> String {
+    if notices.is_empty() {
+        return String::new();
+    }
+    let mut out = match notices.len() {
+        1 => "\n1 notice waits until you read it. A notice never stops a ticket:\n".to_string(),
+        n => format!("\n{n} notices wait until you read them. A notice never stops a ticket:\n"),
+    };
+    for notice in notices {
+        let (count, verb) = match notice.issues.len() {
+            1 => ("1 issue".to_string(), "does"),
+            n => (format!("{n} issues"), "do"),
+        };
+        out.push_str(&format!(
+            "  {}  {}  the gate {} of the step {} passed with {count} that {verb} not block (turn {})\n",
+            notice.name(),
+            notice.ticket,
+            notice.gate,
+            notice.step,
+            notice.turn
+        ));
+        for issue in &notice.issues {
+            out.push_str(&format!(
+                "    {} {}: {}\n",
+                issue.id,
+                issue.severity,
+                short(&issue.title, 100)
+            ));
+        }
+        if let Some(note) = &notice.note {
+            out.push_str(&format!("    note: {note}\n"));
+        }
+        out.push_str(&format!("    run: {}\n", read_command(&notice.name())));
+    }
+    out
+}
+
 /// The list of `vision needs` without a terminal.
-fn list_text(cards: &[Question], others: &[Need]) -> String {
-    if cards.is_empty() && others.is_empty() {
+fn list_text(cards: &[Question], others: &[Need], notices: &[NoticeRow]) -> String {
+    if cards.is_empty() && others.is_empty() && notices.is_empty() {
         return "Nothing waits for you.\n".into();
     }
     let mut out = String::new();
@@ -371,6 +492,12 @@ fn list_text(cards: &[Question], others: &[Need]) -> String {
             ));
         }
     }
+    let notices = notices_text(notices);
+    out.push_str(if out.is_empty() {
+        notices.trim_start_matches('\n')
+    } else {
+        &notices
+    });
     out
 }
 
@@ -615,6 +742,10 @@ pub(crate) fn review(
             )?;
         }
     }
+    let notices = ledger
+        .unread_notices()
+        .context("could not read the notices")?;
+    write!(out, "{}", notices_text(&notices))?;
     out.flush()?;
     Ok(())
 }

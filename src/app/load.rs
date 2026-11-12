@@ -80,7 +80,11 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
         tickets.push(Held {
             facts: at.map(|i| facts.swap_remove(i)).unwrap_or_default(),
             stopped: flags.iter().any(|f| f == STOPPED),
-            needs_you: !ticket.needs.is_empty()
+            // A notice never stops a ticket, so it does not mark the ticket as one that needs you.
+            needs_you: ticket
+                .needs
+                .keys()
+                .any(|k| k != crate::pipeline::view::NOTICE)
                 || flags.iter().any(|f| f == NEEDS_YOU || f == PAUSED),
             taken: row.taken.clone(),
             view: ticket,

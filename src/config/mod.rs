@@ -92,6 +92,10 @@ pub struct Claude {
     /// True keeps the lines that Claude Code adds about itself: a co-author trailer in each
     /// commit and a line in the text of a pull request. False turns them off in `settings.json`.
     pub attribution: bool,
+    /// Folders of Claude Code plugins that each work turn loads with `--plugin-dir`: a plugin
+    /// folder (it has `.claude-plugin/plugin.json`) or a folder of plugins. `~` is allowed.
+    /// A turn can read each one and never write it.
+    pub plugins: Vec<String>,
 }
 
 impl Default for Claude {
@@ -102,6 +106,7 @@ impl Default for Claude {
             env_pass: Vec::new(),
             env: BTreeMap::new(),
             attribution: true,
+            plugins: Vec::new(),
         }
     }
 }
@@ -467,6 +472,11 @@ impl Config {
                 bail!("claude.env.{name} must be one line of text");
             }
         }
+        for entry in &self.claude.plugins {
+            if entry.trim().is_empty() || entry.contains(['\0', '\n', '\r']) {
+                bail!("claude.plugins has an empty or broken entry. Each entry is the path of a plugin folder, such as \"~/plugins/mine\"");
+            }
+        }
         let (name, email) = (self.git.name.trim(), self.git.email.trim());
         if name.is_empty() != email.is_empty() {
             bail!("git.name and git.email go together: set both, or leave both empty");
@@ -556,6 +566,13 @@ mod tests {
             let err = Config::parse(&format!("[claude]\n{text}\n")).unwrap_err();
             assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
         }
+        assert!(config.claude.plugins.is_empty());
+        let plugins =
+            Config::parse("[claude]\nplugins = [\"~/plugins/one\", \"/opt/two\"]\n").unwrap();
+        assert_eq!(plugins.claude.plugins, ["~/plugins/one", "/opt/two"]);
+        let err = Config::parse("[claude]\nplugins = [\" \"]\n").unwrap_err();
+        assert!(format!("{err:#}").contains("claude.plugins"), "{err:#}");
+        assert!(Config::parse("[claude]\nplugins = \"/one\"\n").is_err());
         let off = Config::parse("[claude]\nattribution = false\n").unwrap();
         assert!(!off.claude.attribution);
         assert!(Config::parse("[claude]\nattribution = \"no\"\n").is_err());

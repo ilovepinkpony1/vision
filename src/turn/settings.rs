@@ -17,6 +17,9 @@ use crate::util::fs::{atomic_write, read_optional};
 pub const READER_TOOLS: [&str; 4] = ["Read", "Grep", "Glob", "Task"];
 /// The tools that a worker and a tester have in addition to the reader tools.
 pub const WRITE_TOOLS: [&str; 3] = ["Edit", "Write", "Bash"];
+/// The tool that runs a skill of a plugin. A work turn has it when `claude.plugins` names a
+/// folder.
+pub const SKILL_TOOL: &str = "Skill";
 /// The tool that Claude Code adds by itself when a turn has a result schema (`--json-schema`).
 /// The `init` event lists it next to the tools of `--tools`. A real session showed this.
 pub const SCHEMA_TOOL: &str = "StructuredOutput";
@@ -36,21 +39,37 @@ pub const ALLOWED_ENV: [&str; 10] = [
     "GIT_CONFIG_GLOBAL",
 ];
 
-/// The tools of a kind, in the order of section 7.1.
-pub fn tools(kind: TurnKind) -> Vec<String> {
+/// The tools of a kind, in the order of section 7.1. With `skills`, the turn loads plugins, and
+/// the list ends with the tool that runs a skill.
+pub fn tools(kind: TurnKind, skills: bool) -> Vec<String> {
     let mut tools: Vec<String> = READER_TOOLS.iter().map(|t| t.to_string()).collect();
     if kind != TurnKind::Reader {
         tools.extend(WRITE_TOOLS.iter().map(|t| t.to_string()));
+    }
+    if skills {
+        tools.push(SKILL_TOOL.to_string());
     }
     tools
 }
 
 /// The tools that the `init` event of a turn must list: the tools of the kind, and the tool
 /// of the result schema, because each turn has a schema.
-pub fn contract_tools(kind: TurnKind) -> Vec<String> {
-    let mut tools = tools(kind);
+pub fn contract_tools(kind: TurnKind, skills: bool) -> Vec<String> {
+    let mut tools = tools(kind, skills);
     tools.push(SCHEMA_TOOL.to_string());
     tools
+}
+
+/// The deny rules that keep each folder of `protect` from a change by a file tool: one rule
+/// for `Edit` and one for `Write`. `//` starts an absolute path in a rule of Claude Code.
+pub fn protect_rules(protect: &[PathBuf]) -> Vec<String> {
+    protect
+        .iter()
+        .flat_map(|dir| {
+            let pattern = format!("/{}/**", dir.display().to_string().trim_end_matches('/'));
+            [format!("Edit({pattern})"), format!("Write({pattern})")]
+        })
+        .collect()
 }
 
 /// `--permission-mode`: `dontAsk` for a reader, `acceptEdits` for the others.
@@ -71,15 +90,24 @@ pub fn sandboxed(kind: TurnKind) -> bool {
 /// `sandbox.allow_read`, and the git configuration of the worker are allowed. They also get a
 /// rule that allows each Bash command, because each command runs in that sandbox. A reader has
 /// no Bash tool, so its file only denies the tools that it must never have.
+///
+/// Each folder of `protect`, such as a plugin folder, gets the deny rules of
+/// [`protect_rules`], and the sandbox of a worker and a tester denies writes to it, so that no
+/// turn changes a skill. The caller gives such a folder in `add_dirs` too, so that the turn can
+/// read it.
 pub fn render(
     kind: TurnKind,
     workdir: &Path,
     add_dirs: &[PathBuf],
     sandbox: &Sandbox,
     gitconfig: &Path,
+    protect: &[PathBuf],
 ) -> Result<Value> {
+    let protect_rules = protect_rules(protect);
     if !sandboxed(kind) {
-        return Ok(json!({"permissions": {"deny": ["Bash", "WebFetch", "WebSearch"]}}));
+        let mut deny: Vec<String> = ["Bash", "WebFetch", "WebSearch"].map(String::from).to_vec();
+        deny.extend(protect_rules);
+        return Ok(json!({"permissions": {"deny": deny}}));
     }
     let mut allow_read = vec![workdir.display().to_string()];
     for dir in add_dirs {
@@ -98,7 +126,7 @@ pub fn render(
     // `allowUnsandboxedCommands` is false, so a call that asks for no sandbox is ignored. The
     // real test `a_real_worker_turn_stays_in_its_sandbox` shows both. Never keep the rule
     // without the strict sandbox.
-    Ok(json!({
+    let mut value = json!({
         "permissions": {"allow": ["Bash"]},
         "sandbox": {
             "enabled": true,
@@ -115,7 +143,36 @@ pub fn render(
                 "allowUnixSockets": sandbox.allow_unix_sockets,
             }
         }
-    }))
+    });
+    if !protect.is_empty() {
+        value["permissions"]["deny"] = json!(protect_rules);
+        value["sandbox"]["filesystem"]["denyWrite"] = json!(protect
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>());
+    }
+    Ok(value)
+}
+
+/// Adds the rules of [`protect_rules`] to `permissions.deny` of a settings object, each one
+/// once. A value that is not an object stays as it is.
+fn add_deny_rules(value: &mut Value, rules: &[String]) {
+    let Some(object) = value.as_object_mut().filter(|_| !rules.is_empty()) else {
+        return;
+    };
+    let permissions = object.entry("permissions").or_insert_with(|| json!({}));
+    let Some(permissions) = permissions.as_object_mut() else {
+        return;
+    };
+    let deny = permissions.entry("deny").or_insert_with(|| json!([]));
+    let Some(deny) = deny.as_array_mut() else {
+        return;
+    };
+    for rule in rules {
+        if !deny.iter().any(|r| r.as_str() == Some(rule)) {
+            deny.push(json!(rule));
+        }
+    }
 }
 
 /// The key of `settings.json` that turns off the lines that Claude Code adds about itself: the
@@ -141,12 +198,14 @@ fn apply_attribution(value: &mut Value, attribution: bool) {
 /// The text of `settings.json` for one turn: `$VISION_HOME/sandbox/<kind>.json` when it exists
 /// (it replaces the rendered file), else the rendered value. With `attribution` false, each
 /// form gets the key of [`attribution_off`]. A file of the home that has its own key
-/// `attribution` keeps it.
+/// `attribution` keeps it. A file of the home also gets the deny rules of the folders of
+/// `protect`, so that no turn changes a skill; its sandbox stays as the person wrote it.
 pub fn settings_text(
     paths: &Paths,
     kind: TurnKind,
     rendered: &Value,
     attribution: bool,
+    protect: &[PathBuf],
 ) -> Result<String> {
     let custom = paths.sandbox_settings(kind);
     if let Some(text) = read_optional(&custom)? {
@@ -156,10 +215,12 @@ pub fn settings_text(
                 custom.display()
             )
         })?;
-        if attribution || value.get("attribution").is_some() || !value.is_object() {
+        let add_attribution = !attribution && value.get("attribution").is_none();
+        if !value.is_object() || (!add_attribution && protect.is_empty()) {
             return Ok(text);
         }
         apply_attribution(&mut value, attribution);
+        add_deny_rules(&mut value, &protect_rules(protect));
         return Ok(format!("{}\n", serde_json::to_string_pretty(&value)?));
     }
     let mut value = rendered.clone();
@@ -364,6 +425,7 @@ mod tests {
             &[],
             &sandbox,
             Path::new("/v/worker.gitconfig"),
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -380,6 +442,7 @@ mod tests {
             &[],
             &sandbox,
             Path::new("/g"),
+            &[],
         )
         .unwrap();
         // The rule that allows each Bash command is only safe with the strict sandbox: no run
@@ -390,9 +453,95 @@ mod tests {
         assert_eq!(value["sandbox"]["failIfUnavailable"], true);
         assert!(reader.get("sandbox").is_none());
         assert!(reader["permissions"].get("allow").is_none());
-        assert_eq!(tools(TurnKind::Reader), READER_TOOLS);
-        assert_eq!(tools(TurnKind::Tester).len(), 7);
+        assert_eq!(tools(TurnKind::Reader, false), READER_TOOLS);
+        assert_eq!(tools(TurnKind::Tester, false).len(), 7);
         assert_eq!(permission_mode(TurnKind::Tester), "acceptEdits");
+    }
+
+    #[test]
+    fn a_plugin_folder_is_readable_and_never_writable() {
+        let protect = [
+            PathBuf::from("/plugins/one"),
+            PathBuf::from("/shared/skills/qa/"),
+        ];
+        let rules = [
+            "Edit(//plugins/one/**)",
+            "Write(//plugins/one/**)",
+            "Edit(//shared/skills/qa/**)",
+            "Write(//shared/skills/qa/**)",
+        ];
+        assert_eq!(protect_rules(&protect), rules);
+        let worker = render(
+            TurnKind::Tester,
+            Path::new("/clones/one"),
+            &protect,
+            &Sandbox::default(),
+            Path::new("/v/worker.gitconfig"),
+            &protect,
+        )
+        .unwrap();
+        assert_eq!(worker["permissions"]["allow"], json!(["Bash"]));
+        assert_eq!(worker["permissions"]["deny"], json!(rules));
+        assert_eq!(
+            worker["sandbox"]["filesystem"],
+            json!({"denyRead": ["~/"],
+                "allowRead": ["/clones/one", "/plugins/one", "/shared/skills/qa/", "/v/worker.gitconfig"],
+                "denyWrite": ["/plugins/one", "/shared/skills/qa/"]})
+        );
+        let reader = render(
+            TurnKind::Reader,
+            Path::new("/c"),
+            &protect,
+            &Sandbox::default(),
+            Path::new("/g"),
+            &protect,
+        )
+        .unwrap();
+        let mut deny = vec!["Bash", "WebFetch", "WebSearch"];
+        deny.extend(rules);
+        assert_eq!(reader, json!({"permissions": {"deny": deny}}));
+        assert_eq!(tools(TurnKind::Reader, true).last().unwrap(), SKILL_TOOL);
+        assert_eq!(
+            contract_tools(TurnKind::Worker, true),
+            [
+                "Read",
+                "Grep",
+                "Glob",
+                "Task",
+                "Edit",
+                "Write",
+                "Bash",
+                "Skill",
+                "StructuredOutput"
+            ]
+        );
+
+        // A settings file of the home keeps its sandbox and gets the deny rules.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        std::fs::create_dir_all(paths.sandbox_dir()).unwrap();
+        std::fs::write(
+            paths.sandbox_settings(TurnKind::Worker),
+            "{\"sandbox\": {\"enabled\": true}, \"permissions\": {\"deny\": [\"WebFetch\", \"Edit(//plugins/one/**)\"]}}",
+        )
+        .unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &worker, true, &protect).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["sandbox"], json!({"enabled": true}));
+        assert_eq!(
+            value["permissions"]["deny"],
+            json!([
+                "WebFetch",
+                "Edit(//plugins/one/**)",
+                "Write(//plugins/one/**)",
+                "Edit(//shared/skills/qa/**)",
+                "Write(//shared/skills/qa/**)"
+            ])
+        );
+        std::fs::write(paths.sandbox_settings(TurnKind::Worker), "{}").unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &worker, true, &protect).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["permissions"]["deny"], json!(rules));
     }
 
     #[test]
@@ -400,7 +549,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::new(dir.path());
         let rendered = json!({"permissions": {}});
-        let text = settings_text(&paths, TurnKind::Worker, &rendered, true).unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, true, &[]).unwrap();
         assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), rendered);
         std::fs::create_dir_all(paths.sandbox_dir()).unwrap();
         std::fs::write(
@@ -408,10 +557,10 @@ mod tests {
             "{\"sandbox\": {}}",
         )
         .unwrap();
-        let text = settings_text(&paths, TurnKind::Worker, &rendered, true).unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, true, &[]).unwrap();
         assert_eq!(text, "{\"sandbox\": {}}");
         // With attribution off, the file of the home gets the key too.
-        let text = settings_text(&paths, TurnKind::Worker, &rendered, false).unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, false, &[]).unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&text).unwrap(),
             json!({"sandbox": {}, "attribution": attribution_off()})
@@ -422,10 +571,10 @@ mod tests {
             "{\"attribution\": {\"commit\": \"x\"}}",
         )
         .unwrap();
-        let text = settings_text(&paths, TurnKind::Worker, &rendered, false).unwrap();
+        let text = settings_text(&paths, TurnKind::Worker, &rendered, false, &[]).unwrap();
         assert_eq!(text, "{\"attribution\": {\"commit\": \"x\"}}");
         std::fs::write(paths.sandbox_settings(TurnKind::Worker), "{").unwrap();
-        let err = settings_text(&paths, TurnKind::Worker, &rendered, true).unwrap_err();
+        let err = settings_text(&paths, TurnKind::Worker, &rendered, true, &[]).unwrap_err();
         assert!(err.to_string().contains("is not valid JSON"), "{err}");
     }
 
@@ -435,12 +584,12 @@ mod tests {
         let paths = Paths::new(dir.path());
         let rendered = json!({"permissions": {"deny": ["Bash"]}});
         let on: Value = serde_json::from_str(
-            &settings_text(&paths, TurnKind::Reader, &rendered, true).unwrap(),
+            &settings_text(&paths, TurnKind::Reader, &rendered, true, &[]).unwrap(),
         )
         .unwrap();
         assert!(on.get("attribution").is_none(), "{on}");
         let off: Value = serde_json::from_str(
-            &settings_text(&paths, TurnKind::Reader, &rendered, false).unwrap(),
+            &settings_text(&paths, TurnKind::Reader, &rendered, false, &[]).unwrap(),
         )
         .unwrap();
         assert_eq!(off["attribution"], json!({"commit": "", "pr": ""}));

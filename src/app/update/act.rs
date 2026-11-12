@@ -10,6 +10,7 @@
 //! - A paused ticket: Enter or `r` continues it; a ticket that is also stopped gets the take
 //!   first.
 //! - A proposal of the Curator: Enter opens its review in the terminal.
+//! - A notice of a gate: Enter marks it read.
 
 use super::super::chain::Owner;
 use super::super::model::{App, Card, OpenCard, ResumeCard, Run, StopCard, Tone};
@@ -65,6 +66,7 @@ pub fn on_key(app: &mut App, item: &NeedItem, key: Key) {
             Some(recipes::retry(id, flag, true))
         }
         (NeedItem::Proposal(proposal), Key::Enter) => Some(recipes::review(id, proposal)),
+        (NeedItem::Notice(notice), Key::Enter) => Some(recipes::read_notice(id, notice)),
         _ => None,
     };
     if let Some(chain) = started {

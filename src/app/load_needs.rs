@@ -1,8 +1,8 @@
 //! The reads of the cards of the things that wait, each in a thread of the runtime, through the
 //! functions of today that return data: the needs of the snapshot, the cards of `vision needs
 //! --json`, the plan of `vision plan`, the operations that wait for `vision approve`, the
-//! operations that the mode shadow or hold kept from running, the status rows, and the open
-//! proposals of the Curator. The read of a check of a chain is here too. None of them changes
+//! operations that the mode shadow or hold kept from running, the status rows, the open
+//! proposals of the Curator, and the notices that wait. The read of a check of a chain is here too. None of them changes
 //! the state.
 
 use super::chain::{Check, CheckFacts, OpFacts};
@@ -19,7 +19,7 @@ use crate::pipeline::{plan_hash, plan_of, status_rows, TicketView};
 use crate::snapshot::{collect_needs, NeedKind};
 
 /// Each thing that waits for the person, in the order of the needs of the snapshot: the
-/// questions, the flags and the plans, the writes, and the proposals.
+/// questions, the flags and the plans, the writes, the proposals, and the notices.
 pub fn needs(paths: &Paths) -> Result<Vec<NeedItem>, String> {
     read_needs(paths).map_err(|e| format!("{e:#}"))
 }
@@ -34,6 +34,7 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
     let cards = crate::questions::card_views(&ledger)?;
     let waiting = executor::waiting(&ledger)?;
     let proposals = crate::curator::open_proposals(&ctx, &ledger)?;
+    let notices = ledger.unread_notices()?;
     let views = status_rows(&ctx, &ledger, &needs)?;
     let mut items: Vec<NeedItem> = Vec::new();
     let mut push = |item: NeedItem| {
@@ -87,6 +88,11 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
                 for op in &writes {
                     let item = write_item(op, config, adapter.as_ref(), Some(view), &facts);
                     push(NeedItem::FirstWrite(item));
+                }
+            }
+            NeedKind::Notice => {
+                if let Some(notice) = notices.iter().find(|n| n.name() == need.id) {
+                    push(NeedItem::Notice(notice.clone()));
                 }
             }
             NeedKind::Proposal => {

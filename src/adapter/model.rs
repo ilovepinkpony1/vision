@@ -157,7 +157,7 @@ pub struct WaitStep {
 }
 
 /// One end fact of a step (section 11.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expect {
     /// `doc:<name>`: the result has that document, and it is not empty.
     Doc(String),
@@ -169,6 +169,86 @@ pub enum Expect {
     Job(String),
     /// `human:<action>`: the person did that action.
     Human(String),
+    /// `{ gate = "cr", doc = "cr.md", ... }`: code reads a document of the turn and decides.
+    Gate(Gate),
+}
+
+/// A gate of `expects`: code reads one document of the turn result and decides whether it
+/// passes. The pipeline reads the document; the agent never decides. This is not a gate of
+/// the executor (section 12).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gate {
+    /// The document of the result that the gate reads, such as `cr.md`.
+    pub doc: String,
+    pub rule: GateRule,
+}
+
+/// What a gate tests.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GateRule {
+    /// `gate = "cr"`: the report of a code review. It passes when no finding has a Net above
+    /// `net_max` and no finding is tagged BLOCKING.
+    Cr { net_max: f64 },
+    /// `gate = "qa"`: the report of a QA run. It passes when no issue has a severity of
+    /// `block`. With `notify`, the issues of a report that passes become one notice for the
+    /// person.
+    Qa { block: Vec<Severity>, notify: bool },
+}
+
+/// The `net_max` of a cr gate with no such key: a finding of +5 or more fails.
+pub const CR_NET_MAX: f64 = 4.0;
+/// The `block` of a qa gate with no such key: each severity but low.
+pub const QA_BLOCK: [Severity; 3] = [Severity::Critical, Severity::High, Severity::Medium];
+
+impl Gate {
+    /// The kind of the gate: `cr` or `qa`.
+    pub fn kind(&self) -> &'static str {
+        match self.rule {
+            GateRule::Cr { .. } => "cr",
+            GateRule::Qa { .. } => "qa",
+        }
+    }
+}
+
+/// The severity of an issue of a QA report, the most severe first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Severity {
+    Critical,
+    High,
+    Medium,
+    Low,
+}
+
+impl Severity {
+    /// Each severity, the most severe first.
+    pub const ALL: [Severity; 4] = [
+        Severity::Critical,
+        Severity::High,
+        Severity::Medium,
+        Severity::Low,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::Critical => "critical",
+            Severity::High => "high",
+            Severity::Medium => "medium",
+            Severity::Low => "low",
+        }
+    }
+
+    /// Reads a word such as `High` or `medium`, in any case.
+    pub fn parse(word: &str) -> Option<Severity> {
+        Severity::ALL
+            .into_iter()
+            .find(|s| s.as_str().eq_ignore_ascii_case(word))
+    }
+}
+
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 impl Expect {
@@ -205,6 +285,7 @@ impl fmt::Display for Expect {
             Expect::Clean => f.write_str("clean"),
             Expect::Job(name) => write!(f, "job:{name}"),
             Expect::Human(action) => write!(f, "human:{action}"),
+            Expect::Gate(gate) => write!(f, "gate:{}:{}", gate.kind(), gate.doc),
         }
     }
 }
@@ -792,6 +873,12 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
     let next = string(table.remove("next"), &at, problems);
     let cap = string(table.remove("cap"), &at, problems);
     let (expects, expect_args) = expects(table.remove("expects"), &at, problems);
+    if kind != "turn" && expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
+        problems.add(
+            &at,
+            "a gate reads a document of the result of a turn, so only a turn step can have one",
+        );
+    }
     let after = entries(table.remove("after"), &format!("{at} after"), problems);
     let before = entries(table.remove("before"), &format!("{at} before"), problems);
     let start = entries(table.remove("start"), &format!("{at} start"), problems);
@@ -908,6 +995,12 @@ fn expects(
                     continue;
                 }
             },
+            toml::Value::Table(table) if table.contains_key("gate") => {
+                match gate(table, at, problems) {
+                    Some(gate) => Expect::Gate(gate),
+                    None => continue,
+                }
+            }
             toml::Value::Table(mut table) => {
                 let job = string(table.remove("job"), at, problems);
                 let given = object(
@@ -918,7 +1011,7 @@ fn expects(
                 for key in table.keys() {
                     problems.add(
                         at,
-                        format!("`{key}` is not a key of an end fact. A table of expects has job and args, such as {{ job = \"proof\", args = {{ plan = \"{{doc:approved-plan.md}}\" }} }}"),
+                        format!("`{key}` is not a key of an end fact. A table of expects has job and args, such as {{ job = \"proof\", args = {{ plan = \"{{doc:approved-plan.md}}\" }} }}, or it names a gate, such as {{ gate = \"cr\", doc = \"cr.md\" }}"),
                     );
                 }
                 let Some(job) = job.filter(|j| valid_name(j, true)) else {
@@ -942,7 +1035,11 @@ fn expects(
                 continue;
             }
         };
-        if list.contains(&expect) {
+        // The text of an end fact names it: a gate by its kind and its document.
+        if list
+            .iter()
+            .any(|e: &Expect| e.to_string() == expect.to_string())
+        {
             problems.add(
                 at,
                 format!("expects names {expect} more than once. Name each end fact once"),
@@ -952,6 +1049,97 @@ fn expects(
         list.push(expect);
     }
     (list, args)
+}
+
+/// A gate of `expects`: `{ gate = "cr", doc = "cr.md", net_max = 4 }` or
+/// `{ gate = "qa", doc = "qa.md", block = ["critical", "high", "medium"], notify = true }`. A
+/// missing `doc` is `<gate>.md`, a missing `net_max` is [`CR_NET_MAX`], a missing `block` is
+/// [`QA_BLOCK`], and a missing `notify` is false.
+fn gate(mut table: Table, at: &str, problems: &mut Problems) -> Option<Gate> {
+    let kind = string(table.remove("gate"), at, problems)?;
+    let keys: &[&str] = match kind.as_str() {
+        "cr" => &["doc", "net_max"],
+        "qa" => &["doc", "block", "notify"],
+        other => {
+            problems.add(
+                at,
+                format!("the gate `{other}` is not known. Use gate = \"cr\" or gate = \"qa\""),
+            );
+            return None;
+        }
+    };
+    let mut fine = true;
+    for key in table.keys().filter(|k| !keys.contains(&k.as_str())) {
+        problems.add(
+            at,
+            format!(
+                "`{key}` is not a key of the gate {kind}. Its keys: gate, {}",
+                keys.join(", ")
+            ),
+        );
+        fine = false;
+    }
+    let doc = match table.remove("doc") {
+        None => format!("{kind}.md"),
+        Some(value) => string(Some(value), at, problems)?,
+    };
+    if !valid_document_name(&doc) {
+        problems.add(
+            at,
+            format!("the gate {kind} reads `{doc}`, which is not a plain file name, such as doc = \"{kind}.md\""),
+        );
+        fine = false;
+    }
+    let rule = if kind == "cr" {
+        let net_max = match table.remove("net_max") {
+            None => CR_NET_MAX,
+            Some(toml::Value::Integer(n)) => n as f64,
+            Some(toml::Value::Float(n)) if n.is_finite() => n,
+            Some(other) => {
+                problems.add(
+                    at,
+                    format!("net_max of the gate cr must be a number, such as net_max = 4, not `{other}`"),
+                );
+                return None;
+            }
+        };
+        GateRule::Cr { net_max }
+    } else {
+        let block = match table.remove("block") {
+            None => QA_BLOCK.to_vec(),
+            Some(value) => {
+                let mut block = Vec::new();
+                for word in strings(Some(value), &format!("{at} block"), problems) {
+                    match Severity::parse(&word) {
+                        Some(severity) if !block.contains(&severity) => block.push(severity),
+                        Some(_) => {}
+                        None => {
+                            problems.add(
+                                at,
+                                format!("block of the gate qa names `{word}`, which is not a severity. Use critical, high, medium, or low"),
+                            );
+                            fine = false;
+                        }
+                    }
+                }
+                block.sort();
+                block
+            }
+        };
+        let notify = match table.remove("notify") {
+            None => false,
+            Some(toml::Value::Boolean(b)) => b,
+            Some(other) => {
+                problems.add(
+                    at,
+                    format!("notify of the gate qa must be true or false, not `{other}`"),
+                );
+                return None;
+            }
+        };
+        GateRule::Qa { block, notify }
+    };
+    fine.then_some(Gate { doc, rule })
 }
 
 /// Tests each `{doc:NAME}` of the strings of a value: it closes, and it names a plain file of
@@ -1718,6 +1906,111 @@ url = "http://localhost:3000"
             let err = error(&text);
             assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
         }
+    }
+
+    #[test]
+    fn a_turn_step_can_name_a_gate_of_cr_or_qa() {
+        let line = "expects = [\"commits\", \"clean\", \"doc:pr.md\", \"job:proof\"]";
+        let text = with(
+            line,
+            "expects = [\"commits\", { gate = \"cr\", doc = \"cr.md\", net_max = 4 }, { gate = \"qa\", doc = \"qa.md\", block = [\"high\", \"Critical\", \"medium\"], notify = true }]",
+        );
+        let adapter = parse(&text).unwrap();
+        let build = adapter.step("build").unwrap();
+        assert_eq!(
+            build.expects,
+            [
+                Expect::Commits,
+                Expect::Gate(Gate {
+                    doc: "cr.md".into(),
+                    rule: GateRule::Cr { net_max: 4.0 }
+                }),
+                Expect::Gate(Gate {
+                    doc: "qa.md".into(),
+                    rule: GateRule::Qa {
+                        block: QA_BLOCK.to_vec(),
+                        notify: true
+                    }
+                }),
+            ]
+        );
+        assert_eq!(build.expects[1].to_string(), "gate:cr:cr.md");
+        assert_eq!(build.expects[2].to_string(), "gate:qa:qa.md");
+
+        // The keys that a gate leaves out take their defaults.
+        let text = with(line, "expects = [{ gate = \"cr\" }, { gate = \"qa\" }]");
+        let adapter = parse(&text).unwrap();
+        assert_eq!(
+            adapter.step("build").unwrap().expects,
+            [
+                Expect::Gate(Gate {
+                    doc: "cr.md".into(),
+                    rule: GateRule::Cr {
+                        net_max: CR_NET_MAX
+                    }
+                }),
+                Expect::Gate(Gate {
+                    doc: "qa.md".into(),
+                    rule: GateRule::Qa {
+                        block: QA_BLOCK.to_vec(),
+                        notify: false
+                    }
+                }),
+            ]
+        );
+        let text = with(line, "expects = [{ gate = \"cr\", net_max = 2.5 }]");
+        assert_eq!(
+            parse(&text).unwrap().step("build").unwrap().expects[0],
+            Expect::Gate(Gate {
+                doc: "cr.md".into(),
+                rule: GateRule::Cr { net_max: 2.5 }
+            })
+        );
+
+        let cases = [
+            ("{ gate = \"lint\" }", "the gate `lint` is not known"),
+            (
+                "{ gate = \"cr\", block = [\"low\"] }",
+                "`block` is not a key of the gate cr. Its keys: gate, doc, net_max",
+            ),
+            (
+                "{ gate = \"qa\", net_max = 3 }",
+                "`net_max` is not a key of the gate qa",
+            ),
+            (
+                "{ gate = \"cr\", net_max = \"four\" }",
+                "net_max of the gate cr must be a number",
+            ),
+            (
+                "{ gate = \"qa\", block = [\"severe\"] }",
+                "block of the gate qa names `severe`, which is not a severity",
+            ),
+            (
+                "{ gate = \"qa\", notify = \"yes\" }",
+                "notify of the gate qa must be true or false",
+            ),
+            (
+                "{ gate = \"cr\", doc = \"../cr.md\" }",
+                "the gate cr reads `../cr.md`, which is not a plain file name",
+            ),
+            (
+                "{ gate = \"cr\" }, { gate = \"cr\", net_max = 6 }",
+                "expects names gate:cr:cr.md more than once",
+            ),
+        ];
+        for (entry, expected) in cases {
+            let err = error(&with(line, &format!("expects = [{entry}]")));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        // A gate reads the result of a turn, so a job step cannot have one.
+        let err = error(&with(
+            "job = \"proof\"\nargs = { green = true }",
+            "job = \"proof\"\nargs = { green = true }\nexpects = [{ gate = \"cr\" }]",
+        ));
+        assert!(
+            err.contains("step `proof`: a gate reads a document of the result of a turn"),
+            "{err}"
+        );
     }
 
     #[test]

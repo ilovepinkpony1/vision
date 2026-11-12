@@ -220,6 +220,8 @@ pub enum Action {
     },
     /// `vision model reset AGENT`.
     ModelReset { agent: String },
+    /// `vision needs --read ID`: marks a notice as read.
+    ReadNotice { id: String },
 }
 
 /// The answer of `vision answer`.
@@ -293,6 +295,7 @@ impl Action {
                 effort.clone(),
             ],
             Action::ModelReset { agent } => vec!["model".into(), "reset".into(), agent.clone()],
+            Action::ReadNotice { id } => vec!["needs".into(), "--read".into(), id.clone()],
         }
     }
 
@@ -311,6 +314,7 @@ impl Action {
             Action::Promote { verb } => format!("The promote of {verb}"),
             Action::ModelSet { agent, .. } => format!("The pin of the model of {agent}"),
             Action::ModelReset { agent } => format!("The reset of the model of {agent}"),
+            Action::ReadNotice { id } => format!("The read of the notice {id}"),
         }
     }
 }

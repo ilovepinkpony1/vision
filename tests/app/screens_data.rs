@@ -150,3 +150,65 @@ fn a_home_that_is_not_set_up_gives_an_error_and_no_numbers() {
     assert!(stats(&paths, true, OffsetDateTime::now_utc()).is_err());
     assert!(models(&paths).is_err());
 }
+
+#[test]
+fn a_notice_of_the_ledger_loads_as_its_card_and_never_marks_the_ticket() {
+    use vision::app::needs::NeedItem;
+    use vision::ledger::notices::{NewNotice, NoticeIssue};
+
+    let world = World::new();
+    simple_scenarios(&world);
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_to("plan-ready");
+    let issues = [NoticeIssue {
+        id: "ISSUE-001".into(),
+        severity: "low".into(),
+        title: "The export button has a typo".into(),
+    }];
+    let id = world
+        .ledger()
+        .add_notice(&NewNotice {
+            ticket: KEY,
+            step: "qa",
+            turn: "20261116T143000Z-DEMO-12-qa-1",
+            gate: "qa",
+            doc: "qa.md",
+            issues: &issues,
+            note: None,
+            created: "2026-11-16T14:40:00Z",
+        })
+        .unwrap()
+        .unwrap();
+    let paths = world.ctx().paths;
+    let items = vision::app::load_needs::needs(&paths).unwrap();
+    let notices: Vec<&NeedItem> = items
+        .iter()
+        .filter(|i| matches!(i, NeedItem::Notice(_)))
+        .collect();
+    assert_eq!(notices.len(), 1, "{items:?}");
+    assert_eq!(notices[0].id(), format!("notice:N-{id}"));
+    assert_eq!(notices[0].ticket(), Some(KEY));
+    assert_eq!(
+        items.last().map(NeedItem::id),
+        Some(format!("notice:N-{id}")),
+        "a notice comes after the things that stop a ticket"
+    );
+
+    // The ticket row of the app does not need the person for a notice alone: only the plan
+    // that waits marks it.
+    let local = vision::app::load::local(&paths, OffsetDateTime::now_utc()).unwrap();
+    let held = local.tickets.iter().find(|t| t.view.key == KEY).unwrap();
+    assert!(held.needs_you, "the plan waits");
+    assert_eq!(held.view.needs.get("notice"), Some(&1));
+    assert!(
+        !held.view.now.contains("notice"),
+        "the line of now names what stops the ticket: {}",
+        held.view.now
+    );
+
+    world
+        .run(&["needs", "--read", &format!("N-{id}")])
+        .expect_code(0);
+    let items = vision::app::load_needs::needs(&paths).unwrap();
+    assert!(!items.iter().any(|i| matches!(i, NeedItem::Notice(_))));
+}

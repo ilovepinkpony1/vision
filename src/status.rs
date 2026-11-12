@@ -306,6 +306,7 @@ fn need_word(kind: NeedKind) -> &'static str {
         NeedKind::Operation => "operation",
         NeedKind::Flag => "flag",
         NeedKind::Proposal => "proposal",
+        NeedKind::Notice => "notice",
     }
 }
 

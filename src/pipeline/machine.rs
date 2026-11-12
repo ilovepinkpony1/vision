@@ -16,11 +16,13 @@ use super::decide::{
     Facts, JobFact, KindFacts, LastTurn, List, Next, OpFact, Refused,
 };
 use super::docs::{self, result_documents};
+use super::gates;
 use super::state::{flags_of, flags_text, waits_on, Counts, FlagReason, Seen, WAITS_FOR_LIMIT};
-use crate::adapter::{self, Adapter, Entry, EntryKind, Expect, Step, StepKind};
+use crate::adapter::{self, Adapter, Entry, EntryKind, Expect, GateRule, Step, StepKind};
 use crate::ctx::Ctx;
 use crate::executor::{self, Outcome, Secrets};
 use crate::ledger::memory_use::MemoryUse;
+use crate::ledger::notices::{notice_name, NewNotice, NoticeIssue};
 use crate::ledger::operations::CheckRow;
 use crate::ledger::pipeline::{FindingRow, ReviewRowNew, SpanRow};
 use crate::ledger::turns::TurnRow;
@@ -286,15 +288,21 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
     Ok(())
 }
 
-/// The documents of the step: the names of its `doc:` end facts.
+/// The documents of the step: the names of its `doc:` end facts and the documents that its
+/// gates read, each one once.
 pub(crate) fn expected_docs(step: &Step) -> Vec<String> {
-    step.expects
-        .iter()
-        .filter_map(|e| match e {
-            Expect::Doc(name) => Some(name.clone()),
-            _ => None,
-        })
-        .collect()
+    let mut names: Vec<String> = Vec::new();
+    for expect in &step.expects {
+        let name = match expect {
+            Expect::Doc(name) => name,
+            Expect::Gate(gate) => &gate.doc,
+            _ => continue,
+        };
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    names
 }
 
 /// The marker of the documents of a turn that the pipeline wrote.
@@ -402,6 +410,13 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
             }
         }
     }
+    for note in gate_notes(step, &found.docs) {
+        ctx.log(&format!("pipeline: a gate of {} notes: {note}", last.id));
+    }
+    let notices = match &check {
+        Check::Held => gate_notices(ctx, step, &found.docs)?,
+        _ => Vec::new(),
+    };
     in_tx(ledger, |ledger| {
         ledger.set_end_fact(&last.id, &value)?;
         ledger.set_ticket_state(
@@ -417,6 +432,29 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
                 .external_id(&fact_mark(&last.id))
                 .detail(detail.clone()),
         )?;
+        for notice in &notices {
+            let added = ledger.add_notice(&NewNotice {
+                ticket: ticket.key.as_str(),
+                step: &step.id,
+                turn: &last.id,
+                gate: &notice.gate,
+                doc: &notice.doc,
+                issues: &notice.issues,
+                note: notice.note.as_deref(),
+                created: &now,
+            })?;
+            if let Some(id) = added {
+                ledger.add_event(
+                    &Event::now("tick", "notice")
+                        .ticket(ticket.key.as_str())
+                        .external_id(&format!("notice:{}:{}", last.id, notice.doc))
+                        .detail(json!({
+                            "notice": notice_name(id), "turn": last.id, "step": step.id,
+                            "doc": notice.doc, "issues": notice.issues.len(),
+                        })),
+                )?;
+            }
+        }
         Ok(())
     })?;
     ctx.log(&format!(
@@ -424,6 +462,76 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
         last.id, step.id
     ));
     Ok(())
+}
+
+/// A notice that a passing gate qa with notify = true gives: the issues of its report that do
+/// not block.
+struct GateNotice {
+    gate: String,
+    doc: String,
+    issues: Vec<NoticeIssue>,
+    note: Option<String>,
+}
+
+/// The notices of the gates of a step whose end facts held. Each secret value in a title or a
+/// note is masked, as in the documents of the ticket folder.
+fn gate_notices(
+    ctx: &Ctx,
+    step: &Step,
+    docs: &BTreeMap<String, String>,
+) -> Result<Vec<GateNotice>> {
+    let mut out = Vec::new();
+    for expect in &step.expects {
+        let Expect::Gate(gate) = expect else {
+            continue;
+        };
+        let GateRule::Qa {
+            block,
+            notify: true,
+        } = &gate.rule
+        else {
+            continue;
+        };
+        let Some(text) = docs.get(&gate.doc) else {
+            continue;
+        };
+        let issues = gates::notice_issues(block, text);
+        if issues.is_empty() {
+            continue;
+        }
+        let secrets = Secrets::read(ctx.config()?)?;
+        out.push(GateNotice {
+            gate: gate.kind().to_string(),
+            doc: gate.doc.clone(),
+            issues: issues
+                .into_iter()
+                .map(|i| NoticeIssue {
+                    id: i.id,
+                    severity: i.severity.map(|s| s.to_string()).unwrap_or_default(),
+                    title: secrets.mask(&i.title),
+                })
+                .collect(),
+            note: gates::qa_report(text)
+                .disagreement()
+                .map(|n| secrets.mask(&n)),
+        });
+    }
+    Ok(out)
+}
+
+/// The notes of the gates of a step that read their document, such as a count table that
+/// disagrees with the issues, for the log.
+fn gate_notes(step: &Step, docs: &BTreeMap<String, String>) -> Vec<String> {
+    step.expects
+        .iter()
+        .filter_map(|e| match e {
+            Expect::Gate(gate) => docs
+                .get(&gate.doc)
+                .and_then(|text| gates::judge(gate, text).ok()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 /// Writes the expected documents of a result to the ticket folder once, with the evidence

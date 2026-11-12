@@ -3,7 +3,8 @@
 //! the Judge, the line of the words, the line of the reason, the question of a needless card,
 //! its chain while it runs and after it failed), the plan (also after it changed), a write that
 //! waits, the first write (also while its chain runs), a rule that stopped a ticket, a paused
-//! ticket, a proposal of the Curator, and the card while it loads or after its load failed.
+//! ticket, a proposal of the Curator, a notice of a gate, and the card while it loads or after
+//! its load failed.
 
 use vision::app::chain::{CheckFacts, OpFacts};
 use vision::app::model::App;
@@ -274,6 +275,15 @@ fn the_cards_of_a_flag_and_of_a_pause() {
 #[test]
 fn the_card_of_a_proposal() {
     check("need_proposal", &open_with(SIZE, vec![proposal(true)]));
+}
+
+#[test]
+fn the_card_of_a_notice_lists_its_issues() {
+    check("need_notice", &open_with(SIZE, vec![notice_item(true)]));
+    check(
+        "need_notice_100x28",
+        &open_with(SMALL, vec![notice_item(false), proposal(false)]),
+    );
 }
 
 #[test]

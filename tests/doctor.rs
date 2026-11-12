@@ -130,3 +130,62 @@ fn doctor_before_init_fails_and_says_what_to_do() {
     assert!(run.stdout.contains("fail  home"), "{run:?}");
     assert!(run.stdout.contains("vision init"), "{run:?}");
 }
+
+#[test]
+fn doctor_names_the_plugins_and_fails_a_folder_with_none() {
+    let home = Home::init();
+    let run = home.run(&["doctor"]);
+    assert!(
+        !line_starts(&run.stdout)
+            .iter()
+            .any(|l| l.ends_with(" plugins")),
+        "no plugin line with an empty list: {run:?}"
+    );
+    let plugin = home.user_home.join("plugins/mine");
+    std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+    std::fs::write(
+        plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name": "mine", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(plugin.join("skills/review")).unwrap();
+    std::fs::write(
+        plugin.join("skills/review/SKILL.md"),
+        "---\nname: review\n---\n",
+    )
+    .unwrap();
+    let empty = home.user_home.join("plugins/empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let gone = home.user_home.join("plugins/gone");
+    let set = |dirs: &[&std::path::Path]| {
+        let config = home.path("config.toml");
+        let mut doc: toml_edit::DocumentMut =
+            std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        let mut list = toml_edit::Array::new();
+        for dir in dirs {
+            list.push(dir.display().to_string());
+        }
+        doc["claude"]["plugins"] = toml_edit::value(list);
+        std::fs::write(&config, doc.to_string()).unwrap();
+    };
+
+    set(&[&plugin]);
+    let run = home.run(&["doctor"]);
+    run.expect_code(0);
+    assert!(
+        line_starts(&run.stdout).contains(&"ok plugins".to_string()),
+        "{run:?}"
+    );
+    assert!(run.stdout.contains("mine (1 skill) at "), "{run:?}");
+
+    set(&[&plugin, &empty, &gone]);
+    let run = home.run(&["doctor"]);
+    run.expect_code(1);
+    assert!(
+        line_starts(&run.stdout).contains(&"fail plugins".to_string()),
+        "{run:?}"
+    );
+    assert!(run.stdout.contains("holds no plugin"), "{run:?}");
+    assert!(run.stdout.contains("does not exist"), "{run:?}");
+    assert!(run.stdout.contains("Found: mine (1 skill)"), "{run:?}");
+}

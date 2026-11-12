@@ -25,7 +25,7 @@ use crate::ledger::{Event, Ledger};
 use crate::models;
 use crate::paths::{TicketKey, TurnId, TurnPaths, HOME_ENV};
 use crate::turn::state::{Reason, TurnState};
-use crate::turn::{inbox, roles, settings, TurnKind};
+use crate::turn::{inbox, plugins, roles, settings, TurnKind};
 use crate::util::fs::{atomic_write, ensure_dir};
 use crate::util::{git, ids, time};
 
@@ -368,6 +368,20 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         }
         add_dirs.push(dir);
     }
+    // The work turns load the plugins of `claude.plugins`. The Judge and the Curator do not:
+    // their steps name no skill, and each of their turns stays as small as it was.
+    let alone = models::agent(&request.agent).is_some_and(|spec| spec.alone);
+    let plugins = if alone {
+        plugins::Plugins::default()
+    } else {
+        plugins::resolve(&config.claude.plugins)?
+    };
+    for dir in &plugins.read {
+        if !add_dirs.contains(dir) {
+            add_dirs.push(dir.clone());
+        }
+    }
+    let skills = !plugins.is_empty();
     let role = roles::compose_role(paths, &request.agent, request.role_file.as_deref())?;
     let schema = roles::schema(paths, &request.agent)?;
     let mut choice = models::choice(config, &request.agent)?;
@@ -396,11 +410,18 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             &add_dirs,
             &config.sandbox,
             &gitconfig,
+            &plugins.read,
         )?;
         atomic_write(
             &turn.settings,
-            settings::settings_text(paths, request.kind, &rendered, config.claude.attribution)?
-                .as_bytes(),
+            settings::settings_text(
+                paths,
+                request.kind,
+                &rendered,
+                config.claude.attribution,
+                &plugins.read,
+            )?
+            .as_bytes(),
         )?;
         let role_path = turn.dir.join(ROLE_FILE);
         atomic_write(&role_path, role.as_bytes())?;
@@ -423,7 +444,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         if settings::sandboxed(request.kind) {
             env_set.insert("GIT_CONFIG_GLOBAL".into(), gitconfig.display().to_string());
         }
-        let tools = settings::tools(request.kind);
+        let tools = settings::tools(request.kind, skills);
         let mode = settings::permission_mode(request.kind);
         let mut args: Vec<String> = vec![
             "-p".into(),
@@ -461,6 +482,9 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         for dir in &add_dirs {
             args.extend(["--add-dir".into(), dir.display().to_string()]);
         }
+        for dir in &plugins.dirs {
+            args.extend(["--plugin-dir".into(), dir.display().to_string()]);
+        }
         let plan = Plan {
             turn: id.to_string(),
             ticket: request.ticket.to_string(),
@@ -476,7 +500,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
                 .time_limit_secs
                 .unwrap_or_else(|| config.time.for_kind(request.kind).saturating_mul(60)),
             contract: Contract {
-                tools: settings::contract_tools(request.kind),
+                tools: settings::contract_tools(request.kind, skills),
                 permission_mode: mode.into(),
                 mcp_servers: Vec::new(),
             },
@@ -525,7 +549,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     }
     // A waiting message of the person is for the work agent of the ticket, so the Judge and
     // the Curator leave it for the next work turn.
-    if !models::agent(&request.agent).is_some_and(|spec| spec.alone) {
+    if !alone {
         deliver_waiting(ctx, ledger, &request.ticket, &id, &turn)?;
     }
     ledger.add_event(

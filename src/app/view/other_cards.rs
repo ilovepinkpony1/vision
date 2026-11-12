@@ -1,7 +1,7 @@
 //! The other cards of the things that wait: the plan (`mPlan` of the design) in a body that
 //! scrolls with its short hash in the title; a rule that stopped the ticket, with its reason in
-//! full and what each key does; a paused ticket; and a proposal of the Curator with the number
-//! of its changes that wait.
+//! full and what each key does; a paused ticket; a proposal of the Curator with the number of
+//! its changes that wait; and a notice of a gate with its list of issues.
 
 use super::canvas::ink;
 use super::cards::Rows;
@@ -10,6 +10,7 @@ use super::theme::T;
 use crate::app::model::App;
 use crate::app::needs::{FlagItem, NeedsCard, PlanItem, ProposalItem};
 use crate::app::text::{count, wrap};
+use crate::ledger::notices::NoticeRow;
 use crate::pipeline::SHORT_HASH;
 
 pub(super) fn plan(app: &App, _card: &NeedsCard, item: &PlanItem) -> Parts {
@@ -188,6 +189,65 @@ pub(super) fn proposal(_app: &App, _card: &NeedsCard, item: &ProposalItem) -> Pa
     foot.keys(&[("enter", "review"), ("esc", "later")]);
     Parts {
         title: format!("a proposal of the Curator · {}", item.name),
+        body,
+        foot,
+    }
+}
+
+pub(super) fn notice(_app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
+    let mut body = Rows::default();
+    let n = item.issues.len();
+    body.para(
+        3,
+        &format!(
+            "The gate {} of the step {} passed, so the ticket went on. Its report {} has {} that {} not block:",
+            item.gate,
+            item.step,
+            item.doc,
+            count(n, "issue"),
+            if n == 1 { "does" } else { "do" }
+        ),
+        TEXT,
+        ink(T.fg).bold(),
+    );
+    body.blank();
+    for issue in &item.issues {
+        let head = format!("{}  {}  ", issue.id, issue.severity);
+        let room = TEXT.saturating_sub(head.chars().count()).max(20);
+        for (i, part) in wrap(&issue.title, room).into_iter().enumerate() {
+            if i == 0 {
+                body.rows.push(vec![
+                    (3, head.clone(), ink(T.warn)),
+                    (3 + head.chars().count() as i32, part, ink(T.fg)),
+                ]);
+            } else {
+                body.text(3 + head.chars().count() as i32, part, ink(T.fg));
+            }
+        }
+    }
+    if let Some(note) = &item.note {
+        let mut chars = note.chars();
+        let note: String = chars
+            .next()
+            .map(|c| c.to_uppercase().chain(chars).collect())
+            .unwrap_or_default();
+        body.blank();
+        body.para(3, &format!("{note}."), TEXT, ink(T.dim));
+    }
+    body.blank();
+    body.para(
+        3,
+        &format!(
+            "A notice never stops a ticket. It stays until you mark it read. The turn was {}.",
+            item.turn
+        ),
+        TEXT,
+        ink(T.dim),
+    );
+    let mut foot = Rows::default();
+    foot.keys(&[("enter", "mark it read"), ("esc", "later")]);
+    Parts {
+        title: format!("a notice · {}", item.name()),
         body,
         foot,
     }

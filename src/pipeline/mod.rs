@@ -16,6 +16,7 @@ pub mod commands;
 pub mod decide;
 pub mod docs;
 pub mod facts;
+pub mod gates;
 mod machine;
 mod request;
 pub mod state;
@@ -77,6 +78,11 @@ pub fn launch_request(pass: &mut Pass, start: &TurnStart) -> Result<LaunchReques
 /// or "paused".
 pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     view::needs(ctx, ledger)
+}
+
+/// The notices that wait until the person reads them (section 15).
+pub fn notice_needs(ledger: &Ledger) -> Result<Vec<Need>> {
+    view::notice_needs(ledger)
 }
 
 /// The rows of `vision status`, one for each ticket. `needs` are the needs of each module.

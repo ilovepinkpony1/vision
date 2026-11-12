@@ -87,17 +87,74 @@ pub fn run(ctx: &Ctx, json: bool) -> Result<()> {
 /// Runs each test in order. Gives the ledger when it opened, so that the results can be recorded.
 pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
     let (ledger_check, ledger) = check_ledger(ctx);
-    let checks = vec![
+    let mut checks = vec![
         check_home(ctx),
         check_config(ctx),
         ledger_check,
         check_heartbeat(ctx),
         check_git(ctx),
         check_claude(ctx),
-        check_memory(ctx),
-        check_adapter(ctx),
     ];
+    checks.extend(check_plugins(ctx));
+    checks.push(check_memory(ctx));
+    checks.push(check_adapter(ctx));
     (checks, ledger)
+}
+
+/// The plugins of `claude.plugins`, by name, with the number of their skills. A folder that
+/// does not exist or that holds no plugin fails. With no folder in the list, there is no line.
+fn check_plugins(ctx: &Ctx) -> Option<Check> {
+    let config = ctx.config().ok()?;
+    if config.claude.plugins.is_empty() {
+        return None;
+    }
+    let mut found = Vec::new();
+    let mut problems = Vec::new();
+    for entry in &config.claude.plugins {
+        let dir = match crate::paths::expand_tilde(entry) {
+            Ok(dir) => dir,
+            Err(e) => {
+                problems.push(format!("`{entry}`: {e:#}"));
+                continue;
+            }
+        };
+        match crate::turn::find_plugins(&dir) {
+            Ok(plugins) if plugins.is_empty() => problems.push(format!(
+                "`{entry}` holds no plugin: neither it nor a folder in it has .claude-plugin/plugin.json"
+            )),
+            Ok(plugins) => found.extend(plugins.into_iter().map(|p| {
+                format!(
+                    "{} ({} skill{}) at {}",
+                    p.name,
+                    p.skills,
+                    if p.skills == 1 { "" } else { "s" },
+                    crate::paths::tilde_display(&p.dir)
+                )
+            })),
+            Err(e) => problems.push(format!("`{entry}`: {e:#}")),
+        }
+    }
+    let list = if found.is_empty() {
+        "no plugin".to_string()
+    } else {
+        found.join("; ")
+    };
+    Some(if problems.is_empty() {
+        Check::new(
+            "plugins",
+            Level::Ok,
+            format!("{list}. Each work turn gets them with the tool Skill"),
+        )
+    } else {
+        Check::new(
+            "plugins",
+            Level::Fail,
+            format!(
+                "{}. Fix claude.plugins in config.toml. Found: {list}",
+                problems.join("; ")
+            ),
+        )
+    })
 }
 
 /// The adapter of the key `project` loads, and its scripts are executable.

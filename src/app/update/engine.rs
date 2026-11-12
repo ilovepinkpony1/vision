@@ -304,7 +304,8 @@ fn action_done(
         | Action::Approve { .. }
         | Action::Promote { .. }
         | Action::ModelSet { .. }
-        | Action::ModelReset { .. } => {}
+        | Action::ModelReset { .. }
+        | Action::ReadNotice { .. } => {}
     }
     queue_pass(app);
 }

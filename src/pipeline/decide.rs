@@ -2,7 +2,7 @@
 //! facts of a ticket, call [`decide`], and apply its answer; they decide nothing themselves.
 //!
 //! - [`decide`]: the next thing that one ticket needs, from the facts of its step.
-//! - [`check_end_facts`]: the end facts of a turn result.
+//! - [`check_end_facts`]: the end facts of a turn result, the gates too.
 //! - [`wait_target`] and [`ci_result`]: where a wait step moves, and the CI check it records.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,6 +11,7 @@ use crate::adapter::Expect;
 use crate::executor::Outcome;
 use crate::turn::TurnStatus;
 
+use super::gates;
 use super::state::{NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT};
 
 /// The last turn of the visit of a turn step.
@@ -523,7 +524,23 @@ pub enum Check {
     RunJob(String),
 }
 
-/// Tests the end facts in their order, the jobs last, because a job costs the most.
+/// What is wrong with the document `name` of a result: missing, empty, or only a pointer to a
+/// file. `None` when the result has its text.
+fn doc_problem(name: &str, inputs: &FactInputs) -> Option<String> {
+    match inputs.docs.get(name) {
+        None if inputs.pointers.contains(name) => Some(format!(
+            "the document {name} of the result only points to a file. A turn cannot write a file for a document. Put the full text of {name} in `content` of `documents`"
+        )),
+        None => Some(format!("the result has no document {name}")),
+        Some(text) if text.trim().is_empty() => {
+            Some(format!("the document {name} of the result is empty"))
+        }
+        Some(_) => None,
+    }
+}
+
+/// Tests the end facts in their order, the jobs last, because a job costs the most. A gate
+/// reads its document of the result, as the code of [`gates`] decides.
 pub fn check_end_facts(expects: &[Expect], inputs: &FactInputs) -> Check {
     let short = |c: &Option<String>| {
         c.as_deref()
@@ -532,16 +549,11 @@ pub fn check_end_facts(expects: &[Expect], inputs: &FactInputs) -> Check {
     };
     for expect in expects {
         let found = match expect {
-            Expect::Doc(name) => match inputs.docs.get(name) {
-                None if inputs.pointers.contains(name) => Some(format!(
-                    "the document {name} of the result only points to a file. A turn cannot write a file for a document. Put the full text of {name} in `content` of `documents`"
-                )),
-                None => Some(format!("the result has no document {name}")),
-                Some(text) if text.trim().is_empty() => {
-                    Some(format!("the document {name} of the result is empty"))
-                }
-                Some(_) => None,
-            },
+            Expect::Doc(name) => doc_problem(name, inputs),
+            Expect::Gate(gate) => doc_problem(&gate.doc, inputs).or_else(|| {
+                let text = inputs.docs.get(&gate.doc).map_or("", String::as_str);
+                gates::judge(gate, text).err()
+            }),
             Expect::Commits => match (&inputs.head, &inputs.base) {
                 (None, _) => Some("the clone has no commit".into()),
                 (Some(head), Some(base)) if head == base => Some(format!(
@@ -1157,6 +1169,45 @@ mod tests {
         ));
         docs.human.insert("approve-plan".into());
         assert_eq!(check_end_facts(&[human], &docs), Check::Held);
+    }
+
+    #[test]
+    fn a_gate_is_an_end_fact_that_reads_its_document() {
+        let gate = Expect::Gate(crate::adapter::Gate {
+            doc: "cr.md".into(),
+            rule: crate::adapter::GateRule::Cr { net_max: 4.0 },
+        });
+        let expects = [gate, Expect::Job("proof".into())];
+        let mut i = inputs();
+        assert!(
+            matches!(check_end_facts(&expects, &i), Check::Failed { fact, found } if fact == "gate:cr:cr.md" && found == "the result has no document cr.md")
+        );
+        i.docs.insert("cr.md".into(), " \n".into());
+        assert!(
+            matches!(check_end_facts(&expects, &i), Check::Failed { found, .. } if found.contains("cr.md of the result is empty"))
+        );
+        i.docs.insert(
+            "cr.md".into(),
+            "1. [MAJOR][BLOCKING] app/a.rb:3\n   A text.\n   Net: +12\n".into(),
+        );
+        let check = check_end_facts(&expects, &i);
+        assert!(
+            matches!(&check, Check::Failed { fact, found } if fact == "gate:cr:cr.md" && found.contains("finding 1 `1. [MAJOR][BLOCKING] app/a.rb:3` with Net +12")),
+            "{check:?}"
+        );
+        // The message of the resume lists what failed.
+        if let Check::Failed { fact, found } = &check {
+            let message = resume_message(fact, found);
+            assert!(
+                message.contains("Net +12 (tagged BLOCKING, Net above +4)"),
+                "{message}"
+            );
+        }
+        i.docs.insert(
+            "cr.md".into(),
+            "1. [NIT][FOLLOW-UP] app/a.rb:3\n   A text.\n   Net: +1\n".into(),
+        );
+        assert_eq!(check_end_facts(&expects, &i), Check::RunJob("proof".into()));
     }
 
     const ADAPTER: &str = r#"

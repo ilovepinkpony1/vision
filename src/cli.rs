@@ -321,12 +321,15 @@ impl TurnCommand {
 /// The commands of questions (section 8.4).
 #[derive(Debug, Subcommand)]
 pub enum QuestionsCommand {
-    /// Show the cards and the approvals that wait, one at a time
+    /// Show the cards and the approvals that wait, one at a time, and the notices
     #[command(display_order = 22)]
     Needs {
         /// Print the list as JSON instead of the interactive view
         #[arg(long)]
         json: bool,
+        /// Mark the notice ID as read, such as N-3, and show nothing else
+        #[arg(long, value_name = "ID", conflicts_with = "json")]
+        read: Option<String>,
     },
 
     /// Answer a card, or mark it as needless
@@ -725,6 +728,7 @@ mod tests {
             &["retry", "DEMO-12"],
             &["needs"],
             &["needs", "--json"],
+            &["needs", "--read", "N-3"],
             &[
                 "answer", "Q-1", "--choice", "2", "--why", "W", "--when", "C",
             ],

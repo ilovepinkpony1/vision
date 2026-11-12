@@ -82,6 +82,7 @@ fn parts(app: &App, card: &NeedsCard) -> Parts {
         NeedItem::Flag(flag) => other_cards::flag(app, card, flag),
         NeedItem::Paused(flag) => other_cards::paused(app, card, flag),
         NeedItem::Proposal(proposal) => other_cards::proposal(app, card, proposal),
+        NeedItem::Notice(notice) => other_cards::notice(app, card, notice),
     };
     let place = if card.len() > 1 {
         format!("{} of {} · ", card.at + 1, card.len())

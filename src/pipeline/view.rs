@@ -11,6 +11,7 @@ use super::machine::{op_facts, visit_turns, Ticket};
 use super::state::{clear_command, NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT};
 use crate::ctx::Ctx;
 use crate::executor::{self, short, Outcome};
+use crate::ledger::notices::NoticeRow;
 use crate::ledger::Ledger;
 use crate::snapshot::{Need, NeedKind};
 use crate::turn::TurnStatus;
@@ -217,7 +218,10 @@ pub fn rows(ctx: &Ctx, ledger: &Ledger, all_needs: &[Need]) -> Result<Vec<Ticket
                 .map_or(0, |at| time::seconds_between(at, now) / 60),
         });
         let judging = mine.len() > usize::from(work.is_some());
-        let now_text = now_line(ctx, ledger, &ticket, &works, judging, &needs, &flags)?;
+        // A notice never stops a ticket, so the line of now says what the ticket does.
+        let mut stopping = needs.clone();
+        stopping.remove(NOTICE);
+        let now_text = now_line(ctx, ledger, &ticket, &works, judging, &stopping, &flags)?;
         out.push(TicketView {
             key: key.clone(),
             title: row.title.clone(),
@@ -245,7 +249,46 @@ fn need_word(kind: NeedKind) -> &'static str {
         NeedKind::Operation => "operation",
         NeedKind::Flag => "flag",
         NeedKind::Proposal => "proposal",
+        NeedKind::Notice => NOTICE,
     }
+}
+
+/// The word of a notice in the needs of a ticket row.
+pub const NOTICE: &str = "notice";
+
+/// The notices that wait for the person (section 15), oldest first: one need for each, with
+/// the id `N-<n>` that `vision needs --read` takes. A notice stays after its ticket ends.
+pub fn notice_needs(ledger: &Ledger) -> Result<Vec<Need>> {
+    Ok(ledger
+        .unread_notices()?
+        .iter()
+        .map(|notice| Need {
+            kind: NeedKind::Notice,
+            ticket: Some(notice.ticket.clone()),
+            id: notice.name(),
+            text: notice_text(notice),
+        })
+        .collect())
+}
+
+/// A notice in one line, such as `the gate qa of the step qa found 2 issues that do not block:
+/// ISSUE-003 low: A typo; ISSUE-005 low: A color`.
+pub fn notice_text(notice: &NoticeRow) -> String {
+    let list: Vec<String> = notice
+        .issues
+        .iter()
+        .map(|i| format!("{} {}: {}", i.id, i.severity, i.title))
+        .collect();
+    let (count, verb) = match notice.issues.len() {
+        1 => ("1 issue".to_string(), "does"),
+        n => (format!("{n} issues"), "do"),
+    };
+    format!(
+        "the gate {} of the step {} found {count} that {verb} not block: {}",
+        notice.gate,
+        notice.step,
+        list.join("; ")
+    )
 }
 
 fn now_line(
