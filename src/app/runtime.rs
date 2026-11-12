@@ -367,20 +367,7 @@ pub fn clock(started: Instant) -> Clock {
     Clock {
         elapsed: started.elapsed(),
         wall,
-        offset_seconds: local_offset(wall.unix_timestamp()),
-    }
-}
-
-/// The offset of the local time zone at a time, in seconds, from the C library.
-fn local_offset(at: i64) -> i32 {
-    let t: libc::time_t = at as libc::time_t;
-    // SAFETY: localtime_r writes only into the local value that it gets.
-    unsafe {
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&t, &mut tm).is_null() {
-            return 0;
-        }
-        tm.tm_gmtoff as i32
+        offset_seconds: crate::util::time::local_offset(wall.unix_timestamp()),
     }
 }
 

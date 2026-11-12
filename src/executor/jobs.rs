@@ -85,7 +85,7 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
             run.job
         );
     }
-    let input = json!({
+    let mut input = json!({
         "job": run.job,
         "key": run.ticket.as_str(),
         "clone": ticket.clone_text(),
@@ -99,9 +99,19 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
         .timeout
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_TIMEOUT);
+    // A job with `command` gets its table of adapter.toml: the script runs the command.
+    if let Some(command) = &spec.command {
+        input["table"] = json!({
+            "command": command,
+            "doc": spec.doc,
+            "env": spec.env.as_str(),
+            "secrets": spec.secrets,
+            "timeout": timeout.as_secs(),
+        });
+    }
     let started = Instant::now();
     let record = crate::running::start(&ctx.paths, "job", &run.job, run.ticket.as_str());
-    let answer = runner.job(input, timeout, spec.secrets);
+    let answer = runner.job(input, timeout, spec.secrets, spec.env);
     drop(record);
     let seconds = i64::try_from(started.elapsed().as_secs()).unwrap_or(i64::MAX);
     let at = time::now_rfc3339();

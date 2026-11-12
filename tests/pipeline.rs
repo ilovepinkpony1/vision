@@ -1523,3 +1523,324 @@ kind = "end"
         "{missing:?}"
     );
 }
+
+/// A private adapter with the scripts of the demo and these steps.
+fn steps_adapter(world: &World, steps: &str) {
+    world.write_adapter(|text| {
+        let scripts = text
+            .lines()
+            .find(|l| l.starts_with("scripts = "))
+            .unwrap()
+            .to_string();
+        format!("name = \"demo\"\nbase = \"origin/main\"\n{scripts}\n\n{steps}")
+    });
+}
+
+#[test]
+fn rounds_gives_a_visit_more_turns_and_then_needs_you() {
+    let world = World::new();
+    steps_adapter(
+        &world,
+        r#"[[step]]
+id = "notes"
+kind = "turn"
+agent = "scout"
+turn = "reader"
+reads = ["issue.json"]
+expects = ["doc:notes.md"]
+rounds = 3
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+"#,
+    );
+    let partial = result("Notes.", &[]);
+    world.scenario(
+        "scout",
+        "notes",
+        json!([
+            ends_with(partial.clone()),
+            ends_with(partial.clone()),
+            ends_with(partial.clone()),
+            ends_with(partial)
+        ]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    let turns = step_turns(&world, "notes");
+    assert_eq!(turns.len(), 3, "the first turn and two resumes");
+    for turn in &turns {
+        assert_eq!(turn.end_fact.as_deref(), Some("failed:doc:notes.md"));
+    }
+    assert_eq!(turns[1].resumes, turns[0].session);
+    assert_eq!(turns[2].resumes, turns[1].session);
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains("the end fact doc:notes.md did not hold after 2 resumes (rounds = 3)"),
+        "{reason}"
+    );
+    world.tick();
+    assert_eq!(
+        step_turns(&world, "notes").len(),
+        3,
+        "nothing starts after it"
+    );
+}
+
+#[test]
+fn a_failed_gate_with_a_fail_route_goes_to_its_step_with_the_report() {
+    let world = World::new();
+    steps_adapter(
+        &world,
+        r#"[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{ gate = "cr", doc = "cr.md" }]
+rounds = 3
+next = "qa"
+
+[[step]]
+id = "qa"
+kind = "turn"
+agent = "tester"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{ gate = "qa", doc = "qa.md" }]
+fail = { qa = "fix-qa" }
+cap = "qa_fix"
+next = "done"
+
+[[step]]
+id = "fix-qa"
+kind = "turn"
+agent = "builder"
+turn = "reader"
+reads = ["qa.md"]
+expects = ["doc:fix-notes.md"]
+cap = "qa_fix"
+next = "qa"
+
+[[step]]
+id = "done"
+kind = "end"
+"#,
+    );
+    // The gate cr has no route: rounds = 3 gives its visit two resumes.
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([
+            ends_with(result(
+                "Reviewed.",
+                &[("cr.md", &gate_fixture("cr-fails.md"))]
+            )),
+            ends_with(result("Again.", &[("cr.md", &gate_fixture("cr-fails.md"))])),
+            ends_with(result(
+                "Fixed.",
+                &[("cr.md", &gate_fixture("cr-passes.md"))]
+            ))
+        ]),
+    );
+    world.scenario(
+        "tester",
+        "qa",
+        json!([
+            ends_with(result(
+                "Tested.",
+                &[("qa.md", &gate_fixture("qa-medium.md"))]
+            )),
+            ends_with(result(
+                "Tested again.",
+                &[("qa.md", &gate_fixture("qa-clean.md"))]
+            ))
+        ]),
+    );
+    world.scenario(
+        "builder",
+        "fix-qa",
+        json!([ends_with(result(
+            "Fixed.",
+            &[("fix-notes.md", "ISSUE-003 is fixed.")]
+        ))]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the step fix-qa", LONG, |w| {
+        w.step().as_deref() == Some("fix-qa") || w.flags().iter().any(|f| f == "needs-you")
+    });
+    assert!(world.flags().is_empty(), "{}", world.reason("needs-you"));
+    let review = step_turns(&world, "review");
+    assert_eq!(review.len(), 3, "two resumes of the gate cr, then it holds");
+    assert_eq!(review[1].resumes, review[0].session);
+    assert_eq!(review[2].resumes, review[1].session);
+    assert_eq!(review[2].end_fact.as_deref(), Some("held"));
+    // The failed gate qa went at once to its step: no resume, and its report waits in the
+    // ticket folder.
+    let qa = step_turns(&world, "qa");
+    assert_eq!(qa.len(), 1, "no resume of the gate with a route");
+    assert_eq!(qa[0].end_fact.as_deref(), Some("failed:gate:qa:qa.md"));
+    let report = world.doc("qa.md").expect("qa.md is in the ticket folder");
+    assert!(
+        report.contains("ISSUE-003: The export of a large report takes 12 seconds"),
+        "{report}"
+    );
+    let detail = world
+        .ledger()
+        .event_detail(&format!("end-fact:{}", qa[0].id))
+        .unwrap()
+        .flatten()
+        .unwrap();
+    assert!(detail.contains("\"blocks\":true"), "{detail}");
+
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+    let fix = step_turns(&world, "fix-qa");
+    assert_eq!(fix.len(), 1);
+    assert_eq!(
+        facts_of(&world, &fix[0].id)["documents"]["qa.md"],
+        ".vision/qa.md",
+        "the fix step reads the report through its reads"
+    );
+    let spans: Vec<String> = world
+        .ledger()
+        .spans_of(Some(KEY))
+        .unwrap()
+        .into_iter()
+        .map(|s| format!("{} ({})", s.state, s.reason.unwrap_or_default()))
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            "review (take)",
+            "qa (next)",
+            "fix-qa (fail gate:qa:qa.md)",
+            "qa (next)",
+            "done (next)"
+        ],
+        "a passing gate goes to next"
+    );
+    let qa = step_turns(&world, "qa");
+    assert_eq!(qa.len(), 2);
+    assert_eq!(qa[1].resumes, None, "a new visit starts a new session");
+    assert_eq!(qa[1].end_fact.as_deref(), Some("held"));
+    assert_eq!(
+        world.counts()["entries"]["fix-qa"],
+        1,
+        "the move by the route counts as an entry for the cap"
+    );
+    assert_eq!(world.counts()["entries"]["qa"], 2);
+}
+
+#[test]
+fn a_gate_that_cannot_read_its_report_resumes_even_with_a_route() {
+    let world = World::new();
+    steps_adapter(
+        &world,
+        r#"[[step]]
+id = "qa"
+kind = "turn"
+agent = "tester"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{ gate = "qa", doc = "qa.md" }]
+fail = { qa = "fix-qa" }
+next = "done"
+
+[[step]]
+id = "fix-qa"
+kind = "turn"
+agent = "builder"
+turn = "reader"
+reads = ["qa.md"]
+expects = ["doc:fix-notes.md"]
+next = "qa"
+
+[[step]]
+id = "done"
+kind = "end"
+"#,
+    );
+    world.scenario(
+        "tester",
+        "qa",
+        json!([
+            ends_with(result("Tested.", &[("qa.md", "All fine, I think.")])),
+            ends_with(result(
+                "Tested.",
+                &[("qa.md", &gate_fixture("qa-clean.md"))]
+            ))
+        ]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+    let qa = step_turns(&world, "qa");
+    assert_eq!(
+        qa.len(),
+        2,
+        "the report that the gate cannot read gets a resume"
+    );
+    assert_eq!(qa[1].resumes, qa[0].session);
+    assert_eq!(world.ledger().spans_of(Some(KEY)).unwrap().len(), 2);
+    assert_eq!(step_turns(&world, "fix-qa").len(), 0);
+}
+
+#[test]
+fn a_wait_step_before_its_local_time_runs_nothing_and_says_when_it_starts() {
+    let world = World::new();
+    // One minute ago in the local time of the machine: its next time comes almost a day later.
+    let from =
+        vision::util::time::local_hm(vision::util::time::now() - ::time::Duration::minutes(1));
+    steps_adapter(
+        &world,
+        &format!(
+            r#"[[step]]
+id = "night"
+kind = "wait"
+start = ["ci.run"]
+watch = "pr.draft"
+on = {{ "false" = "done" }}
+wait = ["none", "true"]
+limit = 2
+every = 1
+from = "{from}"
+
+[[step]]
+id = "done"
+kind = "end"
+
+[verbs."ci.run"]
+mode = "auto"
+"#
+        ),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    for _ in 0..3 {
+        world.tick();
+        std::thread::sleep(Duration::from_millis(1100));
+    }
+    assert!(world.flags().is_empty(), "{}", world.reason("needs-you"));
+    let visit = world.counts()["visit"].clone();
+    let opens = vision::util::time::parse_rfc3339(visit["opens"].as_str().unwrap()).unwrap();
+    let ahead = vision::util::time::seconds_between(vision::util::time::now(), opens);
+    assert!(
+        ahead > 23 * 3600 && ahead <= 24 * 3600,
+        "{ahead} s: the next {from} after the entry"
+    );
+    assert_eq!(vision::util::time::local_hm(opens), from);
+    assert_eq!(visit["observed"], Value::Null, "no look before the time");
+    assert_eq!(visit["since"], Value::Null, "the limit has not started");
+    assert_eq!(world.acts_of("ci.run"), 0, "no start verb before the time");
+    let view = ticket_status(&world, KEY);
+    assert_eq!(view["now"], format!("waits until {from}"));
+    // A retry enters the step again and keeps the time of the visit: it never waits for a
+    // later day.
+    world.run(&["retry", KEY]).expect_code(0);
+    let again = world.counts()["visit"].clone();
+    assert!(again["seq"].as_u64() > visit["seq"].as_u64(), "{again}");
+    assert_eq!(again["opens"], visit["opens"]);
+    world.tick();
+    assert_eq!(world.acts_of("ci.run"), 0);
+}

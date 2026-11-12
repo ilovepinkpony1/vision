@@ -327,6 +327,41 @@ fn cases() -> Vec<Case> {
         ..case("an env", v, f)
     });
 
+    // A wait step with `from` does nothing before its time. A time that passed changes
+    // nothing.
+    let (v, mut f) = base("wait", "regression");
+    f.wait = Some(WaitFacts {
+        watch: Some("tracker_status".into()),
+        opens: Some("2026-11-17T07:00:00Z".into()),
+        ..WaitFacts::default()
+    });
+    out.push(Case {
+        kind: Kind::Waits,
+        tone: Tone::Wait,
+        short: "waits until 07:00",
+        title: "waits until 07:00",
+        lines: &[
+            "The step regression starts on 2026-11-17 at 07:00.",
+            "Nothing runs for it before then: no write and no look.",
+        ],
+        ..case("a wait before its time", v, f)
+    });
+    let (v, mut f) = base("wait", "regression");
+    f.wait = Some(WaitFacts {
+        watch: Some("tracker_status".into()),
+        value: Some("In Regression".into()),
+        opens: Some(minutes_ago(30)),
+        ..WaitFacts::default()
+    });
+    out.push(Case {
+        kind: Kind::Waits,
+        tone: Tone::Wait,
+        short: "waits until tracker_status changes",
+        title: "waits until tracker_status changes",
+        lines: &["It is In Regression now.", "Vision looks at the next pass."],
+        ..case("a wait after its time", v, f)
+    });
+
     let (v, mut f) = base("human", "plan-ready");
     f.action = Some("approve-plan".into());
     out.push(Case {
@@ -597,6 +632,32 @@ fn each_state_and_each_need_has_its_own_words() {
             assert!(!text.contains("n't"), "{}: {text}", c.name);
         }
     }
+}
+
+#[test]
+fn a_wait_before_its_time_names_the_local_time() {
+    let wall = clock(0.0).wall;
+    let (v, mut f) = base("wait", "regression");
+    f.wait = Some(WaitFacts {
+        watch: Some("tracker_status".into()),
+        opens: Some("2026-11-17T07:00:00Z".into()),
+        ..WaitFacts::default()
+    });
+    let got = now(&Input {
+        view: &v,
+        facts: &f,
+        needs: &[],
+        running: None,
+        pass: Pass::Idle,
+        wall,
+        offset_seconds: 2 * 3600,
+    });
+    assert_eq!(got.short, "waits until 09:00");
+    assert_eq!(
+        got.lines[0],
+        "The step regression starts on 2026-11-17 at 09:00."
+    );
+    assert!(!got.ready);
 }
 
 #[test]

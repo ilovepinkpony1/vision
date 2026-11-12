@@ -1,4 +1,6 @@
-//! The client of GitHub REST, and the facts of a pull request, its reviews, and its CI.
+//! The client of GitHub REST, and the facts of a pull request, its reviews, and its CI. A few
+//! calls that REST does not have (the review threads, their state, and the hidden comments) go
+//! to the GraphQL API of GitHub.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,7 +10,7 @@ use super::core::{
     clean, fail, is_commit, py_repr_str, secret, short, truthy, Config, Error, Res,
     DEFAULT_GITHUB_API,
 };
-use super::http::{check_base, query, ref_path, segment, Client};
+use super::http::{check_base, query, ref_path, segment, Call, Client};
 
 const GREEN: [&str; 1] = ["success"];
 const RED: [&str; 4] = ["failure", "timed_out", "startup_failure", "cancelled"];
@@ -21,6 +23,40 @@ pub struct GitHub {
     pub owner: String,
     pub name: String,
     pub client: Client,
+}
+
+/// One review thread of a pull request, as the GraphQL API gives it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Thread {
+    /// The node id of the thread, which resolveReviewThread takes.
+    pub id: String,
+    pub resolved: bool,
+    /// The REST ids of its comments (`databaseId` in GraphQL).
+    pub comments: Vec<i64>,
+}
+
+const THREADS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { id isResolved comments(first: 100) { nodes { databaseId } } } } } } }";
+
+const MINIMIZED_QUERY: &str =
+    "query($ids: [ID!]!) { nodes(ids: $ids) { id ... on Minimizable { isMinimized minimizedReason } } }";
+
+/// Resolves one review thread: the variable `id` is the node id of the thread.
+pub const RESOLVE_MUTATION: &str =
+    "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id isResolved } } }";
+
+/// Hides one comment: the variables `id` (the node id of the comment) and `classifier`, such as
+/// OUTDATED or RESOLVED.
+pub const MINIMIZE_MUTATION: &str = "mutation($id: ID!, $classifier: ReportedContentClassifiers!) { minimizeComment(input: {subjectId: $id, classifier: $classifier}) { minimizedComment { isMinimized minimizedReason } } }";
+
+/// The most pages of review threads that one call reads.
+const THREAD_PAGES: usize = 20;
+
+/// The base address of the GraphQL API for the REST address of the configuration:
+/// `https://api.github.com` gives `https://api.github.com/graphql`, and the REST address
+/// `https://<host>/api/v3` of a GitHub Enterprise Server gives `https://<host>/api/graphql`.
+pub fn graphql_base(rest: &str) -> String {
+    let rest = rest.trim_end_matches('/');
+    rest.strip_suffix("/v3").unwrap_or(rest).to_string()
 }
 
 /// An integer field of an object, or `None`. A bool is not one.
@@ -249,6 +285,115 @@ impl GitHub {
             100,
             20,
         )?))
+    }
+
+    // GraphQL.
+
+    /// One call of the GraphQL API: its `data`. An answer with `errors` is a failure that names
+    /// them.
+    pub fn graphql(&self, query: &str, variables: Value, what: &str) -> Res<Value> {
+        let client = Client {
+            base: graphql_base(&self.client.base),
+            ..self.client.clone()
+        };
+        let body = json!({ "query": query, "variables": variables });
+        let value = client
+            .call(
+                "POST",
+                "/graphql",
+                what,
+                Call {
+                    body: Some(&body),
+                    ..Call::default()
+                },
+            )?
+            .json()?;
+        if let Some(errors) = value
+            .get("errors")
+            .and_then(Value::as_array)
+            .filter(|e| !e.is_empty())
+        {
+            let messages: Vec<String> = errors
+                .iter()
+                .map(|e| clean(text(e, "message"), 200))
+                .collect();
+            return fail(format!(
+                "github: {what} (GraphQL) answered with errors: {}",
+                messages.join("; ")
+            ));
+        }
+        Ok(value.get("data").cloned().unwrap_or(Value::Null))
+    }
+
+    /// The review threads of a pull request, with their state and the ids of their comments.
+    pub fn review_threads(&self, number: i64) -> Res<Vec<Thread>> {
+        let mut threads = Vec::new();
+        let mut after = Value::Null;
+        for _ in 0..THREAD_PAGES {
+            let data = self.graphql(
+                THREADS_QUERY,
+                json!({"owner": self.owner, "name": self.name, "number": number, "after": after}),
+                &format!("read the review threads of #{number}"),
+            )?;
+            let page = data
+                .pointer("/repository/pullRequest/reviewThreads")
+                .cloned()
+                .unwrap_or(Value::Null);
+            for node in page
+                .get("nodes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let comments = node
+                    .pointer("/comments/nodes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| int(c, "databaseId"))
+                    .collect();
+                threads.push(Thread {
+                    id: text(node, "id").to_string(),
+                    resolved: node.get("isResolved") == Some(&Value::Bool(true)),
+                    comments,
+                });
+            }
+            let more = page.pointer("/pageInfo/hasNextPage") == Some(&Value::Bool(true));
+            after = page
+                .pointer("/pageInfo/endCursor")
+                .cloned()
+                .unwrap_or(Value::Null);
+            if !more || after.is_null() {
+                break;
+            }
+        }
+        Ok(threads)
+    }
+
+    /// Whether each comment is hidden, by its node id. A node that GitHub does not know is not
+    /// in the answer.
+    pub fn minimized(&self, ids: &[String]) -> Res<BTreeMap<String, bool>> {
+        let mut out = BTreeMap::new();
+        for chunk in ids.chunks(100) {
+            let data = self.graphql(
+                MINIMIZED_QUERY,
+                json!({ "ids": chunk }),
+                &format!("read whether {} comment(s) are hidden", chunk.len()),
+            )?;
+            for node in data
+                .get("nodes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|n| n.is_object())
+            {
+                out.insert(
+                    text(node, "id").to_string(),
+                    node.get("isMinimized") == Some(&Value::Bool(true)),
+                );
+            }
+        }
+        Ok(out)
     }
 
     // Actions.

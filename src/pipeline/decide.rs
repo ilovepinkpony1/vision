@@ -2,12 +2,13 @@
 //! facts of a ticket, call [`decide`], and apply its answer; they decide nothing themselves.
 //!
 //! - [`decide`]: the next thing that one ticket needs, from the facts of its step.
-//! - [`check_end_facts`]: the end facts of a turn result, the gates too.
+//! - [`check_end_facts`]: the end facts of a turn result, the gates too. [`gate_blocks`] says
+//!   whether a failed gate found a blocking item, which a `fail` route of the step needs.
 //! - [`wait_target`] and [`ci_result`]: where a wait step moves, and the CI check it records.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::adapter::Expect;
+use crate::adapter::{Expect, Step};
 use crate::executor::Outcome;
 use crate::turn::TurnStatus;
 
@@ -65,6 +66,9 @@ pub enum KindFacts {
         failures: u32,
         /// The message of the resume after a failed end fact: the fact and what was found.
         failure: Option<String>,
+        /// The step of `fail` for the gate that failed in the last turn, when the gate found a
+        /// blocking item in its document. It wins over a resume and over `rounds`.
+        route: Option<String>,
         /// The entries of `after`, in order, with their label.
         after: Vec<(String, OpFact)>,
         /// The session and the message of the first turn of the visit.
@@ -94,6 +98,9 @@ pub enum KindFacts {
         limit: Option<u64>,
         /// The seconds since the visit began to watch, or `None` before its first look.
         waited: Option<i64>,
+        /// The local time (such as `09:00`) of `from` while it is still to come: the step
+        /// does nothing before it.
+        until: Option<String>,
     },
     End {
         finished: bool,
@@ -119,6 +126,8 @@ pub struct Facts {
     pub refusal: Option<Refused>,
     /// The cap of the step: its name and its value.
     pub cap: Option<(String, u32)>,
+    /// `rounds` of the step: the turns of one visit for failed end facts.
+    pub rounds: u32,
     /// The entry number of the visit.
     pub n: u32,
     /// The person let the ticket go on above the cap.
@@ -216,6 +225,7 @@ pub fn decide(facts: &Facts) -> Next {
             last,
             failures,
             failure,
+            route,
             after,
             resume,
             message,
@@ -234,7 +244,14 @@ pub fn decide(facts: &Facts) -> Next {
                     message: message.clone(),
                 }
             }
-            Some(turn) => turn_next(facts, turn, *failures, failure.as_deref(), after),
+            Some(turn) => turn_next(
+                facts,
+                turn,
+                *failures,
+                failure.as_deref(),
+                route.as_deref(),
+                after,
+            ),
         },
         KindFacts::Job {
             passed,
@@ -263,7 +280,13 @@ pub fn decide(facts: &Facts) -> Next {
             waits,
             limit,
             waited,
+            until,
         } => {
+            if let Some(until) = until {
+                return Next::Nothing(format!(
+                    "it waits until {until}, and then it starts to watch {watch}"
+                ));
+            }
             if let Some(stop) = ops_next(List::Start, start) {
                 return stop;
             }
@@ -310,6 +333,7 @@ fn turn_next(
     turn: &LastTurn,
     failures: u32,
     failure: Option<&str>,
+    route: Option<&str>,
     after: &[(String, OpFact)],
 ) -> Next {
     match turn.status {
@@ -353,10 +377,14 @@ fn turn_next(
                 Some(failed) => {
                     let fact = failed.strip_prefix("failed:").unwrap_or(failed);
                     let found = failure.unwrap_or("");
-                    if failures >= 2 {
-                        return flag(format!(
-                            "the end fact {fact} did not hold after a resume: {found}"
-                        ));
+                    if let Some(to) = route {
+                        return Next::Move {
+                            to: to.to_string(),
+                            how: format!("fail {fact}"),
+                        };
+                    }
+                    if failures >= facts.rounds.max(1) {
+                        return flag(rounds_text(fact, facts.rounds, found));
                     }
                     if let Some(refused) = refusal_flag(&facts.refusal) {
                         return refused;
@@ -379,6 +407,20 @@ fn turn_next(
                 other.unwrap_or("none")
             )),
         },
+    }
+}
+
+/// The reason of the flag after the last round of a visit failed: the fact, the resumes that
+/// the step allowed, and what was found.
+fn rounds_text(fact: &str, rounds: u32, found: &str) -> String {
+    match rounds.max(1) - 1 {
+        0 => format!(
+            "the end fact {fact} did not hold, and rounds = 1 of the step allows no resume: {found}"
+        ),
+        1 => format!("the end fact {fact} did not hold after a resume: {found}"),
+        n => format!(
+            "the end fact {fact} did not hold after {n} resumes (rounds = {rounds}): {found}"
+        ),
     }
 }
 
@@ -539,6 +581,20 @@ fn doc_problem(name: &str, inputs: &FactInputs) -> Option<String> {
     }
 }
 
+/// True when the failed end fact `fact` is a gate of the step whose document of the result
+/// names a blocking item: a finding that fails the gate cr, or an issue of a blocking severity
+/// for the gate qa. A gate that failed only on a document that it cannot read, or on a missing
+/// document, finds none: the turn then goes around again to fix the report.
+pub fn gate_blocks(step: &Step, fact: &str, docs: &BTreeMap<String, String>) -> bool {
+    step.expects.iter().any(|expect| match expect {
+        Expect::Gate(gate) if gate.fact() == fact => docs
+            .get(&gate.doc)
+            .filter(|text| !text.trim().is_empty())
+            .is_some_and(|text| gates::blocks(gate, text)),
+        _ => false,
+    })
+}
+
 /// Tests the end facts in their order, the jobs last, because a job costs the most. A gate
 /// reads its document of the result, as the code of [`gates`] decides.
 pub fn check_end_facts(expects: &[Expect], inputs: &FactInputs) -> Check {
@@ -660,6 +716,7 @@ mod tests {
                 last,
                 failures: 0,
                 failure: None,
+                route: None,
                 after,
                 resume: None,
                 message: None,
@@ -671,6 +728,7 @@ mod tests {
             open_cards: 0,
             refusal: None,
             cap: None,
+            rounds: crate::adapter::DEFAULT_ROUNDS,
             n: 1,
             skip_cap: false,
             open: Vec::new(),
@@ -825,6 +883,124 @@ mod tests {
         ));
     }
 
+    fn set_failures(facts: &mut Facts, n: u32, route: Option<&str>) {
+        if let KindFacts::Turn {
+            failures,
+            failure,
+            route: r,
+            ..
+        } = &mut facts.kind
+        {
+            *failures = n;
+            *failure = Some("what was found".into());
+            *r = route.map(str::to_string);
+        }
+    }
+
+    #[test]
+    fn rounds_gives_a_visit_more_turns_for_failed_end_facts() {
+        let mut facts = turn_facts(
+            Some(turn(
+                TurnStatus::Done,
+                Some("result"),
+                Some("failed:gate:cr:cr.md"),
+            )),
+            vec![],
+        );
+        facts.rounds = 3;
+        // Two resumes, then needs-you.
+        for n in [1, 2] {
+            set_failures(&mut facts, n, None);
+            assert!(matches!(decide(&facts), Next::Resume { .. }), "failure {n}");
+        }
+        set_failures(&mut facts, 3, None);
+        assert!(is_flag(
+            &decide(&facts),
+            NEEDS_YOU,
+            "the end fact gate:cr:cr.md did not hold after 2 resumes (rounds = 3): what was found"
+        ));
+        // rounds = 1 allows no resume.
+        facts.rounds = 1;
+        set_failures(&mut facts, 1, None);
+        assert!(is_flag(
+            &decide(&facts),
+            NEEDS_YOU,
+            "rounds = 1 of the step allows no resume"
+        ));
+        // The default keeps one resume.
+        facts.rounds = crate::adapter::DEFAULT_ROUNDS;
+        assert!(matches!(decide(&facts), Next::Resume { .. }));
+        set_failures(&mut facts, 2, None);
+        assert!(is_flag(&decide(&facts), NEEDS_YOU, "after a resume"));
+    }
+
+    #[test]
+    fn a_failed_gate_with_a_route_moves_at_once() {
+        let mut facts = turn_facts(
+            Some(turn(
+                TurnStatus::Done,
+                Some("result"),
+                Some("failed:gate:qa:qa.md"),
+            )),
+            vec![("git.push".to_string(), OpFact::NotAsked)],
+        );
+        // The route wins over a resume, over rounds, and over the after verbs.
+        for n in [1, 2, 5] {
+            set_failures(&mut facts, n, Some("fix-qa"));
+            assert_eq!(
+                decide(&facts),
+                Next::Move {
+                    to: "fix-qa".into(),
+                    how: "fail gate:qa:qa.md".into()
+                },
+                "failure {n}"
+            );
+        }
+        set_failures(&mut facts, 1, None);
+        assert!(matches!(decide(&facts), Next::Resume { .. }));
+    }
+
+    #[test]
+    fn a_gate_blocks_only_on_a_blocking_item_of_its_document() {
+        let adapter = crate::adapter::Adapter::parse(
+            r#"
+[[step]]
+id = "qa"
+kind = "turn"
+agent = "tester"
+turn = "reader"
+expects = ["doc:notes.md", { gate = "qa", doc = "qa.md" }, { gate = "cr" }]
+fail = { qa = "fix" }
+next = "done"
+
+[[step]]
+id = "fix"
+kind = "human"
+action = "approve-plan"
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+"#,
+            std::path::Path::new("/a/toy"),
+        )
+        .unwrap();
+        let step = adapter.step("qa").unwrap();
+        let issue = |severity: &str| {
+            format!("## Issues\n\n### ISSUE-001: The total\n\n- Severity: {severity}\n")
+        };
+        let docs =
+            |text: String| -> BTreeMap<String, String> { [("qa.md".to_string(), text)].into() };
+        assert!(gate_blocks(step, "gate:qa:qa.md", &docs(issue("high"))));
+        assert!(!gate_blocks(step, "gate:qa:qa.md", &docs(issue("low"))));
+        assert!(!gate_blocks(step, "gate:qa:qa.md", &docs(issue("none"))));
+        assert!(!gate_blocks(step, "gate:qa:qa.md", &BTreeMap::new()));
+        assert!(!gate_blocks(step, "doc:notes.md", &docs(issue("high"))));
+        assert!(!gate_blocks(step, "gate:cr:cr.md", &docs(issue("high"))));
+        assert_eq!(step.fail["gate:qa:qa.md"], "fix");
+    }
+
     #[test]
     fn a_held_result_requests_each_after_verb_in_order_then_moves() {
         let after = vec![
@@ -938,6 +1114,7 @@ mod tests {
                 waits: None,
                 limit: None,
                 waited: Some(10_000),
+                until: None,
             };
             decide(&facts)
         };
@@ -962,6 +1139,38 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_step_before_its_time_runs_no_start_verb_and_no_watch() {
+        let mut facts = turn_facts(None, Vec::new());
+        facts.step = "regression".into();
+        facts.next = None;
+        let wait =
+            |until: Option<&str>, watched: Option<&str>, target: Option<&str>| KindFacts::Wait {
+                start: vec![("ci.run".to_string(), OpFact::NotAsked)],
+                watch: "tracker_status".into(),
+                watched: watched.map(str::to_string),
+                target: target.map(str::to_string),
+                waits: Some(vec!["none".into()]),
+                limit: Some(60),
+                waited: Some(10_000),
+                until: until.map(str::to_string),
+            };
+        facts.kind = wait(Some("09:00"), Some("odd"), Some("done"));
+        assert!(
+            matches!(decide(&facts), Next::Nothing(t) if t.contains("waits until 09:00")),
+            "nothing runs before the time, whatever the facts say"
+        );
+        facts.kind = wait(None, None, None);
+        assert_eq!(
+            decide(&facts),
+            Next::Request {
+                list: List::Start,
+                index: 0
+            },
+            "from the time on, the start verbs run"
+        );
+    }
+
+    #[test]
     fn a_wait_step_flags_a_value_that_nothing_names_and_a_visit_above_its_limit() {
         let wait = |watched: Option<&str>,
                     waits: Option<&[&str]>,
@@ -978,6 +1187,7 @@ mod tests {
                 waits: waits.map(|w| w.iter().map(|v| v.to_string()).collect()),
                 limit,
                 waited,
+                until: None,
             };
             decide(&facts)
         };

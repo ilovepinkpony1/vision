@@ -33,6 +33,23 @@ pub fn judge(gate: &Gate, text: &str) -> Verdict {
     }
 }
 
+/// True when the document names at least one item that blocks: a finding of the gate cr that
+/// is tagged BLOCKING or whose Net is above `net_max`, or an issue of the gate qa whose
+/// severity is in `block`. The items that the gate cannot read do not count. A `fail` route of
+/// a step goes only on such an item: a report that the gate cannot read goes back to its turn.
+pub fn blocks(gate: &Gate, text: &str) -> bool {
+    match &gate.rule {
+        GateRule::Cr { net_max } => cr_report(text).findings.iter().any(|f| {
+            f.header_readable()
+                && (f.blocking == Some(true) || f.net.is_some_and(|net| net > *net_max))
+        }),
+        GateRule::Qa { block, .. } => qa_report(text)
+            .issues
+            .iter()
+            .any(|i| i.severity.is_some_and(|s| block.contains(&s))),
+    }
+}
+
 // ----- The gate cr ------------------------------------------------------------------------
 
 /// One finding of a code review report.
@@ -572,6 +589,41 @@ mod tests {
                 assert_eq!(judge(&cr(4.0), &text).is_ok(), !blocking, "{text}");
             }
         }
+    }
+
+    #[test]
+    fn only_a_readable_blocking_item_blocks() {
+        // A finding that fails the gate blocks.
+        let tagged = finding(1, "[MAJOR][BLOCKING]", "Net: +1");
+        assert!(blocks(&cr(4.0), &tagged));
+        let high = finding(1, "[MINOR][FOLLOW-UP]", "Net: +5");
+        assert!(blocks(&cr(4.0), &high));
+        // A report that passes, or one that the gate only cannot read, does not block.
+        assert!(!blocks(
+            &cr(4.0),
+            &finding(1, "[MINOR][FOLLOW-UP]", "Net: +4")
+        ));
+        assert!(!blocks(
+            &cr(4.0),
+            &finding(1, "[MINOR][FOLLOW-UP]", "no net")
+        ));
+        assert!(!blocks(&cr(4.0), &finding(1, "[MINOR]", "Net: +9")));
+        // A blocking finding still blocks next to one that the gate cannot read.
+        let mixed = format!(
+            "{}{}",
+            finding(1, "[MINOR]", "Net: +9"),
+            tagged.replace("1. ", "2. ")
+        );
+        assert!(judge(&cr(4.0), &mixed).is_err());
+        assert!(blocks(&cr(4.0), &mixed));
+        // An issue of a blocking severity blocks; a low one, or one with no severity, does not.
+        let issue = |severity: &str| {
+            format!("## Issues\n\n### ISSUE-001: The total is wrong\n\n| Field | Value |\n|---|---|\n| **Severity** | {severity} |\n")
+        };
+        assert!(blocks(&qa(), &issue("medium")));
+        assert!(!blocks(&qa(), &issue("low")));
+        assert!(!blocks(&qa(), &issue("unknown")));
+        assert!(judge(&qa(), &issue("unknown")).is_err());
     }
 
     #[test]

@@ -1544,3 +1544,223 @@ print(json.dumps({answer}))
     assert_eq!(records[1]["what"], "operation");
     assert_eq!(records[1]["name"], "x.describe");
 }
+
+/// The value of the secret of the command adapter.
+const COMMAND_SECRET: &str = "command-secret-value-5150";
+
+/// An adapter whose jobs are shell commands of the person, with the scripts of the built-in
+/// adapter jira-github, and one secret.
+fn command_adapter(demo: &Demo, jobs: &str) {
+    vision::turn::set_vision_bin(env!("CARGO_BIN_EXE_vision"));
+    let dir = demo.home.user_home.join("command adapter");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("adapter.toml"),
+        format!(
+            r#"name = "commands"
+base = "origin/main"
+scripts = "builtin:jira-github"
+
+[[step]]
+id = "work"
+kind = "job"
+job = "check"
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+
+[jobs.check]
+command = "true"
+
+{jobs}"#
+        ),
+    )
+    .unwrap();
+    let dir_text = dir.display().to_string();
+    demo.edit_config(|doc| {
+        doc["adapter"]["dir"] = toml_edit::value(dir_text);
+        let mut secret = toml_edit::InlineTable::new();
+        secret.insert("cmd", format!("printf {COMMAND_SECRET}").into());
+        doc["secrets"]["COMMAND_TOKEN"] = toml_edit::value(secret);
+    });
+}
+
+/// The text of a document of the ticket folder of DEMO-12.
+fn ticket_doc(demo: &Demo, name: &str) -> String {
+    std::fs::read_to_string(demo.home.paths().ticket_doc(&key(), name)).unwrap()
+}
+
+#[test]
+fn a_command_job_passes_and_its_output_goes_into_its_document() {
+    let demo = Demo::new();
+    command_adapter(
+        &demo,
+        r#"[jobs.facts]
+command = "printf 'key=%s branch=%s head=%s base=%s clone=%s\n' \"$VISION_KEY\" \"$VISION_BRANCH\" \"$VISION_HEAD\" \"$VISION_BASE\" \"$VISION_CLONE\"; pwd -P"
+doc = "facts.txt"
+"#,
+    );
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let head = demo.commit_subtract();
+    let base = executor_support::git(&demo.clone, &["merge-base", "HEAD", "origin/main"]);
+    let result = executor::job(&ctx, &ledger, &job("facts", json!({}))).unwrap();
+    assert!(result.ok, "{result:?}");
+    assert_eq!(result.failure, None);
+    assert_eq!(result.documents, ["facts.txt"]);
+    assert!(
+        result.detail.contains("its output is in facts.txt"),
+        "{result:?}"
+    );
+    let text = ticket_doc(&demo, "facts.txt");
+    let clone = demo.clone.display().to_string();
+    assert!(
+        text.contains(&format!(
+            "key=DEMO-12 branch={BRANCH} head={head} base={base} clone={clone}\n"
+        )),
+        "{text}"
+    );
+    let real = std::fs::canonicalize(&demo.clone).unwrap();
+    assert!(
+        text.ends_with(&format!("{}\n", real.display())),
+        "the command runs in the clone: {text}"
+    );
+    assert_eq!(
+        executor::job_passed(&ledger, KEY, "facts", &head).unwrap(),
+        Some(true)
+    );
+}
+
+#[test]
+fn a_command_job_that_fails_gives_the_masked_end_of_its_standard_error() {
+    let demo = Demo::new();
+    command_adapter(
+        &demo,
+        r#"[jobs.broken]
+command = "echo 'the part that ran'; echo \"the token is $COMMAND_TOKEN\" >&2; echo 'the check failed' >&2; exit 3"
+doc = "broken.txt"
+secrets = true
+"#,
+    );
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let head = demo.head();
+    let result = executor::job(&ctx, &ledger, &job("broken", json!({}))).unwrap();
+    assert!(!result.ok, "{result:?}");
+    assert_eq!(result.failure, None, "the command failed, not the call");
+    assert!(
+        result
+            .detail
+            .contains("the command of the job broken failed with the exit code 3"),
+        "{result:?}"
+    );
+    assert!(
+        result
+            .detail
+            .contains("the token is [secret COMMAND_TOKEN]")
+            && result.detail.contains("the check failed"),
+        "{result:?}"
+    );
+    assert!(!result.detail.contains(COMMAND_SECRET), "{result:?}");
+    assert!(!demo.log_text().contains(COMMAND_SECRET));
+    // The output of a failed command is in its document too, for the next turn.
+    assert_eq!(ticket_doc(&demo, "broken.txt"), "the part that ran\n");
+    assert_eq!(
+        executor::job_passed(&ledger, KEY, "broken", &head).unwrap(),
+        Some(false)
+    );
+}
+
+#[test]
+fn a_command_job_gets_the_plain_environment_and_only_what_it_asks_for() {
+    let demo = Demo::new();
+    command_adapter(
+        &demo,
+        r#"[jobs.plain]
+command = "env | sort"
+doc = "plain.txt"
+
+[jobs.secret]
+command = "env | sort"
+doc = "secret.txt"
+secrets = true
+
+[jobs.full]
+command = "env | sort"
+doc = "full.txt"
+env = "full"
+"#,
+    );
+    // A variable of the environment of this process, which is the environment of the tick
+    // here. Cargo sets its variables for each test run.
+    let (name, value) = std::env::vars()
+        .filter(|(k, v)| {
+            !vision::executor::PASSED_ENV.contains(&k.as_str())
+                && !k.starts_with("VISION_")
+                && !v.is_empty()
+                && !v.contains('\n')
+        })
+        .min_by_key(|(k, _)| (!k.starts_with("CARGO_PKG_NAME"), k.clone()))
+        .expect("the test process has a variable outside PATH, HOME, LANG, and TMPDIR");
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    for name in ["plain", "secret", "full"] {
+        let result = executor::job(&ctx, &ledger, &job(name, json!({}))).unwrap();
+        assert!(result.ok, "{name}: {result:?}");
+    }
+    let plain = ticket_doc(&demo, "plain.txt");
+    assert!(!plain.contains("COMMAND_TOKEN="), "{plain}");
+    assert!(!plain.contains(&format!("{name}=")), "{plain}");
+    assert!(plain.contains("VISION_KEY=DEMO-12"), "{plain}");
+    let secret = ticket_doc(&demo, "secret.txt");
+    assert!(
+        secret.contains("COMMAND_TOKEN=[secret COMMAND_TOKEN]"),
+        "secrets = true passes them, and the document masks them: {secret}"
+    );
+    assert!(!secret.contains(&format!("{name}=")), "{secret}");
+    let full = ticket_doc(&demo, "full.txt");
+    assert!(
+        full.contains(&format!("{name}={value}\n")),
+        "env = full passes the variables of the tick: {full}"
+    );
+    assert!(!full.contains("COMMAND_TOKEN="), "{full}");
+    assert!(!full.contains(COMMAND_SECRET), "{full}");
+}
+
+#[test]
+fn a_command_job_that_never_ends_stops_at_its_time_limit() {
+    let demo = Demo::new();
+    let marker = demo.home.user_home.join("the command went on");
+    command_adapter(
+        &demo,
+        &format!(
+            r#"[jobs.slow]
+command = "sleep 2; touch '{}'; sleep 30"
+doc = "slow.txt"
+timeout = 1
+"#,
+            marker.display()
+        ),
+    );
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let started = std::time::Instant::now();
+    let result = executor::job(&ctx, &ledger, &job("slow", json!({}))).unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!result.ok);
+    let failure = result.failure.unwrap_or_default();
+    assert!(failure.contains("did not end in 1 s"), "{failure}");
+    assert!(result.documents.is_empty());
+    assert_eq!(
+        executor::job_passed(&ledger, KEY, "slow", &demo.head()).unwrap(),
+        Some(false)
+    );
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert!(!marker.exists(), "the time limit kills the command too");
+}

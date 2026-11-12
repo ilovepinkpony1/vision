@@ -118,6 +118,9 @@ pub struct WaitFacts {
     /// When the visit began to watch, and when it looked last.
     pub since: Option<String>,
     pub observed: Option<String>,
+    /// A step with `from`: the moment (RFC 3339 UTC) when it starts. The step does nothing
+    /// before it.
+    pub opens: Option<String>,
     pub pr: Option<PrFacts>,
     pub ci: Option<CiFacts>,
     /// The checks of the kind of the first part of the path (such as `ci`) at the commit of
@@ -501,6 +504,7 @@ fn wait_facts(
         value: visit.watched.clone(),
         since: visit.since.clone(),
         observed: visit.observed.clone(),
+        opens: visit.opens.clone(),
         pr: seen.and_then(|s| s.pr.clone()),
         ci: ci.map(|mut c| {
             if let Some(head) = &c.head {

@@ -6,19 +6,22 @@
 //! - Jira: issues with an ADF description, a status, and transitions; the search of the queue.
 //! - GitHub: the branches of a local bare repo, pull requests, reviews, review comments with
 //!   their replies, conversation comments, requested reviewers, and workflow runs with jobs and
-//!   logs. A run runs `ci.sh` of the commit in a temporary folder: its exit code is the
+//!   logs. Each comment and each review has a node id. The GraphQL calls give the review
+//!   threads with their state, resolve a thread, hide a comment, and tell which comments are
+//!   hidden. A run runs `ci.sh` of the commit in a temporary folder: its exit code is the
 //!   conclusion and its output is the log of its one job. Each attempt of a run shows `queued`
 //!   at its first read and `in_progress` at its second, and it has ended from its third read on,
 //!   as a real run takes its time.
 //!
 //! A person or a test plays the team with the control calls (`POST /_control/<action>`, a JSON
-//! body): ready, review, comment, issue_comment, conflict, merge, and `GET /_control/state`.
+//! body): ready, review, comment (with `in_reply_to` for a reply in a thread), issue_comment,
+//! conflict, merge, and `GET /_control/state`.
 //! They are not calls of the adapter, so the request log leaves them out.
 //!
 //! Each call of the adapter must carry the token of its service. The world checks it, and the
 //! request log records only which token came (`jira`, `forge`, `none`, or `bad`), never a value.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -127,8 +130,27 @@ pub struct World {
     next_pull: i64,
     next_id: i64,
     next_run: i64,
+    /// The review threads that are resolved, by the id of their first comment.
+    pub resolved: BTreeSet<i64>,
+    /// The hidden comments: node id -> the reason, such as `outdated`.
+    pub minimized: BTreeMap<String, String>,
     /// Each call of the adapter, with no header value.
     pub log: Vec<Value>,
+}
+
+/// The classifiers that minimizeComment takes.
+const CLASSIFIERS: [&str; 6] = [
+    "SPAM",
+    "ABUSE",
+    "OFF_TOPIC",
+    "OUTDATED",
+    "DUPLICATE",
+    "RESOLVED",
+];
+
+/// An answer of the GraphQL API with one error.
+fn graphql_error(message: &str) -> Reply {
+    Reply::json(200, json!({"data": null, "errors": [{"message": message}]}))
 }
 
 /// A page of a list, as GitHub pages it with `page` and `per_page`.
@@ -186,8 +208,20 @@ impl World {
             next_pull: 7,
             next_id: 1000,
             next_run: 40,
+            resolved: BTreeSet::new(),
+            minimized: BTreeMap::new(),
             log: Vec::new(),
         }
+    }
+
+    /// Opens a pull request of a branch of the bare repo, as the person does. Gives its number.
+    pub fn open_pull(&mut self, branch: &str) -> i64 {
+        let mut body = Map::new();
+        body.insert("head".into(), json!(branch));
+        body.insert("title".into(), json!("A change"));
+        let reply = self.create_pull(&body);
+        assert_eq!(reply.status, 201, "the pull request of {branch}");
+        self.next_pull - 1
     }
 
     pub fn add_issue(&mut self, key: &str, title: &str, description: &str) {
@@ -417,7 +451,129 @@ impl World {
             }
             return self.github(record, rest);
         }
+        if path == "/graphql" && record.method == "POST" {
+            if auth != "forge" {
+                return Some(Reply::json(401, json!({"message": "Bad credentials"})));
+            }
+            return Some(self.graphql(record));
+        }
         None
+    }
+
+    // GraphQL.
+
+    /// The review threads of a pull request: the id of the first comment of each, and the ids
+    /// of its comments in their order.
+    fn threads_of(&self, number: i64) -> Vec<(i64, Vec<i64>)> {
+        let mut threads: Vec<(i64, Vec<i64>)> = Vec::new();
+        for comment in self.comments.get(&number).into_iter().flatten() {
+            let id = comment["id"].as_i64().unwrap_or(0);
+            let root = comment["in_reply_to_id"].as_i64().unwrap_or(id);
+            match threads.iter_mut().find(|(r, _)| *r == root) {
+                Some((_, ids)) => ids.push(id),
+                None => threads.push((root, vec![id])),
+            }
+        }
+        threads
+    }
+
+    /// True when a comment or a review has this node id.
+    fn node_exists(&self, node: &str) -> bool {
+        self.comments
+            .values()
+            .chain(self.issue_comments.values())
+            .chain(self.reviews.values())
+            .flatten()
+            .any(|item| item["node_id"] == node)
+    }
+
+    fn graphql(&mut self, record: &Record) -> Reply {
+        let body = body_of(record);
+        let query = body.get("query").and_then(Value::as_str).unwrap_or("");
+        let vars = body.get("variables").cloned().unwrap_or_else(|| json!({}));
+        if query.contains("resolveReviewThread") {
+            let id = text(&vars, "id").to_string();
+            let root = id
+                .strip_prefix("PRRT_")
+                .and_then(|r| r.parse::<i64>().ok())
+                .filter(|root| {
+                    self.pulls
+                        .keys()
+                        .any(|n| self.threads_of(*n).iter().any(|(r, _)| r == root))
+                });
+            let Some(root) = root else {
+                return graphql_error(&format!(
+                    "Could not resolve to a node with the global id of '{id}'"
+                ));
+            };
+            self.resolved.insert(root);
+            return Reply::json(
+                200,
+                json!({"data": {"resolveReviewThread": {"thread": {"id": id, "isResolved": true}}}}),
+            );
+        }
+        if query.contains("minimizeComment") {
+            let id = text(&vars, "id").to_string();
+            let classifier = text(&vars, "classifier").to_string();
+            if !CLASSIFIERS.contains(&classifier.as_str()) {
+                return graphql_error(&format!(
+                    "Argument 'classifier' has an invalid value ({classifier})"
+                ));
+            }
+            if !self.node_exists(&id) {
+                return graphql_error(&format!(
+                    "Could not resolve to a node with the global id of '{id}'"
+                ));
+            }
+            let reason = classifier.to_lowercase();
+            self.minimized.insert(id, reason.clone());
+            return Reply::json(
+                200,
+                json!({"data": {"minimizeComment": {"minimizedComment": {"isMinimized": true, "minimizedReason": reason}}}}),
+            );
+        }
+        if query.contains("reviewThreads") {
+            if text(&vars, "owner") != OWNER || format!("{OWNER}/{}", text(&vars, "name")) != REPO {
+                return Reply::json(200, json!({"data": {"repository": null}}));
+            }
+            let number = vars["number"].as_i64().unwrap_or(0);
+            if !self.pulls.contains_key(&number) {
+                return Reply::json(200, json!({"data": {"repository": {"pullRequest": null}}}));
+            }
+            let nodes: Vec<Value> = self
+                .threads_of(number)
+                .into_iter()
+                .map(|(root, ids)| {
+                    let comments: Vec<Value> =
+                        ids.iter().map(|id| json!({ "databaseId": id })).collect();
+                    json!({"id": format!("PRRT_{root}"), "isResolved": self.resolved.contains(&root),
+                           "comments": {"nodes": comments}})
+                })
+                .collect();
+            return Reply::json(
+                200,
+                json!({"data": {"repository": {"pullRequest": {"reviewThreads": {
+                    "pageInfo": {"hasNextPage": false, "endCursor": null}, "nodes": nodes}}}}}),
+            );
+        }
+        if query.contains("nodes(ids:") {
+            let nodes: Vec<Value> = vars["ids"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|id| {
+                    let id = id.as_str().unwrap_or("");
+                    if !self.node_exists(id) {
+                        return Value::Null;
+                    }
+                    let reason = self.minimized.get(id);
+                    json!({"id": id, "isMinimized": reason.is_some(), "minimizedReason": reason})
+                })
+                .collect();
+            return Reply::json(200, json!({"data": {"nodes": nodes}}));
+        }
+        graphql_error("the fake world does not know this query")
     }
 
     fn jira(&mut self, record: &Record, path: &str) -> Reply {
@@ -571,7 +727,8 @@ impl World {
                     }
                     if method == "POST" {
                         let id = self.new_id(None);
-                        let comment = json!({"id": id, "user": {"login": "vision-bot"},
+                        let comment = json!({"id": id, "node_id": format!("IC_{id}"),
+                                             "user": {"login": "vision-bot"},
                                              "body": text(&Value::Object(body.clone()), "body"),
                                              "created_at": now()});
                         self.issue_comments
@@ -663,7 +820,7 @@ impl World {
                     return Reply::json(404, json!({"message": "Not Found"}));
                 };
                 let id = self.new_id(None);
-                let reply = json!({"id": id, "user": {"login": "vision-bot"},
+                let reply = json!({"id": id, "node_id": format!("PRRC_{id}"), "user": {"login": "vision-bot"},
                                    "body": text(&Value::Object(body.clone()), "body"),
                                    "in_reply_to_id": root, "path": first["path"], "line": first["line"],
                                    "original_line": first["line"], "created_at": now()});
@@ -852,7 +1009,7 @@ impl World {
                 let login = body["login"].clone();
                 let id = self.new_id(body.get("id"));
                 let commit = self.pull_view(&self.pulls[&number])["head"]["sha"].clone();
-                let review = json!({"id": id, "user": {"login": login}, "state": body["state"],
+                let review = json!({"id": id, "node_id": format!("PRR_{id}"), "user": {"login": login}, "state": body["state"],
                                     "body": body.get("body").and_then(Value::as_str).unwrap_or(""),
                                     "submitted_at": now(), "commit_id": commit});
                 self.reviews.entry(number).or_default().push(review.clone());
@@ -866,9 +1023,13 @@ impl World {
             "comment" => {
                 let id = self.new_id(body.get("id"));
                 let line = body.get("line").cloned().unwrap_or(Value::Null);
-                let comment = json!({"id": id, "user": {"login": body["login"]}, "body": body["body"],
+                let mut comment = json!({"id": id, "node_id": format!("PRRC_{id}"),
+                                     "user": {"login": body["login"]}, "body": body["body"],
                                      "path": body.get("path").cloned().unwrap_or(Value::Null),
                                      "line": line, "original_line": line, "created_at": now()});
+                if let Some(root) = body.get("in_reply_to").and_then(Value::as_i64) {
+                    comment["in_reply_to_id"] = json!(root);
+                }
                 self.comments
                     .entry(number)
                     .or_default()
@@ -877,7 +1038,8 @@ impl World {
             }
             "issue_comment" => {
                 let id = self.new_id(body.get("id"));
-                let comment = json!({"id": id, "user": {"login": body["login"]}, "body": body["body"],
+                let comment = json!({"id": id, "node_id": format!("IC_{id}"),
+                                     "user": {"login": body["login"]}, "body": body["body"],
                                      "created_at": now()});
                 self.issue_comments
                     .entry(number)
@@ -968,6 +1130,8 @@ impl World {
             "comments": by_number(&self.comments),
             "issue_comments": by_number(&self.issue_comments),
             "runs": runs,
+            "resolved": self.resolved,
+            "minimized": self.minimized,
         })
     }
 }

@@ -26,9 +26,9 @@ use crate::paths::Paths;
 
 pub use find::{locate, Located, Origin};
 pub use model::{
-    cap_names, Adapter, Entry, EntryKind, Expect, Gate, GateRule, HumanStep, Job, JobStep,
-    Severity, Step, StepKind, TurnStep, Verb, WaitStep, CR_NET_MAX, DEFAULT_BASE, DEFAULT_BRANCH,
-    DEFAULT_EVERY, FINDINGS, NONE, QA_BLOCK,
+    cap_names, Adapter, Entry, EntryKind, Expect, Gate, GateRule, HumanStep, Job, JobEnv, JobStep,
+    LocalTime, Severity, Step, StepKind, TurnStep, Verb, WaitStep, CR_NET_MAX, DEFAULT_BASE,
+    DEFAULT_BRANCH, DEFAULT_EVERY, DEFAULT_ROUNDS, FINDINGS, MAX_ROUNDS, NONE, QA_BLOCK,
 };
 
 /// The name of the step list in an adapter folder.

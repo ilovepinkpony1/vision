@@ -12,8 +12,8 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 
 use super::decide::{
-    check_end_facts, ci_result, decide, findings_branch, wait_target, Branch, Check, FactInputs,
-    Facts, JobFact, KindFacts, LastTurn, List, Next, OpFact, Refused,
+    check_end_facts, ci_result, decide, findings_branch, gate_blocks, wait_target, Branch, Check,
+    FactInputs, Facts, JobFact, KindFacts, LastTurn, List, Next, OpFact, Refused,
 };
 use super::docs::{self, result_documents};
 use super::gates;
@@ -395,9 +395,14 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
     let now = time::now_rfc3339();
     let (value, detail) = match &check {
         Check::Held => ("held".to_string(), json!({"turn": last.id, "held": true})),
-        Check::Failed { fact, found } => (
+        // `blocks`: a failed gate found a blocking item in its document, which was written to
+        // the ticket folder above. A `fail` route of the step goes on it.
+        Check::Failed { fact, found: what } => (
             format!("failed:{fact}"),
-            json!({"turn": last.id, "fact": fact, "found": found, "documents": job_docs}),
+            json!({
+                "turn": last.id, "fact": fact, "found": what, "documents": job_docs,
+                "blocks": gate_blocks(step, fact, &found.docs),
+            }),
         ),
         Check::RunJob(_) => return Ok(()),
     };
@@ -736,6 +741,10 @@ fn observe_wait(
     let StepKind::Wait(wait) = &step.kind else {
         return Ok(());
     };
+    // Before the time of `from`, the step does nothing: no start verb and no look.
+    if opens_later(&ticket.visit(), now).is_some() {
+        return Ok(());
+    }
     let start = op_facts(ctx, ledger, ticket, &step.start, None)?;
     if start.iter().any(|(_, f)| {
         !matches!(
@@ -825,6 +834,18 @@ fn observe_wait(
         Ok(())
     })?;
     Ok(())
+}
+
+/// The moment of `from` of a wait step while it is still to come, else `None`.
+pub(crate) fn opens_later(
+    visit: &super::state::Visit,
+    now: OffsetDateTime,
+) -> Option<OffsetDateTime> {
+    visit
+        .opens
+        .as_deref()
+        .and_then(|t| time::parse_rfc3339(t).ok())
+        .filter(|opens| *opens > now)
 }
 
 // ----- Tick step 6 -----------------------------------------------------------------------
@@ -1174,7 +1195,7 @@ fn gather(
                 None => None,
                 Some(row) => Some(last_turn(ctx, ledger, row)?),
             };
-            let failure = match &last {
+            let failed = match &last {
                 Some(t)
                     if t.end_fact
                         .as_deref()
@@ -1184,10 +1205,19 @@ fn gather(
                         .event_detail(&fact_mark(&t.id))?
                         .flatten()
                         .and_then(|d| serde_json::from_str::<Value>(&d).ok())
-                        .and_then(|d| d.get("found").and_then(Value::as_str).map(str::to_string))
                 }
                 _ => None,
             };
+            let failure = failed
+                .as_ref()
+                .and_then(|d| d.get("found").and_then(Value::as_str).map(str::to_string));
+            // A gate that failed on a blocking item goes by the `fail` route of the step, when
+            // the step has one for it.
+            let route = failed
+                .as_ref()
+                .filter(|d| d.get("blocks").and_then(Value::as_bool) == Some(true))
+                .and_then(|d| d.get("fact").and_then(Value::as_str))
+                .and_then(|fact| step.fail.get(fact).cloned());
             let after = match &last {
                 Some(t) if t.end_fact.as_deref() == Some("held") => {
                     op_facts(ctx, ledger, ticket, &step.after, Some(&t.id))?
@@ -1206,6 +1236,7 @@ fn gather(
                 last,
                 failures,
                 failure,
+                route,
                 after,
                 resume: visit.resume.clone(),
                 message: visit.message.clone(),
@@ -1246,6 +1277,7 @@ fn gather(
                 .as_deref()
                 .and_then(|t| time::parse_rfc3339(t).ok())
                 .map(|since| time::seconds_between(since, now)),
+            until: opens_later(&visit, now).map(time::local_hm),
         },
         StepKind::End => KindFacts::End {
             finished: ticket.counts.finished.is_some(),
@@ -1266,6 +1298,7 @@ fn gather(
         open_cards: ledger.open_cards(key.as_str())?,
         refusal,
         cap,
+        rounds: step.rounds,
         n: visit.n,
         skip_cap: visit.skip_cap,
         open: if cap_hit {

@@ -1,6 +1,8 @@
 //! act: tracker.describe, tracker.move, git.push, pr.open, ci.run, ci.rerun, deploy,
-//! review.reply, review.rerequest, the read verbs, and the reconcile form of each verb.
+//! review.reply, review.rerequest, review.resolve, review.minimize, the read verbs, and the
+//! reconcile form of each verb.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -10,6 +12,7 @@ use crate::fixtures::{
     adf_doc, comment, issue_comment, jira_issue, pull, reply, review, review_with, run_ended,
     run_open, GitHubWorld, Issue, Pull, Run, HEAD, OTHER, REPO_PATH,
 };
+use crate::jira_github_support::world::{install, World};
 use crate::jira_github_support::{
     assert_no_secret_in_files, git, header_hash, read_calls, secret, secret_forms, secrets_without,
     AdapterTest, Outcome, Reply, Repos, BRANCH, KEY,
@@ -1598,6 +1601,303 @@ fn an_unknown_verb_fails() {
     assert_eq!(result.code, 1);
     assert!(
         result.stderr.contains("has no verb 'pr.merge'"),
+        "{result:?}"
+    );
+}
+
+// review.resolve and review.minimize ------------------------------------------------------------
+
+/// A world with the pull request #7 of the branch of the ticket, and comments of bots and of
+/// people: an inline thread of a bot with a reply of the bot of Vision (10, 11), an inline
+/// comment of a person (20), a thread of a bot of `bot_logins` with a reply of a person (30,
+/// 31), a review of a bot (40), a conversation comment of a bot (60), and one of a person (61).
+fn settle_test() -> (AdapterTest, Arc<Mutex<World>>) {
+    let t = AdapterTest::new();
+    let repos = Repos::new(&t.path("repos"));
+    git(
+        &[
+            "push",
+            "--quiet",
+            repos.remote.to_str().unwrap(),
+            &format!("{BRANCH}:refs/heads/{BRANCH}"),
+        ],
+        &repos.clone,
+    );
+    let mut world = World::new(
+        &repos.remote,
+        Some(secret("JIRA_TOKEN")),
+        Some(secret("FORGE_TOKEN")),
+        Some("bot@example.invalid"),
+    );
+    assert_eq!(world.open_pull(BRANCH), 7);
+    let control = |world: &mut World, action: &str, body: Value| {
+        let reply = world.control(action, body.as_object().unwrap());
+        assert_eq!(reply.status, 201, "{action} {body}");
+    };
+    for (id, login, root) in [
+        (10, "review-bot[bot]", None),
+        (11, "vision-bot", Some(10)),
+        (20, "lead", None),
+        (30, "checker", None),
+        (31, "lead", Some(30)),
+    ] {
+        let mut body = json!({"number": 7, "id": id, "login": login, "body": format!("Comment {id}"),
+                              "path": "app.py", "line": 3});
+        if let Some(root) = root {
+            body["in_reply_to"] = json!(root);
+        }
+        control(&mut world, "comment", body);
+    }
+    control(
+        &mut world,
+        "review",
+        json!({"number": 7, "id": 40, "login": "review-bot[bot]", "state": "COMMENTED", "body": "Two findings."}),
+    );
+    for (id, login) in [(60, "review-bot[bot]"), (61, "lead")] {
+        control(
+            &mut world,
+            "issue_comment",
+            json!({"number": 7, "id": id, "login": login, "body": format!("Note {id}")}),
+        );
+    }
+    let world = Arc::new(Mutex::new(world));
+    install(&t.server, Arc::clone(&world));
+    (t, world)
+}
+
+/// The rows of the Shepherd: each one settles its comment but 12, which has no `settle`.
+fn settle_verdicts() -> String {
+    json!([
+        {"comment_id": 10, "kind": "inline", "verdict": "valid", "reply": "Fixed.", "settle": true},
+        {"comment_id": 20, "kind": "inline", "verdict": "valid", "reply": "Fixed.", "settle": true},
+        {"comment_id": 30, "kind": "inline", "verdict": "already-done", "reply": "Done.", "settle": "outdated"},
+        {"comment_id": 40, "kind": "review", "verdict": "valid", "reply": "Both fixed.", "settle": "resolved"},
+        {"comment_id": 60, "kind": "conversation", "verdict": "valid", "reply": "Fixed.", "settle": true},
+        {"comment_id": 61, "kind": "conversation", "verdict": "question", "reply": "Which one?", "settle": true},
+        {"comment_id": 12, "verdict": "incorrect", "reply": "No."},
+    ])
+    .to_string()
+}
+
+/// The GraphQL mutations that the world got, oldest first.
+fn mutations(world: &Arc<Mutex<World>>) -> Vec<Value> {
+    world
+        .lock()
+        .unwrap()
+        .log
+        .iter()
+        .filter(|e| {
+            e["path"] == "/graphql"
+                && e["body"]["query"]
+                    .as_str()
+                    .is_some_and(|q| q.starts_with("mutation"))
+        })
+        .cloned()
+        .collect()
+}
+
+fn settle_call(t: &AdapterTest, verb: &str, reconcile: bool) -> Outcome {
+    let call = t
+        .act(verb)
+        .args(json!({ "verdicts": settle_verdicts() }))
+        .field("pr", json!(7))
+        .config(t.config(json!({"bot_logins": ["Checker"]})));
+    if reconcile {
+        call.reconcile().run()
+    } else {
+        call.run()
+    }
+}
+
+#[test]
+fn resolve_resolves_only_the_threads_of_bots() {
+    let (t, world) = settle_test();
+    let result = settle_call(&t, "review.resolve", false);
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    let detail = result.detail();
+    assert!(
+        detail.starts_with(
+            "on #7: resolved the threads of [10], and skipped [], which are resolved already"
+        ),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("Refused, because only a thread or a comment of a bot is touched: the thread of 20: its author lead is not a bot; the thread of 30: lead wrote in it and is not a bot"),
+        "a reply of a person keeps the thread of a bot open: {detail}"
+    );
+    assert_eq!(
+        world.lock().unwrap().resolved,
+        BTreeSet::from([10]),
+        "the reply of the bot of Vision in its thread does not stop it"
+    );
+    let calls = mutations(&world);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["body"]["variables"], json!({"id": "PRRT_10"}));
+    assert_eq!(calls[0]["auth"], "forge");
+    // A second run resolves nothing again.
+    let again = settle_call(&t, "review.resolve", false);
+    assert_eq!(again.state(), "confirmed", "{again:?}");
+    assert!(again.detail().contains("skipped [10]"), "{again:?}");
+    assert_eq!(mutations(&world).len(), 1);
+}
+
+#[test]
+fn resolve_the_reconcile_only_reads() {
+    let (t, world) = settle_test();
+    let before = settle_call(&t, "review.resolve", true);
+    assert_eq!(before.state(), "failed", "{before:?}");
+    assert!(
+        before
+            .detail()
+            .contains("open threads of the comments [10]"),
+        "{before:?}"
+    );
+    assert!(mutations(&world).is_empty(), "a reconcile only reads");
+    settle_call(&t, "review.resolve", false);
+    let after = settle_call(&t, "review.resolve", true);
+    assert_eq!(after.state(), "confirmed", "{after:?}");
+    assert!(
+        after
+            .detail()
+            .starts_with("each settled bot thread on #7 is resolved"),
+        "{after:?}"
+    );
+    assert_eq!(mutations(&world).len(), 1);
+}
+
+#[test]
+fn resolve_a_missing_inline_comment_is_failed_after_the_others() {
+    let (t, world) = settle_test();
+    let verdicts = json!([
+        {"comment_id": 10, "kind": "inline", "verdict": "valid", "settle": true},
+        {"comment_id": 99, "kind": "inline", "verdict": "valid", "settle": true},
+        {"comment_id": 98, "verdict": "valid", "settle": true},
+    ])
+    .to_string();
+    let result = t
+        .act("review.resolve")
+        .args(json!({ "verdicts": verdicts }))
+        .field("pr", json!(7))
+        .run();
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        result.detail().contains("resolved the threads of [10]")
+            && result
+                .detail()
+                .contains("has no review thread of the comments [99]"),
+        "a row with no kind and no inline comment is left out: {result:?}"
+    );
+    assert_eq!(world.lock().unwrap().resolved, BTreeSet::from([10]));
+}
+
+#[test]
+fn minimize_hides_only_the_comments_of_bots_with_their_classifier() {
+    let (t, world) = settle_test();
+    let result = settle_call(&t, "review.minimize", false);
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    let detail = result.detail();
+    assert!(
+        detail.starts_with(
+            "on #7: hid the comments [10, 30, 40, 60], and skipped [], which are hidden already"
+        ),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("Refused, because only a thread or a comment of a bot is touched: the inline 20: its author lead is not a bot; the conversation 61: its author lead is not a bot"),
+        "{detail}"
+    );
+    let hidden = world.lock().unwrap().minimized.clone();
+    assert_eq!(
+        hidden,
+        BTreeMap::from([
+            ("PRRC_10".to_string(), "resolved".to_string()),
+            ("PRRC_30".to_string(), "outdated".to_string()),
+            ("PRR_40".to_string(), "resolved".to_string()),
+            ("IC_60".to_string(), "resolved".to_string()),
+        ]),
+        "a login of bot_logins counts as a bot, in any case"
+    );
+    assert!(mutations(&world).iter().all(|m| m["auth"] == "forge"));
+    let again = settle_call(&t, "review.minimize", false);
+    assert_eq!(again.state(), "confirmed", "{again:?}");
+    assert!(
+        again.detail().contains("skipped [10, 30, 40, 60]"),
+        "{again:?}"
+    );
+    assert_eq!(mutations(&world).len(), 4);
+}
+
+#[test]
+fn minimize_the_reconcile_only_reads_and_a_bot_needs_its_name() {
+    let (t, world) = settle_test();
+    let before = settle_call(&t, "review.minimize", true);
+    assert_eq!(before.state(), "failed", "{before:?}");
+    assert!(
+        before
+            .detail()
+            .contains("still shows the comments [10, 30, 40, 60]"),
+        "{before:?}"
+    );
+    assert!(mutations(&world).is_empty());
+    settle_call(&t, "review.minimize", false);
+    let after = settle_call(&t, "review.minimize", true);
+    assert_eq!(after.state(), "confirmed", "{after:?}");
+    // With no bot_logins, the login checker is a person.
+    let (t, world) = settle_test();
+    let result = t
+        .act("review.minimize")
+        .args(json!({ "verdicts": settle_verdicts() }))
+        .field("pr", json!(7))
+        .run();
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert!(
+        result
+            .detail()
+            .contains("the inline 30: its author checker is not a bot"),
+        "{result:?}"
+    );
+    assert!(!world.lock().unwrap().minimized.contains_key("PRRC_30"));
+}
+
+#[test]
+fn settle_rows_and_missing_comments_are_named() {
+    let (t, _world) = settle_test();
+    let bad = json!([{"comment_id": 10, "settle": "later"}]).to_string();
+    for verb in ["review.resolve", "review.minimize"] {
+        let result = t
+            .act(verb)
+            .args(json!({ "verdicts": bad }))
+            .field("pr", json!(7))
+            .run();
+        assert_eq!(result.state(), "failed", "{verb}: {result:?}");
+        assert!(
+            result
+                .detail()
+                .contains("row 1 of verdicts.json has settle 'later': use true"),
+            "{verb}: {result:?}"
+        );
+        let none = t.act(verb).field("pr", json!(7)).run();
+        assert_eq!(none.state(), "failed");
+        assert!(
+            none.detail()
+                .contains(&format!("{verb} needs args.verdicts")),
+            "{none:?}"
+        );
+    }
+    let missing = json!([
+        {"comment_id": 60, "settle": true},
+        {"comment_id": 99, "settle": true},
+    ])
+    .to_string();
+    let result = t
+        .act("review.minimize")
+        .args(json!({ "verdicts": missing }))
+        .field("pr", json!(7))
+        .run();
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        result.detail().contains("hid the comments [60]")
+            && result.detail().contains("has no comment [99]"),
         "{result:?}"
     );
 }

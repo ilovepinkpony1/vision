@@ -365,9 +365,13 @@ fn now_line(
             "waits for you: vision {} {key}",
             visit.action.as_deref().unwrap_or("?")
         ),
-        "wait" => match &visit.watched {
-            Some(value) => format!("waits: the watched value is {value}"),
-            None => "waits for its first look".into(),
+        "wait" => match (
+            super::machine::opens_later(&visit, time::now()),
+            &visit.watched,
+        ) {
+            (Some(opens), _) => format!("waits until {}", time::local_hm(opens)),
+            (None, Some(value)) => format!("waits: the watched value is {value}"),
+            (None, None) => "waits for its first look".into(),
         },
         "turn" => turn_text(ledger, ticket, &visit)?,
         "end" => "the end step finishes it".into(),

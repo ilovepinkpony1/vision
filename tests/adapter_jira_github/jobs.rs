@@ -1,4 +1,4 @@
-//! job: proof, second-review, comments, ci-log, and app-start.
+//! job: proof, second-review, comments, ci-log, app-start, and a job with a command.
 //!
 //! The tests of the project in these tests are shell scripts: `sh <file>` passes when the
 //! script exits with 0. The app of app-start is this test binary (see [`serve_test_app`]).
@@ -1466,4 +1466,94 @@ fn app_start_a_state_file_that_another_user_can_write_is_never_trusted() {
     // The same content in a plain file of this user is the state of the job.
     std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(read_app_state(&real).unwrap().pid, i64::from(other));
+}
+
+// A job with a command ----------------------------------------------------------------------------
+
+#[test]
+fn command_a_job_with_a_command_runs_it_with_the_facts_of_the_ticket() {
+    let t = AdapterTest::new();
+    let clone = t.path("clone");
+    std::fs::create_dir_all(&clone).unwrap();
+    let table = json!({
+        "command": "printf '%s|%s|%s|%s|%s|' \"$VISION_KEY\" \"$VISION_BRANCH\" \"$VISION_HEAD\" \"$VISION_BASE\" \"$VISION_CLONE\"; pwd -P",
+        "doc": "facts.txt",
+    });
+    let result = t
+        .job("proof")
+        .field("table", table.clone())
+        .field("clone", json!(clone.display().to_string()))
+        .field("head", json!(HEAD))
+        .field("base", json!("b".repeat(40)))
+        .run();
+    assert_eq!(result.code, 0, "{result:?}");
+    assert_eq!(result.json["ok"], true, "the table wins over the job proof");
+    let doc = &result.json["documents"][0];
+    assert_eq!(doc["name"], "facts.txt");
+    let real = std::fs::canonicalize(&clone).unwrap();
+    assert_eq!(
+        doc["content"],
+        format!(
+            "DEMO-12|{BRANCH}|{HEAD}|{}|{}|{}\n",
+            "b".repeat(40),
+            clone.display(),
+            real.display()
+        )
+    );
+    // With no clone, the command runs in the working folder of the call: the adapter folder.
+    let result = t.job("look").field("table", table).run();
+    assert_eq!(result.json["ok"], true, "{result:?}");
+    let content = result.json["documents"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let folder = std::fs::canonicalize(t.tmp.path()).unwrap();
+    assert!(
+        content.starts_with(&format!("DEMO-12|{BRANCH}||||"))
+            && content.ends_with(&format!("{}\n", folder.display())),
+        "{content}"
+    );
+}
+
+#[test]
+fn command_a_failed_command_gives_its_exit_code_and_its_last_lines() {
+    let t = AdapterTest::new();
+    let mut command = String::from("echo out; ");
+    for n in 1..=25 {
+        command.push_str(&format!("echo line-{n} >&2; "));
+    }
+    command.push_str("exit 4");
+    let result = t
+        .job("check")
+        .field("table", json!({"command": command}))
+        .run();
+    assert_eq!(
+        result.code, 0,
+        "a failed command is an answer, not a failed call"
+    );
+    assert_eq!(result.json["ok"], false);
+    let detail = result.detail();
+    assert!(
+        detail.starts_with("the command of the job check failed with the exit code 4. The last lines of its standard error:"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("line-25") && detail.contains("line-6"),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains("line-5\n") && !detail.ends_with("line-5"),
+        "20 lines: {detail}"
+    );
+    assert_eq!(result.json["documents"], json!([]), "no doc in the table");
+    let quiet = t
+        .job("check")
+        .field("table", json!({"command": "exit 1"}))
+        .run();
+    assert!(
+        quiet
+            .detail()
+            .contains("it wrote nothing to its standard error"),
+        "{quiet:?}"
+    );
 }

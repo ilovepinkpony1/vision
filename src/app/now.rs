@@ -437,6 +437,28 @@ fn limit(input: &Input) -> Now {
 
 fn waits(input: &Input, wait: &WaitFacts) -> Now {
     let view = input.view;
+    if let Some(opens) = wait
+        .opens
+        .as_deref()
+        .and_then(|at| vtime::parse_rfc3339(at).ok())
+        .filter(|at| *at > input.wall)
+    {
+        let local = opens + time::Duration::seconds(i64::from(input.offset_seconds));
+        let hm = format!("{:02}:{:02}", local.hour(), local.minute());
+        let when = local_time(&vtime::rfc3339(opens), input.wall, input.offset_seconds)
+            .unwrap_or_else(|| format!("at {hm}"));
+        let step = view.step.as_deref().unwrap_or("-");
+        return Now::new(
+            Kind::Waits,
+            Tone::Wait,
+            format!("waits until {hm}"),
+            format!("waits until {hm}"),
+            vec![
+                format!("The step {step} starts {when}."),
+                "Nothing runs for it before then: no write and no look.".into(),
+            ],
+        );
+    }
     let pr = view.pr.or(wait.pr.as_ref().map(|p| p.number));
     let pr_text = pr.map_or("the pull request".to_string(), |n| {
         format!("the pull request #{n}")

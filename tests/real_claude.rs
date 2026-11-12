@@ -245,6 +245,15 @@ fn print_bash_calls(stream: &str, keep: usize) -> Vec<String> {
                         eprintln!("  (the call asked for no sandbox)");
                     }
                 }
+                // Each other tool, such as Edit or Write, with its input, so that a probe shows
+                // what the session tried.
+                Some("tool_use") => {
+                    eprintln!(
+                        "TOOL {}: {}",
+                        part["name"].as_str().unwrap_or("?"),
+                        part["input"]
+                    );
+                }
                 Some("tool_result") => {
                     let text = match &part["content"] {
                         Value::String(text) => text.clone(),
@@ -278,8 +287,10 @@ fn print_bash_calls(stream: &str, keep: usize) -> Vec<String> {
 /// - `VISION_PROBE_DOMAINS`: the hosts of `sandbox.allow_domains`, with `:` between them.
 /// - `VISION_PROBE_ENV`: one `NAME=value` on each line, for `claude.env`.
 /// - `VISION_PROBE_NOTE`: one more instruction for the session.
+/// - `VISION_PROBE_PLUGINS`: the folders of `claude.plugins`, with `:` between them. A turn
+///   reads them and never writes them, so the test also asserts that no file in them changed.
 ///
-/// The test asserts only that the turn ended with a result. Read the output for the rest.
+/// The test asserts that the turn ended with a result. Read the output for the rest.
 #[test]
 #[ignore = "runs the real claude: set VISION_REAL_CLAUDE=1 and pass --ignored"]
 fn a_real_worker_turn_runs_the_commands_of_a_probe() {
@@ -313,7 +324,9 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
     let allow_read = list("VISION_PROBE_ALLOW_READ");
     let sockets = list("VISION_PROBE_SOCKETS");
     let domains = list("VISION_PROBE_DOMAINS");
+    let plugins = list("VISION_PROBE_PLUGINS");
     let env_text = std::env::var("VISION_PROBE_ENV").unwrap_or_default();
+    let plugin_files_before = files_of(&plugins);
 
     let home = TestHome::new();
     home.set_config("claude", "bin", "claude");
@@ -340,6 +353,13 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
             if let Some((name, value)) = line.trim().split_once('=') {
                 doc["claude"]["env"][name.trim()] = toml_edit::value(value);
             }
+        }
+        if !plugins.is_empty() {
+            let mut dirs = toml_edit::Array::new();
+            for item in &plugins {
+                dirs.push(item.as_str());
+            }
+            doc["claude"]["plugins"] = toml_edit::value(dirs);
         }
     });
     let mut role = String::from(
@@ -396,6 +416,55 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
             .map_or(Value::Null, |r| r["summary"].clone())
     );
     assert_eq!(state.reason, Some(Reason::Result), "{state:?}");
+    if !plugins.is_empty() {
+        let after = files_of(&plugins);
+        let changed: Vec<String> = plugin_files_before
+            .keys()
+            .chain(after.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter(|path| plugin_files_before.get(*path) != after.get(*path))
+            .map(|path| path.display().to_string())
+            .collect();
+        eprintln!(
+            "plugin folders: {} file(s), {} changed",
+            after.len(),
+            changed.len()
+        );
+        assert!(
+            changed.is_empty(),
+            "the turn changed files of a plugin folder: {changed:?}"
+        );
+    }
+}
+
+/// Each file under the folders, with its bytes. A link to a file or a folder counts as its
+/// target. The walk stops at a depth of 8.
+fn files_of(dirs: &[String]) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn walk(
+        dir: &std::path::Path,
+        depth: usize,
+        out: &mut std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if depth < 8 {
+                    walk(&path, depth + 1, out);
+                }
+            } else if let Ok(bytes) = std::fs::read(&path) {
+                out.insert(path, bytes);
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for dir in dirs {
+        walk(std::path::Path::new(dir), 0, &mut out);
+    }
+    out
 }
 
 /// The settings of a worker allow each Bash command, so the sandbox is the only limit of a

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::adapter::{Step, StepKind};
+use crate::adapter::{Step, StepKind, WaitStep};
 use crate::executor::{CiFacts, PrFacts, TicketFacts};
 use crate::ledger::TicketRow;
 
@@ -79,6 +79,9 @@ pub struct Visit {
     /// A wait step: when the visit began to watch, after its `start` verbs. The `limit` of the
     /// step counts from here.
     pub since: Option<String>,
+    /// A wait step with `from`: the first moment with that local time after the entry, in
+    /// UTC. The visit does nothing before it: no start verb and no look.
+    pub opens: Option<String>,
     /// A turn step: the `before` entries that are done in this visit, each as
     /// `<index>:<label>`, so that each one runs one time for a visit, also while a later entry
     /// waits for an approval or a reconcile.
@@ -165,6 +168,27 @@ impl Counts {
             StepKind::Human(human) => (None, Some(human.action.clone())),
             _ => (None, None),
         };
+        // A wait step with `from` opens at the first moment with that local time after the
+        // entry. A visit that is no new entry (a retry, a restart, or a repair) keeps the
+        // moment of the visit that it replaces, so that a retry never waits for the next day.
+        let opens = match &step.kind {
+            StepKind::Wait(WaitStep {
+                from: Some(from), ..
+            }) => self
+                .visit
+                .as_ref()
+                .filter(|v| !counts_entry && v.step == step.id)
+                .and_then(|v| v.opens.clone())
+                .or_else(|| {
+                    let entry = crate::util::time::parse_rfc3339(at).ok()?;
+                    Some(crate::util::time::rfc3339(crate::util::time::next_local(
+                        entry,
+                        from.hour,
+                        from.minute,
+                    )))
+                }),
+            _ => None,
+        };
         let visit = Visit {
             seq: self.visits,
             step: step.id.clone(),
@@ -177,6 +201,7 @@ impl Counts {
             agent,
             action,
             skip_cap: !counts_entry,
+            opens,
             ..Visit::default()
         };
         self.visit = Some(visit.clone());

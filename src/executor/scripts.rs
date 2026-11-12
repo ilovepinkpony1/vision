@@ -5,7 +5,9 @@
 //! A call writes one JSON object to standard input (always with `config`, the `[adapter]` table
 //! of the configuration, and `base_ref`, the `base` of `adapter.toml`) and reads one JSON object
 //! from standard output. The environment holds
-//! only `PATH`, `HOME`, `LANG`, `TMPDIR`, and each secret of `[secrets]`. Exit code 0 is done,
+//! only `PATH`, `HOME`, `LANG`, `TMPDIR`, and each secret of `[secrets]`. A job with
+//! `env = "full"` gets the environment of the tick instead, with no variable that holds the
+//! value of a secret unless the job has `secrets = true`. Exit code 0 is done,
 //! 2 is a refused gate, and each other code or the end of the time limit is a failure whose
 //! text has the last lines of standard error. The script runs in its own process group, so that
 //! the time limit also kills its children.
@@ -13,6 +15,7 @@
 //! Each string that comes back is untrusted, and each value of a secret in it is masked before
 //! it reaches a log line, an error text, a document, or the ledger.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -27,7 +30,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{Map, Value};
 
 use super::gates::MIN_SECRET_LEN;
-use crate::adapter::{table_to_json, Adapter};
+use crate::adapter::{table_to_json, Adapter, JobEnv};
 use crate::config::{Config, Secret};
 
 /// The time limit of a call when the adapter gives none.
@@ -211,6 +214,38 @@ fn secret_command(name: &str, cmd: &str) -> Result<String> {
         .map_err(|_| anyhow!("the command of the secret {name} printed text that is not UTF-8"))
 }
 
+/// The environment of a script, from the variables `vars` of this process. The plain one has
+/// only the names of [`PASSED_ENV`]. The full one has each variable, but a variable with the
+/// name or the value of a secret stays out unless the call gets the secrets. With the secrets,
+/// each one comes under its own name.
+fn script_env(
+    vars: Vec<(OsString, OsString)>,
+    secrets: &Secrets,
+    with_secrets: bool,
+    env: JobEnv,
+) -> Vec<(OsString, OsString)> {
+    let holds_secret = |name: &OsString, value: &OsString| {
+        secrets.values.iter().any(|(secret, secret_value)| {
+            name.to_str() == Some(secret.as_str())
+                || value.to_str().map(|v| v.trim_end_matches(['\n', '\r'])) == Some(secret_value)
+        })
+    };
+    let mut out: Vec<(OsString, OsString)> = vars
+        .into_iter()
+        .filter(|(name, value)| match env {
+            JobEnv::Plain => name.to_str().is_some_and(|n| PASSED_ENV.contains(&n)),
+            JobEnv::Full => with_secrets || !holds_secret(name, value),
+        })
+        .collect();
+    if with_secrets {
+        for (name, value) in &secrets.values {
+            out.retain(|(n, _)| n.to_str() != Some(name.as_str()));
+            out.push((OsString::from(name), OsString::from(value)));
+        }
+    }
+    out
+}
+
 /// The answer of a script.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Answer {
@@ -342,14 +377,16 @@ impl<'a> Runner<'a> {
 
     /// `bin/job`. It gets the secrets only when `with_secrets` is true, which is the key
     /// `secrets` of the job in `adapter.toml`. A job can run code that an agent wrote, and that
-    /// code must never see a credential.
+    /// code must never see a credential. `env` is the key `env` of the job: `full` gives the
+    /// environment of the tick, for a command of the person.
     pub fn job(
         &self,
         input: Value,
         timeout: Duration,
         with_secrets: bool,
+        env: JobEnv,
     ) -> Result<Answer, ScriptError> {
-        self.call(Script::Job, input, timeout, with_secrets)
+        self.start(Script::Job, input, timeout, with_secrets, env)
     }
 
     /// Starts a script with `input` plus `config` and `base_ref`, waits at most `timeout`, and
@@ -362,6 +399,17 @@ impl<'a> Runner<'a> {
         input: Value,
         timeout: Duration,
         with_secrets: bool,
+    ) -> Result<Answer, ScriptError> {
+        self.start(script, input, timeout, with_secrets, JobEnv::Plain)
+    }
+
+    fn start(
+        &self,
+        script: Script,
+        input: Value,
+        timeout: Duration,
+        with_secrets: bool,
+        env: JobEnv,
     ) -> Result<Answer, ScriptError> {
         if let Some(Builtin {
             name,
@@ -390,16 +438,12 @@ impl<'a> Runner<'a> {
             command.args(["adapter-script", &builtin.name, script.file_name()]);
         }
         command.current_dir(&self.scripts).env_clear();
-        for name in PASSED_ENV {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        if with_secrets {
-            for (name, value) in &self.secrets.values {
-                command.env(name, value);
-            }
-        }
+        command.envs(script_env(
+            std::env::vars_os().collect(),
+            self.secrets,
+            with_secrets,
+            env,
+        ));
         let output = run_child(command, bytes, timeout).map_err(|e| ScriptError::Start {
             path: path_text.clone(),
             why: self.secrets.mask(&e.to_string()),
@@ -746,7 +790,7 @@ mod tests {
         let secrets = Secrets::from_values(vec![("FORGE_TOKEN".into(), "tok-123456".into())]);
         let names_of = |with_secrets: bool| -> (Vec<String>, String) {
             let Answer::Done(answer) = runner(dir.path(), &secrets)
-                .job(json!({}), DEFAULT_TIMEOUT, with_secrets)
+                .job(json!({}), DEFAULT_TIMEOUT, with_secrets, JobEnv::Plain)
                 .unwrap()
             else {
                 panic!("done")
@@ -765,6 +809,53 @@ mod tests {
         assert_eq!(said, "[secret FORGE_TOKEN]");
         let (names, _) = names_of(true);
         assert!(names.iter().any(|n| n == "FORGE_TOKEN"), "{names:?}");
+    }
+
+    #[test]
+    fn the_full_environment_of_a_job_keeps_each_secret_out_unless_the_job_asks() {
+        let vars = |pairs: &[(&str, &str)]| -> Vec<(OsString, OsString)> {
+            pairs
+                .iter()
+                .map(|(n, v)| (OsString::from(n), OsString::from(v)))
+                .collect()
+        };
+        let tick = vars(&[
+            ("PATH", "/bin"),
+            ("HOME", "/home/a"),
+            ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
+            ("GH_TOKEN", "tok-123456"),
+            ("FORGE_TOKEN", "an older value"),
+        ]);
+        let secrets = Secrets::from_values(vec![("FORGE_TOKEN".into(), "tok-123456".into())]);
+        let names = |env: Vec<(OsString, OsString)>| -> Vec<String> {
+            env.iter()
+                .map(|(n, v)| format!("{}={}", n.to_string_lossy(), v.to_string_lossy()))
+                .collect()
+        };
+        assert_eq!(
+            names(script_env(tick.clone(), &secrets, false, JobEnv::Plain)),
+            ["PATH=/bin", "HOME=/home/a"]
+        );
+        assert_eq!(
+            names(script_env(tick.clone(), &secrets, true, JobEnv::Plain)),
+            ["PATH=/bin", "HOME=/home/a", "FORGE_TOKEN=tok-123456"]
+        );
+        // The full environment has each variable of the tick, but none with the name or the
+        // value of a secret.
+        assert_eq!(
+            names(script_env(tick.clone(), &secrets, false, JobEnv::Full)),
+            ["PATH=/bin", "HOME=/home/a", "SSH_AUTH_SOCK=/tmp/agent.sock"]
+        );
+        assert_eq!(
+            names(script_env(tick, &secrets, true, JobEnv::Full)),
+            [
+                "PATH=/bin",
+                "HOME=/home/a",
+                "SSH_AUTH_SOCK=/tmp/agent.sock",
+                "GH_TOKEN=tok-123456",
+                "FORGE_TOKEN=tok-123456"
+            ]
+        );
     }
 
     #[test]
@@ -844,7 +935,7 @@ mod tests {
         let secrets = Secrets::default();
         let started = Instant::now();
         let err = runner(dir.path(), &secrets)
-            .job(json!({}), Duration::from_secs(1), false)
+            .job(json!({}), Duration::from_secs(1), false, JobEnv::Plain)
             .unwrap_err();
         assert!(
             started.elapsed() < Duration::from_secs(5),

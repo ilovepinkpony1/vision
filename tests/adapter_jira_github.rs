@@ -107,10 +107,18 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
         ("deploy", Mode::Ask),
         ("review.reply", Mode::Ask),
         ("review.rerequest", Mode::Ask),
+        ("review.resolve", Mode::Ask),
+        ("review.minimize", Mode::Ask),
     ] {
         let spec = &adapter.verbs[verb];
         assert_eq!(spec.mode, mode, "{verb}");
         assert!(!spec.read, "{verb}");
+    }
+    for verb in ["review.resolve", "review.minimize"] {
+        assert!(
+            !adapter.verbs[verb].leaves,
+            "{verb} sends no text out, so no gate reads it"
+        );
     }
     for verb in ["tracker.describe", "git.push", "pr.open", "review.reply"] {
         assert!(adapter.verbs[verb].leaves, "{verb} sends text out");

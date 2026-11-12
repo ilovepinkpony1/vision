@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use vision::adapter::JobEnv;
 use vision::executor::{Answer, Builtin, Runner, Script, ScriptError, Secrets};
 
 use crate::fixtures::{comment_at, jira_issue, pull, GitHubWorld, HEAD, REPO_PATH};
@@ -106,7 +107,9 @@ fn a_refusal_is_exit_code_two_and_a_failure_names_the_script() {
         Some(9),
     )];
     let job = json!({"job": "comments", "key": KEY, "branch": BRANCH, "args": {}, "pr": 7});
-    let err = runner.job(job.clone(), LONG, false).unwrap_err();
+    let err = runner
+        .job(job.clone(), LONG, false, JobEnv::Plain)
+        .unwrap_err();
     match &err {
         ScriptError::Exit { script, code, tail } => {
             assert_eq!((script.as_str(), *code), ("bin/job", 1));
@@ -116,7 +119,7 @@ fn a_refusal_is_exit_code_two_and_a_failure_names_the_script() {
     }
     assert!(err.may_have_acted());
     // The same job with the secrets of the key `secrets = true`.
-    let Answer::Done(map) = runner.job(job, LONG, true).unwrap() else {
+    let Answer::Done(map) = runner.job(job, LONG, true, JobEnv::Plain).unwrap() else {
         panic!("the job is done")
     };
     let rows: Value =

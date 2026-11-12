@@ -6,6 +6,9 @@
 //! environment, in its own session and process group, with a time limit. A file name from the
 //! diff reaches it only as one item of an argument list, never inside the text of a shell
 //! command.
+//!
+//! A job whose table has `command` is a command of the person: the call carries the table, and
+//! [`command_job`] runs the command with the environment that the executor gave this call.
 
 use std::collections::BTreeSet;
 use std::io::{Read, Seek, SeekFrom};
@@ -17,8 +20,9 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Map, Value};
 
 use super::core::{
-    args_of, check_key, clean, fail, is_commit, now, plain_env, pretty, py_opt, py_repr_str, short,
-    short_opt, splitlines, stamp, text_of, truthy, whole, Config, Error, Res,
+    args_of, check_key, clean, fail, is_commit, now, plain_env, pretty, printable, py_opt,
+    py_repr_str, short, short_opt, splitlines, stamp, text_field, text_of, truthy, whole, Config,
+    Error, Res,
 };
 use super::forge::{self, GitHub, Ignore};
 use super::git::Git;
@@ -41,6 +45,14 @@ const JOBS: [(&str, Job); 5] = [
 ];
 
 pub fn job(call: &Map<String, Value>) -> Res<Value> {
+    // The table of a job with `command` wins over a job of the same name below.
+    if let Some(table) = call
+        .get("table")
+        .and_then(Value::as_object)
+        .filter(|t| !text_field(t, "command").trim().is_empty())
+    {
+        return command_job(call, table);
+    }
     let name = call.get("job");
     let wanted = name.and_then(Value::as_str);
     match JOBS.iter().find(|(n, _)| Some(*n) == wanted) {
@@ -48,7 +60,7 @@ pub fn job(call: &Map<String, Value>) -> Res<Value> {
         None => {
             let names: Vec<&str> = JOBS.iter().map(|(n, _)| *n).collect();
             fail(format!(
-                "the adapter jira-github has no job {}. Its jobs: {}",
+                "the adapter jira-github has no job {}. Its jobs: {}, and each job with a command in its table of adapter.toml",
                 py_repr_str(&clean(&py_opt(name), 40)),
                 names.join(", ")
             ))
@@ -815,6 +827,127 @@ fn run_canary(
         "the worktree of the base commit {} cannot run tests: the canary {canary} fails there, so no changed test ran on the base. Fix setup_command so that the tests run in that worktree, then run vision retry",
         short(base)
     )))
+}
+
+// command ---------------------------------------------------------------------------------------
+
+/// The bytes of the end of the standard output of a command that its document keeps: the
+/// executor writes no document above 4 MB.
+const COMMAND_DOC_KEEP: usize = 4 * 1024 * 1024 - 4096;
+/// The lines of standard error that the detail of a failed command keeps.
+const COMMAND_ERR_LINES: usize = 20;
+
+/// A job with `command` in its table of adapter.toml: a shell command of the person.
+///
+/// The command runs in the clone, or in the adapter folder (the working folder of this call)
+/// when the call has no clone. It gets the environment of this call as it is: the executor
+/// made it plain or full, with or without the secrets. The facts of the ticket come as
+/// `VISION_KEY`, `VISION_CLONE`, `VISION_BRANCH`, `VISION_HEAD`, and `VISION_BASE`, so the
+/// command reads no argument. The exit code decides: 0 passes, and each other code fails. The
+/// standard output goes into the document `doc` of the table, after a pass and after a
+/// failure. The last lines of standard error are the detail of a failure. The time limit is
+/// the one of the job: the executor kills the process group of this call, and the command is
+/// in that group.
+fn command_job(call: &Map<String, Value>, table: &Map<String, Value>) -> Res<Value> {
+    let name = clean(&text_of(call.get("job")), 64);
+    let command = text_field(table, "command").trim().to_string();
+    let clone = call
+        .get("clone")
+        .and_then(Value::as_str)
+        .filter(|c| !c.is_empty())
+        .map(PathBuf::from)
+        .filter(|c| c.is_dir());
+    let cwd = match &clone {
+        Some(clone) => clone.clone(),
+        None => std::env::current_dir().map_err(unexpected)?,
+    };
+    let mut child = Command::new("sh");
+    child.arg("-c").arg(&command).current_dir(&cwd);
+    for (variable, field) in [
+        ("VISION_KEY", "key"),
+        ("VISION_BRANCH", "branch"),
+        ("VISION_HEAD", "head"),
+        ("VISION_BASE", "base"),
+    ] {
+        child.env(variable, text_field(call, field));
+    }
+    child.env(
+        "VISION_CLONE",
+        clone
+            .as_ref()
+            .map(|c| c.display().to_string())
+            .unwrap_or_default(),
+    );
+    let output = proc::run(
+        child,
+        None,
+        None,
+        How {
+            session: false,
+            merge: false,
+        },
+    )
+    .map_err(unexpected)?;
+    let ok = output.success();
+    let doc = table
+        .get("doc")
+        .and_then(Value::as_str)
+        .filter(|d| !d.is_empty());
+    let documents: Vec<Value> = doc
+        .map(|doc| json!({"name": doc, "content": keep_end(&output.stdout_text(), COMMAND_DOC_KEEP)}))
+        .into_iter()
+        .collect();
+    let detail = if ok {
+        match doc {
+            Some(doc) => {
+                format!("the command of the job {name} passed, and its output is in {doc}")
+            }
+            None => format!("the command of the job {name} passed"),
+        }
+    } else {
+        let why = match output.code {
+            Some(code) if code < 0 => format!("the signal {}", -code),
+            Some(code) => format!("the exit code {code}"),
+            None => "no exit code".to_string(),
+        };
+        let tail = last_lines(&output.stderr_text(), COMMAND_ERR_LINES);
+        if tail.is_empty() {
+            format!("the command of the job {name} failed with {why}, and it wrote nothing to its standard error")
+        } else {
+            format!("the command of the job {name} failed with {why}. The last lines of its standard error:\n{tail}")
+        }
+    };
+    Ok(json!({"ok": ok, "detail": detail, "documents": documents}))
+}
+
+/// The end of a text in at most `keep` bytes, with a first line that says so when it was cut.
+fn keep_end(text: &str, keep: usize) -> String {
+    if text.len() <= keep {
+        return text.to_string();
+    }
+    let mut start = text.len() - keep;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("[the start of the output is cut]\n{}", &text[start..])
+}
+
+/// The last `count` lines of a text that are not empty, each one with no control character and
+/// cut to 300 characters.
+fn last_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(count)..]
+        .iter()
+        .map(|line| {
+            let clean: String = line
+                .chars()
+                .filter(|c| *c == '\t' || printable(*c))
+                .take(300)
+                .collect();
+            format!("  {clean}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // second-review ---------------------------------------------------------------------------------

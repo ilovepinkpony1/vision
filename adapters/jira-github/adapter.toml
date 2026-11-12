@@ -44,6 +44,10 @@
 #                          comments of that kind of that login never wait, and its reviews and
 #                          inline comments still do. An entry splits at its last `:`, because a
 #                          login can hold `[`, `]`, and `-`. Another kind is an error.
+#   bot_logins             The logins of bots for review.resolve and review.minimize. A login
+#                          that ends with [bot] is always a bot. Default []. Name a review bot
+#                          here when its login has no [bot] at the end. These two verbs touch
+#                          only a thread or a comment of a bot.
 #   statuses               A table from a role to the status name of the project, such as
 #                          { in_progress = "In Progress", in_review = "In Review" }. tracker.move
 #                          takes the role. The steps below use in_progress and in_review.
@@ -116,7 +120,8 @@
 #
 #   JIRA_TOKEN   An API token of the Jira account jira_user: read and edit the issues of the
 #                project, and move them.
-#   FORGE_TOKEN  A GitHub token for pushes, runs, merges, replies, and review requests.
+#   FORGE_TOKEN  A GitHub token for pushes, runs, merges, replies, review requests, and the
+#                review threads and comments that review.resolve and review.minimize change.
 #   PR_TOKEN     Optional. A token of the person, used only to open the draft pull request, so
 #                that the person is its author. FORGE_TOKEN opens it when PR_TOKEN is missing.
 #
@@ -418,6 +423,23 @@ leaves = true
 [verbs."review.rerequest"]
 mode = "ask"
 
+# review.resolve resolves each review thread that verdicts.json settles. A row settles its
+# comment with `settle`: true, "resolved", or "outdated". The verb touches a thread only when
+# its first comment is from a bot and each other comment is from a bot or from a login of
+# own_logins. A bot has a login that ends with [bot], or a login of bot_logins. The verb refuses
+# each other thread, and its answer names that thread. A row of a review or of a conversation
+# comment has no thread, so the verb leaves it out. A step runs it after review.reply:
+#   { verb = "review.resolve", args = { verdicts = "{doc:verdicts.json}" } }
+[verbs."review.resolve"]
+mode = "ask"
+
+# review.minimize hides each comment that verdicts.json settles: an inline comment, a review, or
+# a conversation comment. GitHub shows it as outdated for "outdated", and as resolved for true
+# and "resolved". The verb touches a comment only when its author is a bot. It refuses each
+# other comment, and its answer names that comment. It takes the same args as review.resolve.
+[verbs."review.minimize"]
+mode = "ask"
+
 # The read verbs that a turn can ask for. Each answer carries its result as a document.
 
 [verbs."jira.issue"]
@@ -439,6 +461,29 @@ about = "The end of the log of each failed job of a CI run as ci-log-<run>.txt. 
 
 # The jobs. A job gets no secret, because a job can run code that an agent wrote. Only ci-log
 # and comments set `secrets = true`: they only read GitHub, and they run no code of the project.
+#
+# A job can also run a shell command of the person. The adapter.toml of a project names it with
+# the key command, and the vision binary runs it:
+#
+#   [jobs.regression]
+#   command = "~/bin/check-regression"   # the shell command
+#   doc = "regression.md"                # optional: the document that gets the standard output
+#   env = "plain"                        # or "full": the environment of the tick
+#   secrets = true                       # optional: each secret of [secrets], by its name
+#   timeout = 600                        # seconds. The default is 300.
+#
+# The command runs with `sh -c` in the clone of the ticket, or in the adapter folder when the
+# ticket has no clone. It gets VISION_KEY, VISION_CLONE, VISION_BRANCH, VISION_HEAD, and
+# VISION_BASE, so it reads no argument. Exit code 0 passes, and each other code fails. The last
+# lines of its standard error are the detail of a failure, with each secret masked. The document
+# gets the standard output after a pass and after a failure, so a later turn reads it. The key
+# env is plain by default: PATH, HOME, LANG, and TMPDIR. With env = "full", the command gets the
+# environment of the tick, for a command that needs the login of the person, such as a cookie
+# import that reads the Keychain. A variable that holds a secret stays out of it, unless the job
+# has secrets = true. A turn never gets this environment, and only the person writes this table.
+# At the time limit, the executor stops the command. A step names the job as any other job:
+# before = ["job:regression"], or "job:regression" in expects. A command with the name of a job
+# above, such as proof, replaces that job.
 
 [jobs.proof]
 timeout = 3600

@@ -26,6 +26,11 @@ pub const DEFAULT_EVERY: u64 = 60;
 pub const FINDINGS: &str = "findings";
 /// The key of `on` of a turn step for a turn whose documents hold no kept finding.
 pub const NONE: &str = "none";
+/// The turns that one visit of a turn step gets for failed end facts when `rounds` is missing:
+/// the first turn and one resume.
+pub const DEFAULT_ROUNDS: u32 = 2;
+/// The most turns that `rounds` can give one visit.
+pub const MAX_ROUNDS: u32 = 20;
 
 /// A parsed and tested `adapter.toml`.
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +74,12 @@ pub struct Step {
     pub on: BTreeMap<String, String>,
     /// A key of `[caps]`: the step counts each entry.
     pub cap: Option<String>,
+    /// `rounds` of a turn step: the turns that one visit gets for failed end facts. After that
+    /// many failed turns, the ticket gets the flag needs-you. [`DEFAULT_ROUNDS`] when missing.
+    pub rounds: u32,
+    /// `fail` of a turn step: the end fact of a gate (such as `gate:qa:qa.md`) -> the step that
+    /// the ticket goes to at once when that gate fails on a blocking item of its document.
+    pub fail: BTreeMap<String, String>,
     /// The end facts that the step expects.
     pub expects: Vec<Expect>,
     /// The arguments of each end-fact job that `expects` gives as a table, such as
@@ -154,6 +165,37 @@ pub struct WaitStep {
     /// `limit`: the seconds that one visit may watch. A visit that watches longer sets the flag
     /// needs-you. `None`: no limit.
     pub limit: Option<u64>,
+    /// `from`: a local time of day. The visit does nothing before the first moment with that
+    /// time after its entry: no start verb and no look. `None`: it starts at once.
+    pub from: Option<LocalTime>,
+}
+
+/// A time of day in the time zone of the machine, such as `09:00`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalTime {
+    pub hour: u8,
+    pub minute: u8,
+}
+
+impl LocalTime {
+    /// Reads `HH:MM` or `H:MM`, such as `09:00` or `7:30`.
+    pub fn parse(text: &str) -> Option<LocalTime> {
+        let (hour, minute) = text.trim().split_once(':')?;
+        let digits = |t: &str, max: usize| {
+            (1..=max).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_digit())
+        };
+        if !digits(hour, 2) || !digits(minute, 2) || minute.len() != 2 {
+            return None;
+        }
+        let (hour, minute): (u8, u8) = (hour.parse().ok()?, minute.parse().ok()?);
+        (hour < 24 && minute < 60).then_some(LocalTime { hour, minute })
+    }
+}
+
+impl fmt::Display for LocalTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:02}:{:02}", self.hour, self.minute)
+    }
 }
 
 /// One end fact of a step (section 11.2).
@@ -207,6 +249,11 @@ impl Gate {
             GateRule::Cr { .. } => "cr",
             GateRule::Qa { .. } => "qa",
         }
+    }
+
+    /// The name of the gate as an end fact, such as `gate:qa:qa.md`.
+    pub fn fact(&self) -> String {
+        format!("gate:{}:{}", self.kind(), self.doc)
     }
 }
 
@@ -285,7 +332,7 @@ impl fmt::Display for Expect {
             Expect::Clean => f.write_str("clean"),
             Expect::Job(name) => write!(f, "job:{name}"),
             Expect::Human(action) => write!(f, "human:{action}"),
-            Expect::Gate(gate) => write!(f, "gate:{}:{}", gate.kind(), gate.doc),
+            Expect::Gate(gate) => f.write_str(&gate.fact()),
         }
     }
 }
@@ -349,6 +396,35 @@ pub struct Job {
     /// as the tests that an agent wrote, so the default is false. Only a job that reads the
     /// tracker or the forge, and runs no code of the project, sets it.
     pub secrets: bool,
+    /// `command`: a shell command of the person that the job runs. The call of `bin/job` gets
+    /// the table of the job, and the built-in adapter runs the command. `None`: a job that the
+    /// adapter knows by its name, such as the proof.
+    pub command: Option<String>,
+    /// `doc`: the document of the ticket folder that gets the standard output of `command`.
+    pub doc: Option<String>,
+    /// `env`: the environment of the call. Only a job with `command` can have `full`.
+    pub env: JobEnv,
+}
+
+/// The environment of the call of a job.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JobEnv {
+    /// `PATH`, `HOME`, `LANG`, and `TMPDIR`, as each script gets them.
+    #[default]
+    Plain,
+    /// The environment of the tick, for a command of the person that needs the login of the
+    /// person. A variable whose value is a secret of `[secrets]` stays out, unless the job has
+    /// `secrets = true`. A turn never gets it.
+    Full,
+}
+
+impl JobEnv {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            JobEnv::Plain => "plain",
+            JobEnv::Full => "full",
+        }
+    }
 }
 
 /// The keys of `[caps]` of the configuration, which a step can name in `cap`.
@@ -733,10 +809,50 @@ fn parse_jobs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<S
         };
         let timeout = seconds(fields.remove("timeout"), &format!("{at} timeout"), problems);
         let secrets = boolean(fields.remove("secrets"), &at, problems).unwrap_or(false);
+        let command = string(fields.remove("command"), &format!("{at} command"), problems);
+        if command
+            .as_deref()
+            .is_some_and(|c| c.trim().is_empty() || c.contains('\0'))
+        {
+            problems.add(
+                &at,
+                "command is the shell command of the job, such as command = \"./bin/check\"",
+            );
+        }
+        let doc = string(fields.remove("doc"), &format!("{at} doc"), problems);
+        if let Some(doc) = &doc {
+            if !valid_document_name(doc) {
+                problems.add(
+                    &at,
+                    format!("doc names `{doc}`, which is not a plain file name of the ticket folder, such as doc = \"regression.md\""),
+                );
+            } else if crate::executor::RESERVED_DOCUMENTS.contains(&doc.as_str()) {
+                problems.add(
+                    &at,
+                    format!("doc names `{doc}`, which belongs to the person or the pipeline. Name a different document"),
+                );
+            }
+        }
+        let env = match string(fields.remove("env"), &format!("{at} env"), problems).as_deref() {
+            None | Some("plain") => JobEnv::Plain,
+            Some("full") => JobEnv::Full,
+            Some(other) => {
+                problems.add(&at, format!("env `{other}` is not plain or full"));
+                JobEnv::Plain
+            }
+        };
+        if command.is_none() && (doc.is_some() || env != JobEnv::Plain) {
+            problems.add(
+                &at,
+                "doc and env belong to a job with command. A job that the adapter knows by its name keeps the plain environment",
+            );
+        }
         for key in fields.keys() {
             problems.add(
                 &at,
-                format!("`{key}` is not a key of a job. The keys: timeout, secrets"),
+                format!(
+                    "`{key}` is not a key of a job. The keys: timeout, secrets, command, doc, env"
+                ),
             );
         }
         jobs.insert(
@@ -745,6 +861,9 @@ fn parse_jobs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<S
                 name,
                 timeout,
                 secrets,
+                command: command.map(|c| c.trim().to_string()),
+                doc,
+                env,
             },
         );
     }
@@ -782,13 +901,15 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
         "turn" => &[
             "agent", "turn", "reads", "expects", "with", "before", "after", "start", "next", "cap",
-            "findings", "on",
+            "findings", "on", "rounds", "fail",
         ],
         "job" => &[
             "job", "args", "expects", "before", "after", "start", "next", "cap",
         ],
         "human" => &["action", "expects", "after", "start", "next", "cap"],
-        "wait" => &["start", "watch", "on", "every", "wait", "limit", "cap"],
+        "wait" => &[
+            "start", "watch", "on", "every", "wait", "limit", "cap", "from",
+        ],
         _ => &[],
     }
 }
@@ -872,7 +993,19 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
     }
     let next = string(table.remove("next"), &at, problems);
     let cap = string(table.remove("cap"), &at, problems);
+    let rounds = match table.remove("rounds") {
+        None => DEFAULT_ROUNDS,
+        Some(toml::Value::Integer(n)) if (1..=i64::from(MAX_ROUNDS)).contains(&n) => n as u32,
+        Some(other) => {
+            problems.add(
+                &at,
+                format!("rounds is the number of turns of one visit for failed end facts, from 1 to {MAX_ROUNDS}, such as rounds = 3, not `{other}`"),
+            );
+            DEFAULT_ROUNDS
+        }
+    };
     let (expects, expect_args) = expects(table.remove("expects"), &at, problems);
+    let fail = fail_routes(table.remove("fail"), &expects, &at, problems);
     if kind != "turn" && expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
         problems.add(
             &at,
@@ -961,6 +1094,8 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         next,
         on,
         cap,
+        rounds,
+        fail,
         expects,
         expect_args,
         after,
@@ -1049,6 +1184,75 @@ fn expects(
         list.push(expect);
     }
     (list, args)
+}
+
+/// `fail` of a turn step: a table from a gate of `expects` to a step. A key is the kind of the
+/// gate, such as `qa`, or its end fact, such as `gate:qa:qa.md`, for a step with two gates of
+/// one kind. Gives the routes by the end fact of the gate.
+fn fail_routes(
+    value: Option<toml::Value>,
+    expects: &[Expect],
+    at: &str,
+    problems: &mut Problems,
+) -> BTreeMap<String, String> {
+    let mut routes = BTreeMap::new();
+    let Some(value) = value else {
+        return routes;
+    };
+    let toml::Value::Table(table) = value else {
+        problems.add(
+            at,
+            "fail must be a table from a gate to a step, such as fail = { qa = \"fix-qa\" }",
+        );
+        return routes;
+    };
+    let gates: Vec<&Gate> = expects
+        .iter()
+        .filter_map(|e| match e {
+            Expect::Gate(gate) => Some(gate),
+            _ => None,
+        })
+        .collect();
+    for (key, target) in table {
+        let toml::Value::String(target) = target else {
+            problems.add(
+                at,
+                format!("fail.{key} must name a step, such as \"fix-qa\""),
+            );
+            continue;
+        };
+        let named: Vec<&&Gate> = gates
+            .iter()
+            .filter(|g| g.kind() == key || g.fact() == key)
+            .collect();
+        match named.as_slice() {
+            [gate] => {
+                if routes.insert(gate.fact(), target).is_some() {
+                    problems.add(
+                        at,
+                        format!("fail names the gate {} more than once", gate.fact()),
+                    );
+                }
+            }
+            [] if Expect::parse(&key).is_ok() => problems.add(
+                at,
+                format!("fail.{key}: only a gate of expects can have a fail route. A failed {key} resumes the turn, up to rounds"),
+            ),
+            [] => problems.add(
+                at,
+                format!("fail.{key} names no gate of expects. Name a gate by its kind, such as fail = {{ qa = \"fix-qa\" }}, or by its end fact, such as \"gate:qa:qa.md\""),
+            ),
+            [first, ..] => problems.add(
+                at,
+                format!(
+                    "fail.{key} names {} gates of expects. Name one by its end fact, such as \"{}\"",
+                    named.len(),
+                    first.fact()
+                ),
+            ),
+        }
+    }
+    routes
 }
 
 /// A gate of `expects`: `{ gate = "cr", doc = "cr.md", net_max = 4 }` or
@@ -1253,11 +1457,25 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
         .remove("wait")
         .map(|value| strings(Some(value), &format!("{at} wait"), problems));
     let limit = seconds(table.remove("limit"), &format!("{at} limit"), problems);
+    let from = match string(table.remove("from"), &format!("{at} from"), problems) {
+        None => None,
+        Some(text) => {
+            let time = LocalTime::parse(&text);
+            if time.is_none() {
+                problems.add(
+                    at,
+                    format!("from is a local time of day, such as from = \"09:00\", not `{text}`"),
+                );
+            }
+            time
+        }
+    };
     WaitStep {
         watch,
         every,
         wait,
         limit,
+        from,
     }
 }
 
@@ -1320,6 +1538,14 @@ fn check_links(adapter: &Adapter, problems: &mut Problems) {
                 problems.add(
                     &at,
                     format!("on.{value} names the step `{target}`, which does not exist"),
+                );
+            }
+        }
+        for (fact, target) in &step.fail {
+            if !ids.contains(target.as_str()) {
+                problems.add(
+                    &at,
+                    format!("fail of {fact} names the step `{target}`, which does not exist"),
                 );
             }
         }
@@ -1701,6 +1927,7 @@ url = "http://localhost:3000"
                 every: 30,
                 wait: None,
                 limit: None,
+                from: None,
             })
         );
         assert_eq!(ci.on["red"], "build");
@@ -2151,6 +2378,204 @@ url = "http://localhost:3000"
             err.contains("the key `on` does not belong to a job step"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_turn_step_has_rounds_and_its_default_keeps_one_resume() {
+        let adapter = parse(GOOD).unwrap();
+        assert_eq!(adapter.step("build").unwrap().rounds, DEFAULT_ROUNDS);
+        assert_eq!(DEFAULT_ROUNDS, 2, "the first turn and one resume");
+        let text = with(
+            "cap = \"review_rounds\"",
+            "cap = \"review_rounds\"\nrounds = 3",
+        );
+        assert_eq!(parse(&text).unwrap().step("build").unwrap().rounds, 3);
+        for bad in ["rounds = 0", "rounds = 21", "rounds = \"3\""] {
+            let err = error(&with(
+                "cap = \"review_rounds\"",
+                &format!("cap = \"review_rounds\"\n{bad}"),
+            ));
+            assert!(
+                err.contains("step `build`: rounds is the number of turns of one visit"),
+                "{bad}: {err}"
+            );
+        }
+        let err = error(&with(
+            "action = \"approve-merge\"",
+            "action = \"approve-merge\"\nrounds = 2",
+        ));
+        assert!(
+            err.contains("the key `rounds` does not belong to a human step"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_fail_route_names_a_gate_and_a_step() {
+        let line = "expects = [\"commits\", \"clean\", \"doc:pr.md\", \"job:proof\"]";
+        let gates =
+            "expects = [\"commits\", { gate = \"qa\", doc = \"qa.md\" }, { gate = \"cr\" }]";
+        // By the kind of the gate, or by its end fact.
+        for fail in [
+            "fail = { qa = \"approve\" }",
+            "fail = { \"gate:qa:qa.md\" = \"approve\" }",
+        ] {
+            let text = with(line, &format!("{gates}\n{fail}"));
+            let adapter = parse(&text).unwrap();
+            let build = adapter.step("build").unwrap();
+            assert_eq!(
+                build.fail,
+                [("gate:qa:qa.md".to_string(), "approve".to_string())].into(),
+                "{fail}"
+            );
+        }
+        assert!(parse(GOOD).unwrap().step("build").unwrap().fail.is_empty());
+        for (fail, expected) in [
+            (
+                "fail = { qa = \"fix-qa\" }",
+                "step `build`: fail of gate:qa:qa.md names the step `fix-qa`, which does not exist",
+            ),
+            (
+                "fail = { commits = \"approve\" }",
+                "fail.commits: only a gate of expects can have a fail route",
+            ),
+            (
+                "fail = { \"job:proof\" = \"approve\" }",
+                "fail.job:proof: only a gate of expects can have a fail route",
+            ),
+            (
+                "fail = { lint = \"approve\" }",
+                "fail.lint names no gate of expects",
+            ),
+            (
+                "fail = { qa = \"approve\", \"gate:qa:qa.md\" = \"ci\" }",
+                "fail names the gate gate:qa:qa.md more than once",
+            ),
+            ("fail = { qa = 3 }", "fail.qa must name a step"),
+            (
+                "fail = \"approve\"",
+                "fail must be a table from a gate to a step",
+            ),
+        ] {
+            let err = error(&with(line, &format!("{gates}\n{fail}")));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        // Two gates of one kind need the end fact.
+        let two = "expects = [{ gate = \"qa\", doc = \"qa.md\" }, { gate = \"qa\", doc = \"qa-env.md\" }]";
+        let err = error(&with(
+            line,
+            &format!("{two}\nfail = {{ qa = \"approve\" }}"),
+        ));
+        assert!(
+            err.contains("fail.qa names 2 gates of expects. Name one by its end fact, such as \"gate:qa:qa.md\""),
+            "{err}"
+        );
+        let text = with(
+            line,
+            &format!("{two}\nfail = {{ \"gate:qa:qa-env.md\" = \"approve\" }}"),
+        );
+        assert_eq!(
+            parse(&text).unwrap().step("build").unwrap().fail["gate:qa:qa-env.md"],
+            "approve"
+        );
+        // Only a turn step has gates, so only a turn step has fail.
+        let err = error(&with(
+            "action = \"approve-merge\"",
+            "action = \"approve-merge\"\nfail = { qa = \"done\" }",
+        ));
+        assert!(
+            err.contains("the key `fail` does not belong to a human step"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_wait_step_can_start_at_a_local_time() {
+        let text = with("every = 30", "every = 30\nfrom = \"09:00\"");
+        let adapter = parse(&text).unwrap();
+        let StepKind::Wait(ci) = &adapter.step("ci").unwrap().kind else {
+            panic!("ci is a wait step")
+        };
+        assert_eq!(ci.from, Some(LocalTime { hour: 9, minute: 0 }));
+        assert_eq!(ci.from.unwrap().to_string(), "09:00");
+        assert_eq!(
+            LocalTime::parse("7:30"),
+            Some(LocalTime {
+                hour: 7,
+                minute: 30
+            })
+        );
+        for bad in ["24:00", "9", "09:60", "9:5", "nine", "09:00:00", ""] {
+            assert_eq!(LocalTime::parse(bad), None, "{bad}");
+        }
+        let err = error(&with("every = 30", "every = 30\nfrom = \"9am\""));
+        assert!(
+            err.contains(
+                "step `ci`: from is a local time of day, such as from = \"09:00\", not `9am`"
+            ),
+            "{err}"
+        );
+        let err = error(&with(
+            "cap = \"review_rounds\"",
+            "cap = \"review_rounds\"\nfrom = \"09:00\"",
+        ));
+        assert!(
+            err.contains("the key `from` does not belong to a turn step"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_job_can_name_a_command_its_document_and_its_environment() {
+        let text = with(
+            "[jobs.lint]",
+            "[jobs.lint]\ncommand = \" ./bin/check --all \"\ndoc = \"lint.txt\"\nenv = \"full\"\nsecrets = true",
+        );
+        let adapter = parse(&text).unwrap();
+        let lint = &adapter.jobs["lint"];
+        assert_eq!(lint.command.as_deref(), Some("./bin/check --all"));
+        assert_eq!(lint.doc.as_deref(), Some("lint.txt"));
+        assert_eq!(lint.env, JobEnv::Full);
+        assert!(lint.secrets);
+        let proof = &adapter.jobs["proof"];
+        assert_eq!(proof.command, None);
+        assert_eq!(proof.doc, None);
+        assert_eq!(proof.env, JobEnv::Plain, "plain is the default");
+        let plain = with(
+            "[jobs.lint]",
+            "[jobs.lint]\ncommand = \"true\"\nenv = \"plain\"",
+        );
+        assert_eq!(parse(&plain).unwrap().jobs["lint"].env, JobEnv::Plain);
+        for (keys, expected) in [
+            (
+                "command = \"  \"",
+                "command is the shell command of the job",
+            ),
+            (
+                "command = \"x\"\nenv = \"some\"",
+                "env `some` is not plain or full",
+            ),
+            (
+                "command = \"x\"\ndoc = \"../x\"",
+                "doc names `../x`, which is not a plain file name",
+            ),
+            (
+                "command = \"x\"\ndoc = \"plan.md\"",
+                "doc names `plan.md`, which belongs to the person or the pipeline",
+            ),
+            (
+                "doc = \"lint.txt\"",
+                "doc and env belong to a job with command",
+            ),
+            ("env = \"full\"", "doc and env belong to a job with command"),
+            (
+                "command = 3",
+                "[jobs.lint] command: a value must be a string",
+            ),
+        ] {
+            let err = error(&with("[jobs.lint]", &format!("[jobs.lint]\n{keys}")));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
     }
 
     #[test]

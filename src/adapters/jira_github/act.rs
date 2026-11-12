@@ -34,14 +34,16 @@ pub struct Acting {
 type Verb = fn(&Config, &Map<String, Value>, bool, &mut Acting) -> Res<Value>;
 type Read = fn(&Config, &Map<String, Value>) -> Res<Value>;
 
-const VERBS: [(&str, Verb); 9] = [
+const VERBS: [(&str, Verb); 11] = [
     ("ci.rerun", ci_rerun),
     ("ci.run", ci_run),
     ("deploy", deploy),
     ("git.push", git_push),
     ("pr.open", pr_open),
+    ("review.minimize", review_minimize),
     ("review.reply", review_reply),
     ("review.rerequest", review_rerequest),
+    ("review.resolve", review_resolve),
     ("tracker.describe", tracker_describe),
     ("tracker.move", tracker_move),
 ];
@@ -803,6 +805,53 @@ type Verdict = (i64, String, Option<String>);
 
 /// The rows of verdicts.json: a JSON list, or an object with the list under `verdicts`.
 fn verdict_rows(text: Option<&Value>) -> Res<Vec<Verdict>> {
+    let mut rows = Vec::new();
+    for (n, row) in verdict_items(text, "review.reply")?.iter().enumerate() {
+        let id = comment_id(row, n)?;
+        let reply = row
+            .get("reply")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        rows.push((id, reply, row_kind(row)));
+    }
+    Ok(rows)
+}
+
+/// The kind of a row of verdicts.json, when it names one of [`forge::KINDS`].
+fn row_kind(row: &Value) -> Option<String> {
+    row.get("kind")
+        .and_then(Value::as_str)
+        .filter(|k| forge::KINDS.contains(k))
+        .map(str::to_string)
+}
+
+/// The comment id of row `n` (from 0) of verdicts.json: a number, or a text of digits.
+fn comment_id(row: &Value, n: usize) -> Res<i64> {
+    let raw = row.as_object().and_then(|r| r.get("comment_id"));
+    let id = match raw {
+        Some(Value::Number(num)) => num.as_i64(),
+        Some(Value::String(s)) => {
+            let digits = s.trim().trim_start_matches('#');
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                digits.parse().ok()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    id.ok_or_else(|| {
+        Error::Failure(format!(
+            "row {} of verdicts.json has no comment_id number",
+            n + 1
+        ))
+    })
+}
+
+/// The rows of verdicts.json for the verb `why`: a JSON list, or an object with the list under
+/// `verdicts`, maybe in a code fence.
+fn verdict_items(text: Option<&Value>, why: &str) -> Res<Vec<Value>> {
     let data = match text {
         Some(Value::String(text)) => {
             let mut stripped = text.trim().to_string();
@@ -817,10 +866,9 @@ fn verdict_rows(text: Option<&Value>) -> Res<Vec<Verdict>> {
                 }
             }
             serde_json::from_str::<Value>(&stripped).map_err(|_| {
-                Error::Failure(
-                    "args.verdicts of review.reply is not JSON: it must be {doc:verdicts.json}"
-                        .into(),
-                )
+                Error::Failure(format!(
+                    "args.verdicts of {why} is not JSON: it must be {{doc:verdicts.json}}"
+                ))
             })?
         }
         Some(other) => other.clone(),
@@ -831,42 +879,11 @@ fn verdict_rows(text: Option<&Value>) -> Res<Vec<Verdict>> {
         other => other,
     };
     let Value::Array(items) = data else {
-        return fail("review.reply needs args.verdicts: the JSON list of verdicts.json");
+        return fail(format!(
+            "{why} needs args.verdicts: the JSON list of verdicts.json"
+        ));
     };
-    let mut rows = Vec::new();
-    for (n, row) in items.iter().enumerate() {
-        let raw = row.as_object().and_then(|r| r.get("comment_id"));
-        let id = match raw {
-            Some(Value::Number(num)) => num.as_i64(),
-            Some(Value::String(s)) => {
-                let digits = s.trim().trim_start_matches('#');
-                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
-                    digits.parse().ok()
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        let Some(id) = id else {
-            return fail(format!(
-                "row {} of verdicts.json has no comment_id number",
-                n + 1
-            ));
-        };
-        let reply = row
-            .get("reply")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let kind = row
-            .get("kind")
-            .and_then(Value::as_str)
-            .filter(|k| forge::KINDS.contains(k))
-            .map(str::to_string);
-        rows.push((id, reply, kind));
-    }
-    Ok(rows)
+    Ok(items)
 }
 
 /// Posts the reply of each row of verdicts.json in the right place: an inline comment gets a
@@ -1027,6 +1044,388 @@ fn review_reply(
         "on #{number}: posted the replies to {}, and skipped {}, which have the same reply already",
         py_list(&posted),
         py_list(&skipped)
+    );
+    if !missing.is_empty() || !unclear.is_empty() {
+        return failed(&format!("{detail}{problems}"));
+    }
+    confirmed(&detail, external)
+}
+
+// review.resolve and review.minimize ------------------------------------------------------------
+
+/// One row of verdicts.json with `settle`: the comment id, the kind when the row names one, and
+/// the classifier that review.minimize gives GitHub.
+struct Settle {
+    id: i64,
+    kind: Option<String>,
+    classifier: &'static str,
+}
+
+/// The rows of verdicts.json whose `settle` is true, "resolved", or "outdated": a bot comment
+/// that the fix settled. true is "resolved". A row with no `settle`, or with false, is left out.
+fn settle_rows(text: Option<&Value>, why: &str) -> Res<Vec<Settle>> {
+    let mut rows = Vec::new();
+    for (n, row) in verdict_items(text, why)?.iter().enumerate() {
+        let word = |w: &str| match row.get("settle") {
+            Some(Value::String(text)) => text.trim().eq_ignore_ascii_case(w),
+            _ => false,
+        };
+        let classifier = match row.get("settle") {
+            None | Some(Value::Null) | Some(Value::Bool(false)) => continue,
+            Some(Value::Bool(true)) => "RESOLVED",
+            Some(_) if word("resolved") => "RESOLVED",
+            Some(_) if word("outdated") => "OUTDATED",
+            Some(other) => {
+                let shown = py_repr_str(&clean(&py_str(other), 40));
+                return fail(format!(
+                    "row {} of verdicts.json has settle {shown}: use true, \"resolved\", or \"outdated\"",
+                    n + 1
+                ));
+            }
+        };
+        rows.push(Settle {
+            id: comment_id(row, n)?,
+            kind: row_kind(row),
+            classifier,
+        });
+    }
+    Ok(rows)
+}
+
+/// True for the login of a bot: it ends with `[bot]`, or it is in `bots` (the lowercase logins
+/// of `bot_logins`).
+fn is_bot(login: &str, bots: &[String]) -> bool {
+    let login = login.trim().to_lowercase();
+    !login.is_empty() && (login.ends_with("[bot]") || bots.contains(&login))
+}
+
+/// A login for a text, or `nobody`.
+fn shown_login(login: &str) -> String {
+    if login.trim().is_empty() {
+        "nobody".to_string()
+    } else {
+        clean(login, 60)
+    }
+}
+
+/// Why review.resolve leaves a thread as it is: its first comment is not from a bot, or a
+/// person who is not in `own` wrote in it. `None` when it can resolve the thread.
+fn thread_refusal(items: &[Value], root: i64, bots: &[String], own: &[String]) -> Option<String> {
+    let author = items
+        .iter()
+        .find(|c| forge::int(c, "id") == Some(root))
+        .map(|c| forge::login(c.get("user")))
+        .unwrap_or_default();
+    if !is_bot(&author, bots) {
+        return Some(format!("its author {} is not a bot", shown_login(&author)));
+    }
+    items.iter().find_map(|c| {
+        let login = forge::login(c.get("user"));
+        (!is_bot(&login, bots) && !own.contains(&login.to_lowercase()))
+            .then(|| format!("{} wrote in it and is not a bot", shown_login(&login)))
+    })
+}
+
+/// The pull request of the call: its number, or `None`.
+fn pull_number(gh: &GitHub, call: &Map<String, Value>) -> Res<Option<i64>> {
+    let branch = text_of(call.get("branch"));
+    match gh.find_pr(pr_number(call.get("pr")), &branch)? {
+        None => Ok(None),
+        Some(pull) => forge::int(&pull, "number")
+            .map(Some)
+            .ok_or_else(|| Error::Unexpected("KeyError: 'number'".into())),
+    }
+}
+
+/// The answer when the call names no pull request.
+fn no_pull(call: &Map<String, Value>) -> Res<Value> {
+    let branch = text_of(call.get("branch"));
+    let what = if branch.is_empty() {
+        "the ticket".to_string()
+    } else {
+        branch
+    };
+    failed(&format!("no pull request of {what}"))
+}
+
+/// The end of a detail that names each refused item and why.
+fn refusals(refused: &[String]) -> String {
+    if refused.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ". Refused, because only a thread or a comment of a bot is touched: {}",
+            refused.join("; ")
+        )
+    }
+}
+
+/// Resolves the review thread of each inline comment of verdicts.json with `settle`. A thread
+/// is touched only when its first comment is from a bot and each other comment is from a bot or
+/// from a login of own_logins; any other thread is refused, and the answer says so. A row of a
+/// review or of a conversation comment has no thread, so the verb leaves it out.
+fn review_resolve(
+    config: &Config,
+    call: &Map<String, Value>,
+    reconcile: bool,
+    state: &mut Acting,
+) -> Res<Value> {
+    let why = "review.resolve";
+    let rows = settle_rows(args_of(call).get("verdicts"), why)?;
+    let bots = config.logins("bot_logins")?;
+    let own = config.logins("own_logins")?;
+    let gh = GitHub::new(config, why, None)?;
+    let Some(number) = pull_number(&gh, call)? else {
+        return no_pull(call);
+    };
+    let external = format!("resolve-{number}");
+    let candidates: Vec<&Settle> = rows
+        .iter()
+        .filter(|r| r.kind.as_deref().is_none_or(|k| k == "inline"))
+        .collect();
+    let groups = if candidates.is_empty() {
+        Default::default()
+    } else {
+        forge::threads(&gh.review_comments(number)?)
+    };
+    let root_of: std::collections::BTreeMap<i64, i64> = groups
+        .iter()
+        .flat_map(|(root, items)| {
+            items
+                .iter()
+                .filter_map(|c| forge::int(c, "id"))
+                .map(move |id| (id, *root))
+        })
+        .collect();
+    let mut threads: Option<Vec<forge::Thread>> = None;
+    let mut seen = std::collections::BTreeSet::new();
+    let (mut resolved, mut skipped, mut open, mut missing, mut refused) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for row in candidates {
+        let Some(&root) = root_of.get(&row.id) else {
+            if row.kind.is_some() {
+                missing.push(row.id);
+            }
+            continue;
+        };
+        if !seen.insert(root) {
+            continue;
+        }
+        if let Some(why) = thread_refusal(&groups[&root], root, &bots, &own) {
+            refused.push(format!("the thread of {}: {why}", row.id));
+            continue;
+        }
+        if threads.is_none() {
+            threads = Some(gh.review_threads(number)?);
+        }
+        let Some(thread) = threads
+            .iter()
+            .flatten()
+            .find(|t| t.comments.contains(&root))
+        else {
+            missing.push(row.id);
+            continue;
+        };
+        if thread.resolved {
+            skipped.push(row.id);
+            continue;
+        }
+        if reconcile {
+            open.push(row.id);
+            continue;
+        }
+        state.acted = true;
+        let data = gh.graphql(
+            forge::RESOLVE_MUTATION,
+            json!({ "id": thread.id }),
+            &format!("resolve the thread of the comment {} of #{number}", row.id),
+        )?;
+        if data.pointer("/resolveReviewThread/thread/isResolved") != Some(&Value::Bool(true)) {
+            return uncertain(&format!(
+                "GitHub did not say that the thread of the comment {} of #{number} is resolved. The outside state is not known",
+                row.id
+            ));
+        }
+        resolved.push(row.id);
+    }
+    let problems = if missing.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ". Pull request #{number} has no review thread of the comments {}",
+            py_list(&missing)
+        )
+    };
+    if reconcile {
+        if !open.is_empty() || !missing.is_empty() {
+            return failed(&format!(
+                "pull request #{number} has open threads of the comments {}{problems}",
+                py_list(&open)
+            ));
+        }
+        return confirmed(
+            &format!(
+                "each settled bot thread on #{number} is resolved{}",
+                refusals(&refused)
+            ),
+            external,
+        );
+    }
+    let detail = format!(
+        "on #{number}: resolved the threads of {}, and skipped {}, which are resolved already{}",
+        py_list(&resolved),
+        py_list(&skipped),
+        refusals(&refused)
+    );
+    if !missing.is_empty() {
+        return failed(&format!("{detail}{problems}"));
+    }
+    confirmed(&detail, external)
+}
+
+/// Hides each comment of verdicts.json with `settle`: an inline comment, a review, or a
+/// conversation comment, with the classifier of the row. A comment is touched only when its
+/// author is a bot; any other comment is refused, and the answer says so. The `kind` of a row
+/// names the place; with no kind, the id must be of one kind only.
+fn review_minimize(
+    config: &Config,
+    call: &Map<String, Value>,
+    reconcile: bool,
+    state: &mut Acting,
+) -> Res<Value> {
+    let why = "review.minimize";
+    let rows = settle_rows(args_of(call).get("verdicts"), why)?;
+    let bots = config.logins("bot_logins")?;
+    let gh = GitHub::new(config, why, None)?;
+    let Some(number) = pull_number(&gh, call)? else {
+        return no_pull(call);
+    };
+    let external = format!("minimize-{number}");
+    let by_id = |items: Vec<Value>| -> std::collections::BTreeMap<i64, Value> {
+        items
+            .into_iter()
+            .filter_map(|c| forge::int(&c, "id").map(|id| (id, c)))
+            .collect()
+    };
+    let (inline, reviews, talk) = if rows.is_empty() {
+        Default::default()
+    } else {
+        (
+            by_id(gh.review_comments(number)?),
+            by_id(gh.reviews(number)?),
+            by_id(gh.issue_comments(number)?),
+        )
+    };
+    let place = |kind: &str| match kind {
+        "inline" => &inline,
+        "review" => &reviews,
+        _ => &talk,
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut targets: Vec<(i64, String, &'static str)> = Vec::new();
+    let (mut missing, mut unclear, mut refused) = (Vec::new(), Vec::new(), Vec::new());
+    for row in &rows {
+        let places: Vec<&str> = forge::KINDS
+            .iter()
+            .copied()
+            .filter(|k| {
+                row.kind.as_deref().is_none_or(|want| want == *k) && place(k).contains_key(&row.id)
+            })
+            .collect();
+        let kind = match places.as_slice() {
+            [] => {
+                missing.push(row.id);
+                continue;
+            }
+            [kind] => *kind,
+            _ => {
+                unclear.push(row.id);
+                continue;
+            }
+        };
+        if !seen.insert((kind, row.id)) {
+            continue;
+        }
+        let item = &place(kind)[&row.id];
+        let author = forge::login(item.get("user"));
+        if !is_bot(&author, &bots) {
+            refused.push(format!(
+                "the {kind} {}: its author {} is not a bot",
+                row.id,
+                shown_login(&author)
+            ));
+            continue;
+        }
+        let node = forge::text(item, "node_id");
+        if node.is_empty() {
+            missing.push(row.id);
+            continue;
+        }
+        targets.push((row.id, node.to_string(), row.classifier));
+    }
+    let hidden_now = if targets.is_empty() {
+        Default::default()
+    } else {
+        let ids: Vec<String> = targets.iter().map(|(_, node, _)| node.clone()).collect();
+        gh.minimized(&ids)?
+    };
+    let (mut hidden, mut skipped, mut open) = (Vec::new(), Vec::new(), Vec::new());
+    for (id, node, classifier) in &targets {
+        if hidden_now.get(node) == Some(&true) {
+            skipped.push(*id);
+            continue;
+        }
+        if reconcile {
+            open.push(*id);
+            continue;
+        }
+        state.acted = true;
+        let data = gh.graphql(
+            forge::MINIMIZE_MUTATION,
+            json!({ "id": node, "classifier": classifier }),
+            &format!("hide the comment {id} of #{number}"),
+        )?;
+        if data.pointer("/minimizeComment/minimizedComment/isMinimized") != Some(&Value::Bool(true))
+        {
+            return uncertain(&format!(
+                "GitHub did not say that the comment {id} of #{number} is hidden. The outside state is not known"
+            ));
+        }
+        hidden.push(*id);
+    }
+    let mut problems = String::new();
+    if !missing.is_empty() {
+        problems.push_str(&format!(
+            ". Pull request #{number} has no comment {}",
+            py_list(&missing)
+        ));
+    }
+    if !unclear.is_empty() {
+        problems.push_str(&format!(
+            ". The ids {} name comments of more than one kind: give each row the kind of comments.json",
+            py_list(&unclear)
+        ));
+    }
+    if reconcile {
+        if !open.is_empty() || !missing.is_empty() || !unclear.is_empty() {
+            return failed(&format!(
+                "pull request #{number} still shows the comments {}{problems}",
+                py_list(&open)
+            ));
+        }
+        return confirmed(
+            &format!(
+                "each settled bot comment on #{number} is hidden{}",
+                refusals(&refused)
+            ),
+            external,
+        );
+    }
+    let detail = format!(
+        "on #{number}: hid the comments {}, and skipped {}, which are hidden already{}",
+        py_list(&hidden),
+        py_list(&skipped),
+        refusals(&refused)
     );
     if !missing.is_empty() || !unclear.is_empty() {
         return failed(&format!("{detail}{problems}"));

@@ -698,6 +698,8 @@ Each script reads one JSON object from standard input and prints one JSON object
 
 The environment of a script has only `PATH`, `HOME`, `LANG`, and `TMPDIR`. `bin/observe` and `bin/act` also get each secret of `[secrets]` as an environment name. `bin/job` gets no secret, because a job can run code that an agent wrote. A job that only reads the tracker or the forge sets `secrets = true`. The executor masks each secret value in an answer before it stores the answer.
 
+A job with `env = "full"` gets the environment of the tick instead. A variable with the name or the value of a secret stays out of it, unless the job has `secrets = true`. Only a job with `command` can have `env = "full"`. A turn never gets this environment. A job with `command` gets its table of `adapter.toml` in `table`: `command`, `doc`, `env`, `secrets`, and `timeout`. The built-in adapter runs the command (section 11.5). A script of `bin/job` gets the same table, and it decides what to do.
+
 ```
 observe  {"what": "queue", "config": {}}
       -> {"tickets": [{"key": "DEMO-12", "title": "...", "status": "To Do", "eligible": true, "reason": ""}]}
@@ -808,6 +810,11 @@ timeout = 1800
 
 [jobs.comments]
 secrets = true                # this job only reads the forge. Never set it for a job that runs project code.
+
+[jobs.regression]
+command = "~/bin/check-regression"   # a shell command of the person
+doc = "regression.md"                # the document that gets its standard output
+env = "plain"                        # or "full": the environment of the tick
 ```
 
 An entry of `after`, `before`, or `start` is a name, or a table with arguments:
@@ -818,6 +825,9 @@ before = [{ job = "app-start", args = { env = "local" } }]
 with = { env = "staging" }    # a turn step: these values go into the facts file under "with"
 findings = "review"           # a turn step: each finding of its documents becomes a row with this source
 on = { findings = "fix-qa", none = "ready" }   # a turn step with findings: it replaces next
+rounds = 3                    # a turn step: the turns of one visit for failed end facts. The default is 2.
+fail = { qa = "fix-qa" }      # a turn step: a gate that fails on a blocking item goes to this step at once
+from = "09:00"                # a wait step: the visit starts at the first such local time after its entry
 ```
 
 A text argument of an entry can hold `{doc:NAME}`. The runner puts the text of that document of the ticket folder in its place. If the document does not exist, the ticket gets the flag `needs-you`, and the verb does not run.
@@ -825,6 +835,14 @@ A text argument of an entry can hold `{doc:NAME}`. The runner puts the text of t
 An entry of `expects` can also be a table: `{ job = "<name>", args = {...} }`. Its arguments follow the same `{doc:NAME}` rule, with one difference. A missing document gives an empty text and no flag, and the job decides what an empty text means.
 
 A turn step with the key `findings` can have `on` in the place of `next`. This `on` has exactly the keys `findings` and `none`. The loader refuses `on` without `findings`, `on` together with `next`, and a target that is not a step.
+
+A turn step can have `rounds`: the number of turns that one visit gets for failed end facts, from 1 to 20. The default is 2, the first turn and one resume. `rounds = 1` allows no resume.
+
+A turn step with a gate can have `fail`, a table from a gate to a step. A key is the kind of the gate, such as `qa`, or its end fact, such as `gate:qa:qa.md`, for a step with two gates of one kind. The loader refuses a key that names no gate of `expects`, a key that names an end fact of another kind, such as `commits` or `job:proof`, and a target that is not a step.
+
+A wait step can have `from`, a time of day such as `"09:00"` in the local time of the machine.
+
+A job can have `command`, a shell command of the person, with `doc` and `env`. The loader refuses `doc` and `env` without `command`, a `doc` that is not a plain file name, and a `doc` that the person or the pipeline owns, such as `plan.md`.
 
 A verb with `once = true` runs one time for a ticket and its arguments, at any commit. The loader refuses `once` on a read verb and on a verb with `leaves`, because the gates judge what leaves at each commit. A read verb can have `about`, one line of up to 300 characters.
 
@@ -859,7 +877,10 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
 - A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
 - A turn that ends with `result`. The runner writes each expected document to the ticket folder. Then it tests each end fact.
-- If an end fact does not hold, one new turn resumes the session with a message that names the fact. After a second failure, the ticket gets the flag `needs-you`.
+- If an end fact does not hold, a new turn resumes the session with a message that names the fact. A visit gets `rounds` turns for failed end facts. After that many failed turns, the ticket gets the flag `needs-you`. With the default of 2, the visit gets one resume.
+- If the failed end fact is a gate with a route in `fail`, and the gate found a blocking item in its document, the ticket moves at once to the step of the route: no resume, no flag, and no `after` verb. A blocking item is a finding that fails the gate cr, or an issue of a blocking severity. The move counts as an entry for the `cap` of that step. The document of the gate stays in the ticket folder, because the runner writes each expected document before it tests the end facts. The step of the route reads it through `reads`. A gate that fails only because its document is missing or cannot be read goes around again, up to `rounds`.
+- `rounds` and `cap` count different things. `rounds` counts the failed turns of one visit, and each resume continues the same session. `cap` counts the entries into a step from `next`, `on`, or `fail`, so it limits the loops between steps.
+- A wait step with `from` does nothing before the first moment after its entry with that local time: no `start` verb and no `observe`. With `from = "09:00"`, an entry at 23:00 starts at 09:00 the next day, an entry at 08:00 starts at 09:00 the same day, and an entry at 09:30 starts at 09:00 the next day. The visit keeps that moment in `opens`. `vision retry KEY` keeps the moment, so a retry never waits for a later day. The limit counts from the first look, which comes at the first pass after that moment. The column NOW of `vision status` and the app say `waits until 09:00`.
 - If each end fact holds, the `after` verbs run in order. After each one has the state `confirmed`, the ticket moves to `next`.
 - A turn step with `on` moves by its findings. If the documents of its last turn hold a kept finding, the ticket moves to the step of `findings`. If they hold none, it moves to the step of `none`.
 - A step with a `cap` counts each entry that comes from `next` or `on`. One entry above the cap sets the flag `needs-you` with the open items. An entry by `vision retry` or `vision take` does not count.
@@ -937,6 +958,12 @@ The job `app-start` remembers the app that it started in a state file in the tem
 
 The key `test_canary` names test files that pass on the base commit. The proof runs them first in the worktree of the base commit. If one is missing or fails, that worktree cannot run tests. Then the proof does not hold, its check `proof-canary` has the cause `env`, and no changed test runs on the base. Without a canary, a worktree that cannot run tests looks the same as a new test that fails on the base.
 
+A job with `command` in the `adapter.toml` of a project is a command of the person, and the built-in adapter runs it. The command runs with `sh -c` in the clone, or in the adapter folder when the call has no clone. It gets `VISION_KEY`, `VISION_CLONE`, `VISION_BRANCH`, `VISION_HEAD`, and `VISION_BASE`. Exit code 0 passes, and each other code fails. The last 20 lines of standard error are the detail of a failure, with each secret masked. The standard output goes into `doc` after a pass and after a failure. The time limit of the job stops the command too. A command with the name of a job of the adapter, such as `proof`, replaces that job.
+
+`review.resolve` resolves the review thread of each inline comment that `verdicts.json` settles. `review.minimize` hides each comment that it settles: an inline comment, a review, or a conversation comment. A row settles its comment with `settle`: `true` or `"resolved"` (the classifier RESOLVED), or `"outdated"` (OUTDATED). Both verbs take `{ verdicts = "{doc:verdicts.json}" }`, as `review.reply` does, and both use the GraphQL API of GitHub.
+
+These two verbs touch only a thread or a comment of a bot. A bot has a login that ends with `[bot]`, or a login of the key `bot_logins`. Each other comment of a thread must come from a bot or from a login of `own_logins`. The verbs refuse each other item, go on with the rest, and name each refused item in the detail. A missing comment fails the operation after the others. A reconcile reads whether each thread is resolved and each comment is hidden.
+
 `tests/e2e_jira_github.rs` drives the whole path against a fake Jira and GitHub with state (`tests/jira_github_support/world.rs`). A thread of the test serves it on a free localhost port. `tests/adapter_jira_github.rs` tests each verb, read verb, job, and observe call of the built-in adapter against a fake server. No run against the real services is part of the tests.
 
 ## 12. The executor
@@ -955,6 +982,7 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - After a wrong operation, the person moves its verb down the ladder with `vision demote VERB`. Vision never changes a mode by itself.
 - `vision approve` runs each operation of the verb that waits at that commit. With `--op ID`, it runs only the operation with that id. If that operation no longer waits at that commit, the command sends nothing.
 - `vision approve` exits with code 2 after a gate refuses. It exits with code 1 after an operation fails or stays `uncertain`.
+- A job with `env = "full"` gets the environment of the tick, with no variable that has the name or the value of a secret, unless the job has `secrets = true`. Each other script gets the plain environment. The executor passes the table of a job with `command` in the call, so the adapter needs no second reader of `adapter.toml`. At the time limit of a call, the executor kills its process group, and the command of a job runs in that group, so it stops too.
 - The executor calls a built-in adapter in the same way as a script of `bin/`: the same environment, process group, time limit, masking, and exit codes. An error text names it as `bin/observe`, `bin/act`, or `bin/job`.
 
 A pass can take minutes, and the ledger says nothing about a script until the script ends. So the executor writes `running.json` right before it runs a script. This holds for a job, an operation, a read verb, and the check of an uncertain operation. The file holds the kind, the name, the ticket, the start time, and the process id of the pass. When the script ends, the executor removes the file. A reader trusts the file only while that process holds the lock of the tick. The next tick removes a file that a crash left. The ledger stays the evidence.
