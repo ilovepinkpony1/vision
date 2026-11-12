@@ -275,6 +275,7 @@ fn print_bash_calls(stream: &str, keep: usize) -> Vec<String> {
 ///
 /// - `VISION_PROBE_ALLOW_READ`: the folders of `sandbox.allow_read`, with `:` between them.
 /// - `VISION_PROBE_SOCKETS`: the sockets of `sandbox.allow_unix_sockets`, with `:` between them.
+/// - `VISION_PROBE_DOMAINS`: the hosts of `sandbox.allow_domains`, with `:` between them.
 /// - `VISION_PROBE_ENV`: one `NAME=value` on each line, for `claude.env`.
 /// - `VISION_PROBE_NOTE`: one more instruction for the session.
 ///
@@ -311,6 +312,7 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
     };
     let allow_read = list("VISION_PROBE_ALLOW_READ");
     let sockets = list("VISION_PROBE_SOCKETS");
+    let domains = list("VISION_PROBE_DOMAINS");
     let env_text = std::env::var("VISION_PROBE_ENV").unwrap_or_default();
 
     let home = TestHome::new();
@@ -327,6 +329,13 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
             socks.push(item.as_str());
         }
         doc["sandbox"]["allow_unix_sockets"] = toml_edit::value(socks);
+        if !domains.is_empty() {
+            let mut hosts = toml_edit::Array::new();
+            for item in &domains {
+                hosts.push(item.as_str());
+            }
+            doc["sandbox"]["allow_domains"] = toml_edit::value(hosts);
+        }
         for line in env_text.lines() {
             if let Some((name, value)) = line.trim().split_once('=') {
                 doc["claude"]["env"][name.trim()] = toml_edit::value(value);
