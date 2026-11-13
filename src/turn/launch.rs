@@ -376,7 +376,16 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     } else {
         plugins::resolve(&config.claude.plugins)?
     };
-    for dir in &plugins.read {
+    // Each folder that a turn reads and never writes: the plugins, and for a work turn of a
+    // ticket the journal (section 16), so that the agent can search it with Grep.
+    let mut protect = plugins.read.clone();
+    if !alone && !request.ticket.is_reserved() {
+        let journal = crate::journal::turn_dir(paths)?;
+        if !protect.contains(&journal) {
+            protect.push(journal);
+        }
+    }
+    for dir in &protect {
         if !add_dirs.contains(dir) {
             add_dirs.push(dir.clone());
         }
@@ -410,7 +419,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             &add_dirs,
             &config.sandbox,
             &gitconfig,
-            &plugins.read,
+            &protect,
         )?;
         atomic_write(
             &turn.settings,
@@ -419,7 +428,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
                 request.kind,
                 &rendered,
                 config.claude.attribution,
-                &plugins.read,
+                &protect,
             )?
             .as_bytes(),
         )?;

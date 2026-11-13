@@ -140,6 +140,18 @@ impl Paths {
         self.ticket_dir(key).join(name)
     }
 
+    /// The journal (section 16): one Markdown entry for each turn of a ticket.
+    pub fn journal_dir(&self) -> PathBuf {
+        self.home.join("journal")
+    }
+
+    /// The journal entry of one turn: `journal/<KEY>/<turn-id>.md`.
+    pub fn journal_entry(&self, key: &TicketKey, id: &TurnId) -> PathBuf {
+        self.journal_dir()
+            .join(key.as_str())
+            .join(format!("{id}.md"))
+    }
+
     pub fn turns_dir(&self, key: &TicketKey) -> PathBuf {
         self.ticket_dir(key).join("turns")
     }

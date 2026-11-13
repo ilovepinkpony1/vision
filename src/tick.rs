@@ -26,7 +26,7 @@ use crate::snapshot::{collect_needs, LimitsView, Outcome, Snapshot, TickReport, 
 use crate::turn::TurnKind;
 use crate::util::fs::atomic_write;
 use crate::util::time;
-use crate::{curator, executor, pipeline, questions, turn};
+use crate::{curator, executor, journal, pipeline, questions, turn};
 
 /// What the steps 3 to 7 of one tick share.
 #[derive(Debug)]
@@ -205,6 +205,8 @@ fn run_steps(pass: &mut Pass, done: &mut Vec<String>) -> Result<()> {
     act(pass, actions).context("step 7, act")?;
     done.push("act".into());
     curator::tick(pass).context("step 7, the Curator")?;
+    // The journal never fails the tick: each problem goes to the log.
+    journal::tick(pass);
     Ok(())
 }
 

@@ -54,11 +54,13 @@ fn doctor_writes_each_result_to_the_health_table() {
         tests,
         [
             "adapter",
+            "archive",
             "claude",
             "config",
             "git",
             "heartbeat",
             "home",
+            "journal",
             "ledger",
             "memory"
         ]

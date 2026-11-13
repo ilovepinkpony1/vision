@@ -33,6 +33,22 @@ You cannot call the tracker or the forge. If you need a fact from one of them, e
 
 The facts file lists under `requests` each fact that you can ask for. Each entry has `verb` and `about`. `verb` is the name of a read verb. `about` says what the verb gives and which arguments it takes. Ask only for a verb of that list. Give each request as `{"verb": "<verb>", "args": {...}}`, with the arguments that its `about` names.
 
+## The journal
+
+The journal keeps what each earlier turn learned: its notes, the errors it met and how it fixed them, the gate results, and the answers of the person. A later turn reads it, so that a problem is solved once.
+
+- The facts file names `related`: the entries of the journal that are near your step. Read it first. It can be `null`.
+- Before you debug an error or design a fix, search the journal with the error text and the paths of the files. The facts file names the folder of the journal in `journal`. Use Grep on that folder. You cannot change it.
+- If an entry solves your problem, use it, and give its id in `cites` of your note.
+- At the end of the turn, add a note to `notes` for each of these things:
+  - A problem that you solved (`problem`), its cause (`cause`), and its fix (`fix`).
+  - A way that did not work (`dead-end`).
+  - A command that worked, such as the command that runs one test (`command`).
+  - A fact about the code that a later turn needs (`fact`).
+- Write each note in one or two sentences.
+- If a note is about files or a commit, name them in `files` and in `commit`.
+- Never put a secret, a token, or a password in a note.
+
 ## The end of a turn
 
 - End with one object that fits the schema.

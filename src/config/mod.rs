@@ -40,6 +40,10 @@ pub struct Config {
     pub sandbox: Sandbox,
     pub gates: Gates,
     pub git: Git,
+    /// The journal of the turns and its index in MemPalace (section 16).
+    pub journal: Journal,
+    /// The archive of the turn folders in an object store (section 16).
+    pub archive: Archive,
     /// Verb -> mode. Only `vision promote` and `vision demote` change them.
     pub modes: BTreeMap<String, Mode>,
     /// Name -> how the executor gets it. A session never gets one.
@@ -66,6 +70,8 @@ impl Default for Config {
             sandbox: Sandbox::default(),
             gates: Gates::default(),
             git: Git::default(),
+            journal: Journal::default(),
+            archive: Archive::default(),
             modes: BTreeMap::new(),
             secrets: BTreeMap::new(),
             adapter: toml::Table::new(),
@@ -303,6 +309,81 @@ impl Default for Gates {
     }
 }
 
+/// The journal of the turns (section 16). The entry files are the source of truth, and
+/// MemPalace is the index over them, for the turns and for the person. With no address, the
+/// index is off, and the search reads the files.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Journal {
+    /// The address of the MCP server of MemPalace over HTTP, such as
+    /// `http://127.0.0.1:8765/mcp`. `""` turns the index off.
+    pub mempalace_url: String,
+    /// The wing of MemPalace that holds the entries. The room is the ticket key.
+    pub wing: String,
+    /// The number of entries that a work turn gets in `related.md`.
+    pub related: u32,
+    /// Seconds for one call to MemPalace.
+    pub timeout: u64,
+}
+
+impl Default for Journal {
+    fn default() -> Journal {
+        Journal {
+            mempalace_url: String::new(),
+            wing: "vision".into(),
+            related: 5,
+            timeout: 5,
+        }
+    }
+}
+
+impl Journal {
+    /// True when the index of MemPalace is on.
+    pub fn index_on(&self) -> bool {
+        !self.mempalace_url.trim().is_empty()
+    }
+}
+
+/// The archive of the turn folders and the journal entries in an object store (section 16):
+/// S3, or a service that speaks the same API. The `aws` program does each call, with its own
+/// credentials. With no bucket, the archive is off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Archive {
+    /// The bucket, such as `my-vision-archive`. `""` turns the archive off.
+    pub bucket: String,
+    /// The start of each key in the bucket.
+    pub prefix: String,
+    /// The address of a service that is not AWS, for `--endpoint-url`. `""` means AWS.
+    pub endpoint: String,
+    /// The profile of the `aws` program, for `--profile`. `""` means its default.
+    pub profile: String,
+    /// Days that a local turn folder stays after the archive confirmed it.
+    pub keep_days: u32,
+    /// The region, for `--region`. `""` means the region of the profile.
+    pub region: String,
+}
+
+impl Default for Archive {
+    fn default() -> Archive {
+        Archive {
+            bucket: String::new(),
+            prefix: "vision/".into(),
+            endpoint: String::new(),
+            profile: String::new(),
+            keep_days: 14,
+            region: String::new(),
+        }
+    }
+}
+
+impl Archive {
+    /// True when the archive is on.
+    pub fn on(&self) -> bool {
+        !self.bucket.trim().is_empty()
+    }
+}
+
 /// The mode of a verb on the trust ladder (section 12).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -477,6 +558,8 @@ impl Config {
                 bail!("claude.plugins has an empty or broken entry. Each entry is the path of a plugin folder, such as \"~/plugins/mine\"");
             }
         }
+        self.check_journal()?;
+        self.check_archive()?;
         let (name, email) = (self.git.name.trim(), self.git.email.trim());
         if name.is_empty() != email.is_empty() {
             bail!("git.name and git.email go together: set both, or leave both empty");
@@ -496,6 +579,104 @@ impl Config {
         }
         Ok(())
     }
+}
+
+impl Config {
+    fn check_journal(&self) -> Result<()> {
+        let journal = &self.journal;
+        if journal.index_on() {
+            check_address(
+                &journal.mempalace_url,
+                "journal.mempalace_url",
+                "http://127.0.0.1:8765/mcp",
+            )?;
+        }
+        if !safe_name(&journal.wing) {
+            bail!("journal.wing must be a name of letters, digits, `-`, `_`, or `.`, such as \"vision\"");
+        }
+        if journal.related > 50 {
+            bail!(
+                "journal.related is {}, but a turn gets at most 50 entries",
+                journal.related
+            );
+        }
+        if !(1..=120).contains(&journal.timeout) {
+            bail!(
+                "journal.timeout is {}, but it must be from 1 to 120 seconds",
+                journal.timeout
+            );
+        }
+        Ok(())
+    }
+
+    fn check_archive(&self) -> Result<()> {
+        let archive = &self.archive;
+        let bucket = archive.bucket.trim();
+        if !bucket.is_empty()
+            && !(bucket.len() >= 3
+                && bucket.len() <= 63
+                && bucket.chars().all(|c| {
+                    c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.')
+                }))
+        {
+            bail!("archive.bucket must be the name of a bucket, such as \"my-vision-archive\": 3 to 63 lowercase letters, digits, `-`, or `.`, with no s3://");
+        }
+        let prefix = &archive.prefix;
+        if prefix.starts_with('/')
+            || prefix.contains("..")
+            || prefix.chars().any(|c| c.is_control() || c.is_whitespace())
+            || !(prefix.is_empty() || prefix.ends_with('/'))
+        {
+            bail!("archive.prefix must be empty or a path that ends with `/`, such as \"vision/\"");
+        }
+        if !archive.endpoint.trim().is_empty() {
+            check_address(
+                &archive.endpoint,
+                "archive.endpoint",
+                "https://store.example.com",
+            )?;
+        }
+        for (key, value) in [
+            ("archive.profile", &archive.profile),
+            ("archive.region", &archive.region),
+        ] {
+            if !value.is_empty() && !safe_name(value) {
+                bail!("{key} must be a name of letters, digits, `-`, `_`, or `.`");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// True for a short name of letters, digits, `-`, `_`, and `.`.
+fn safe_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// An address for a service: https, or http to this machine, with no user part.
+fn check_address(url: &str, key: &str, example: &str) -> Result<()> {
+    let url = url.trim();
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let host_port = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = if let Some(inner) = host_port.strip_prefix('[') {
+        inner.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    let local = matches!(host, "localhost" | "127.0.0.1" | "::1");
+    let fits = !host.is_empty()
+        && !host_port.contains('@')
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+        && (scheme == "https" || (scheme == "http" && local));
+    if !fits {
+        bail!(
+            "{key} must be an https address, or an http address of this machine, such as {example}"
+        );
+    }
+    Ok(())
 }
 
 /// The variables that the runner sets for a session. `claude.env` cannot set them.
@@ -596,6 +777,50 @@ mod tests {
             let error = Config::parse(text).unwrap_err().to_string();
             assert!(error.contains(part), "{text}: {error}");
         }
+    }
+
+    #[test]
+    fn the_journal_and_the_archive_are_off_by_default() {
+        let config = Config::default();
+        assert!(!config.journal.index_on());
+        assert_eq!(config.journal.wing, "vision");
+        assert_eq!(config.journal.related, 5);
+        assert_eq!(config.journal.timeout, 5);
+        assert!(!config.archive.on());
+        assert_eq!(config.archive.prefix, "vision/");
+        assert_eq!(config.archive.keep_days, 14);
+        let on = Config::parse(
+            "[journal]\nmempalace_url = \"http://127.0.0.1:8765/mcp\"\n[archive]\nbucket = \"my-archive\"\nendpoint = \"https://store.example.com\"\nprofile = \"archive\"\n",
+        )
+        .unwrap();
+        assert!(on.journal.index_on());
+        assert!(on.archive.on());
+        for (text, part) in [
+            (
+                "[journal]\nmempalace_url = \"http://example.com/mcp\"\n",
+                "journal.mempalace_url",
+            ),
+            (
+                "[journal]\nmempalace_url = \"ftp://127.0.0.1/mcp\"\n",
+                "journal.mempalace_url",
+            ),
+            ("[journal]\nwing = \"a/b\"\n", "journal.wing"),
+            ("[journal]\nrelated = 99\n", "journal.related"),
+            ("[journal]\ntimeout = 0\n", "journal.timeout"),
+            ("[archive]\nbucket = \"s3://x\"\n", "archive.bucket"),
+            ("[archive]\nprefix = \"vision\"\n", "archive.prefix"),
+            ("[archive]\nprefix = \"../x/\"\n", "archive.prefix"),
+            (
+                "[archive]\nendpoint = \"http://example.com\"\n",
+                "archive.endpoint",
+            ),
+            ("[archive]\nprofile = \"a b\"\n", "archive.profile"),
+            ("[archive]\nkept = 3\n", "kept"),
+        ] {
+            let err = Config::parse(text).unwrap_err();
+            assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
+        }
+        assert!(Config::parse("[archive]\nprefix = \"\"\n").is_ok());
     }
 
     #[test]

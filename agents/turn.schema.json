@@ -73,6 +73,21 @@
           "because": {"type": "string"}
         }
       }
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "text"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {"enum": ["problem", "cause", "fix", "dead-end", "command", "fact"]},
+          "text": {"type": "string"},
+          "files": {"type": "array", "items": {"type": "string"}},
+          "commit": {"type": "string"},
+          "cites": {"type": "array", "items": {"type": "string"}}
+        }
+      }
     }
   }
 }

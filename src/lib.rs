@@ -15,6 +15,7 @@ pub mod executor;
 pub mod exit;
 pub mod init;
 pub mod install;
+pub mod journal;
 pub mod ledger;
 pub mod lock;
 pub mod memory;
@@ -82,6 +83,8 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Curate => curator::run(ctx),
         Command::Model(args) => models::run(ctx, args),
         Command::Executor(command) => executor::run(ctx, command),
+        Command::Journal(command) => journal::run(ctx, command),
+        Command::Archive(args) => journal::run_archive(ctx, args),
         Command::Install { print } => install::install(ctx, print),
         Command::Uninstall { print } => install::uninstall(ctx, print),
         Command::AdapterScript { name, script } => adapter_script(&name, &script),

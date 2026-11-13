@@ -30,8 +30,9 @@ with "do":
   facts        report the facts file of the turn, such as its `message`.
   partial      write one event in two parts with a pause between, to test partial lines.
   run          run the shell command "command" in the working folder, as a Bash tool call,
-               and report its exit code and output in the tool result. A failure stops the
-               fake with exit code 4, unless "check" is false.
+               and report its output in the tool result as Claude Code does: a failure has
+               "is_error" and the first line "Exit code N". A failure stops the fake with
+               exit code 4, unless "check" is false.
 
 Any step can hold "when": a list of cases, each with "set" (keys that replace those of the
 step) and the conditions "model" (the --model of the start line) and "file" (a path in the
@@ -231,6 +232,7 @@ def main():
     first_text = message_text(first)
     echo(first_text)
     last_result = None
+    run_count = 0
     facts = read_facts(first_text)
     for step in load_steps(first_text):
         step = resolve(step, opts, facts)
@@ -293,11 +295,17 @@ def main():
             proc = subprocess.run(step["command"], shell=True, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT)
             output = proc.stdout.decode("utf-8", "replace")
+            run_count += 1
+            use_id = f"tu-run-{run_count}"
             emit({"type": "assistant", "message": {"content": [
-                {"type": "tool_use", "id": "tu-run", "name": "Bash", "input": {"command": step["command"]}}]}})
-            emit({"type": "user", "message": {"content": [
-                {"type": "tool_result", "tool_use_id": "tu-run",
-                 "content": f"exit {proc.returncode}: {output[-2000:]}"}]}})
+                {"type": "tool_use", "id": use_id, "name": "Bash", "input": {"command": step["command"]}}]}})
+            # A failed Bash call of Claude Code: is_error and a first line "Exit code N".
+            if proc.returncode != 0:
+                result = {"type": "tool_result", "tool_use_id": use_id, "is_error": True,
+                          "content": f"Exit code {proc.returncode}\n{output[-2000:]}"}
+            else:
+                result = {"type": "tool_result", "tool_use_id": use_id, "content": output[-2000:]}
+            emit({"type": "user", "message": {"content": [result]}})
             if proc.returncode != 0 and step.get("check", True):
                 sys.stderr.write(f"fake-claude: the command failed with {proc.returncode}: {output}\n")
                 return 4

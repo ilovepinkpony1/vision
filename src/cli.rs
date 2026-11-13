@@ -122,6 +122,15 @@ pub enum Command {
     #[command(display_order = 34, long_about = APP_TOKEN_ABOUT, args_override_self = true)]
     AppToken(AppTokenArgs),
 
+    /// Search and show the journal of the turns, or file it in MemPalace again
+    #[command(display_order = 35, subcommand)]
+    Journal(JournalCommand),
+
+    /// Upload the turn folders and the journal to the object store, then delete the local
+    /// turn folders that are due
+    #[command(display_order = 36)]
+    Archive(ArchiveArgs),
+
     /// Run one call of a built-in adapter: JSON on standard input, JSON on standard output
     #[command(hide = true)]
     AdapterScript {
@@ -644,6 +653,65 @@ pub enum ModelCommand {
     },
 }
 
+/// `vision journal ...` (section 16).
+#[derive(Debug, Subcommand)]
+pub enum JournalCommand {
+    /// Search the journal: MemPalace when the index is on, else the entry files
+    Search {
+        /// The text to search for, such as an error text or a path
+        text: String,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+        /// The most entries to show (default 10)
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+
+    /// Print one entry
+    Show {
+        /// The turn id of the entry, such as 20261116T143000Z-DEMO-12-build-1
+        id: String,
+    },
+
+    /// File each entry that MemPalace lacks
+    Reindex {
+        /// File each entry again, also the ones that MemPalace already holds
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Write the entries again from the turn folders that still exist
+    Rebuild,
+}
+
+/// `vision archive [--dry-run]`, or one of its subcommands (section 16).
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct ArchiveArgs {
+    #[command(subcommand)]
+    pub command: Option<ArchiveCommand>,
+    /// Print what waits for the upload and what is due for deletion, and change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ArchiveCommand {
+    /// Download the archive of a turn folder and unpack it back to its place
+    Fetch {
+        /// The turn id, such as 20261116T143000Z-DEMO-12-build-1
+        turn: TurnId,
+    },
+
+    /// Show what the archive holds and what waits
+    Status {
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 /// The commands of the executor (section 12).
 #[derive(Debug, Subcommand)]
 pub enum ExecutorCommand {
@@ -786,6 +854,22 @@ mod tests {
             &["install", "--print"],
             &["uninstall"],
             &["turn-run", "20261116T143000Z-DEMO-12-build-1"],
+            &[
+                "journal",
+                "search",
+                "cannot find value",
+                "--json",
+                "--limit",
+                "3",
+            ],
+            &["journal", "show", "20261116T143000Z-DEMO-12-build-1"],
+            &["journal", "reindex"],
+            &["journal", "reindex", "--all"],
+            &["journal", "rebuild"],
+            &["archive"],
+            &["archive", "--dry-run"],
+            &["archive", "fetch", "20261116T143000Z-DEMO-12-build-1"],
+            &["archive", "status", "--json"],
         ];
         for line in lines {
             if let Err(e) = parse(line) {
@@ -806,6 +890,10 @@ mod tests {
             &["model", "set", "judge", "opus", "--effort", "huge"],
             &["model", "eval", "judge"],
             &["turn-run", "build-1"],
+            &["journal"],
+            &["journal", "search"],
+            &["archive", "fetch", "build-1"],
+            &["archive", "--dry-run", "status"],
             &["memory", "show", "D-1", "--kind", "code"],
             &["memory", "review", "--accept", "0"],
             &["memory", "review", "--accept", "some"],

@@ -10,6 +10,7 @@
 pub mod curator;
 mod events;
 mod health;
+pub mod journal;
 mod limits;
 pub mod memory_use;
 pub mod notices;

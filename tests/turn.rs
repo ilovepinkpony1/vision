@@ -155,15 +155,23 @@ fn a_worker_turn_gets_the_sandbox_and_the_worker_git_configuration() {
     assert_eq!(state.reason, Some(Reason::Result), "{state:?}");
 
     let gitconfig = home.vision.join("worker.gitconfig");
+    // A work turn of a ticket reads the journal and never writes it (section 16).
+    let journal = std::fs::canonicalize(home.vision.join("journal"))
+        .unwrap()
+        .display()
+        .to_string();
     let settings: Value =
         serde_json::from_str(&home.turn_file(&launched, "settings.json")).unwrap();
     assert_eq!(
         settings,
-        json!({"permissions": {"allow": ["Bash"]},
+        json!({"permissions": {"allow": ["Bash"],
+                "deny": [format!("Edit(/{journal}/**)"), format!("Write(/{journal}/**)")]},
             "sandbox": {"enabled": true, "autoAllowBashIfSandboxed": true,
             "allowUnsandboxedCommands": false, "failIfUnavailable": true,
             "filesystem": {"denyRead": ["~/"], "allowRead": [
-                home.work.display().to_string(), "/opt/tool chain", gitconfig.display().to_string()]},
+                home.work.display().to_string(), journal.clone(), "/opt/tool chain",
+                gitconfig.display().to_string()],
+                "denyWrite": [journal.clone()]},
             "network": {"allowedDomains": ["localhost", "127.0.0.1"], "allowLocalBinding": true,
                 "allowUnixSockets": []}}})
     );
@@ -346,6 +354,13 @@ fn a_work_turn_loads_the_plugins_and_no_turn_can_change_them() {
     );
     let launched =
         home.launch(&home.request("DEMO-12", "tester", "qa", TurnKind::Tester, &scenario));
+    // A work turn of a ticket also reads the journal and never writes it (section 16).
+    protected.push(
+        std::fs::canonicalize(home.vision.join("journal"))
+            .unwrap()
+            .display()
+            .to_string(),
+    );
     let state = home.wait_ended(&launched);
     assert_eq!(
         state.reason,

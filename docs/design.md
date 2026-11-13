@@ -54,6 +54,7 @@ $VISION_HOME/
   skills/                copies of the skills that the role files name
   agents/                optional: a file here replaces the role file or the schema of that name
     project.md           optional: the standing rules of the project, for each work agent
+  journal/<KEY>/<turn-id>.md   one entry for each turn of a ticket (section 16)
   memory/                a git repo (section 9)
     decisions/D-0001.md
     principles/P-001.md
@@ -97,6 +98,7 @@ src/
   pipeline/                      steps, states, end facts
   executor/                      verbs, modes, operations, gates
   app/                           the app: model, update, view, loader, worker, terminal
+  journal/                       entries, the index in MemPalace, the search, the archive
 agents/                          role files and result schemas
 adapters/demo/                   an adapter that needs no network
 adapters/jira-github/            an adapter for Jira and GitHub
@@ -120,6 +122,20 @@ env_pass = []                     # more environment names that a session gets
 env = {}                          # more variables with a fixed value that a session gets. Never a secret.
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 plugins = []                      # folders of Claude Code plugins for each work turn: their skills, with the tool Skill. Never writable in a turn.
+
+[journal]                     # one entry for each turn in journal/, the source of truth, and an index over it
+mempalace_url = ""            # the MCP server of MemPalace over HTTP, such as "http://127.0.0.1:8765/mcp". "" means: no index, the search reads the files.
+wing = "vision"               # the wing of MemPalace for the entries. The room is the ticket key.
+related = 5                   # the entries that a work turn gets in related.md
+timeout = 5                   # seconds for one call to MemPalace
+
+[archive]                     # the turn folders and the entries in an object store. The aws program does each call with its own credentials.
+bucket = ""                   # "" means: no archive
+prefix = "vision/"            # the start of each key in the bucket
+endpoint = ""                 # "" means AWS. The address of another service with the same API, such as "https://store.example.com"
+profile = ""                  # the profile of the aws program. "" means its default.
+keep_days = 14                # days that a local turn folder stays after the archive confirmed it
+region = ""                   # "" means the region of the profile
 
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
@@ -231,6 +247,8 @@ Migration 2 adds `five_hour_resets` and `seven_day_resets` to `turns`. They hold
 Migration 3 adds `title` to `tickets`. `vision take` writes the title that the queue of the tracker gives, so the status view keeps the title after the ticket leaves the queue. A ticket from before migration 3 has no title. The app then shows the title of the queue while the queue lists the ticket.
 
 Migration 4 adds the table `notices (id, ticket, step, turn, gate, doc, issues, note, created, read)`. A gate qa with `notify = true` that passes writes one row in the transaction of the end fact, with its issues as JSON. One turn gives at most one row for each document. `read` holds the time when the person read it.
+
+Migration 5 adds the table `journal (turn, ticket, path, hash, signature, head, written, filed_hash, filed, archived, archive_bytes, entry_sent, removed)`. One row holds the entry of a turn, what MemPalace holds of it, and what the object store holds. An entry waits for the index while `filed_hash` differs from `hash`. No row and no entry is ever deleted.
 
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
@@ -345,6 +363,8 @@ A skill reads the files that it links, and a worker runs its scripts. So a turn 
 
 A folder of `claude.plugins` that does not exist or that holds no plugin refuses the turn. `vision doctor` names each plugin and the number of its skills in its line `plugins`, and fails such a folder. With an empty list, there is no such line.
 
+A work turn of a ticket also gets the journal folder of the home as `--add-dir`, in the read allow list of its sandbox, and with the deny rules of a plugin folder. It is the one folder of the home that a session reads, and the session never writes it. The Judge, the Curator, and a turn of `curator` or `eval` do not get it. The facts file has `related`, the path of `related.md` in the session view, or null, and `journal`, the real path of the journal folder.
+
 ### 7.4 The supervisor
 
 `vision turn-run <turn-id>` is a hidden command. The tick writes the `turns` row first, and then it starts the supervisor as a detached process in its own session and process group. The supervisor finds the ticket of the turn in that row. It lives as long as the turn. It does these things:
@@ -391,6 +411,8 @@ The person can type into a running turn. A test on Claude Code 2.1.321 showed th
 A message file is JSON: `{"text": "...", "source": "user", "at": "..."}`. Write it to a temporary name first, and then rename it. The ledger keeps each message in `messages`.
 
 ### 7.6 The result object
+
+`notes` is an optional list. Each note has `kind` (problem, cause, fix, dead-end, command, or fact), `text`, and optional `files`, `commit`, and `cites`, the ids of the journal entries that the turn reused. A result with no notes stays valid.
 
 Claude Code tests the output of a turn against a JSON schema. `agents/turn.schema.json` is the schema of each work turn:
 
@@ -872,7 +894,7 @@ The count table of a QA report checks the issues. If the table counts more issue
 
 The ticket row holds the id of its step in `state`, its flags, and its counters. One tick moves a ticket at most one step.
 
-- Entry of a turn step. The runner runs each `before` entry in order: a job or a verb. A job that does not pass sets the flag `needs-you`. A verb must reach the state `confirmed`. The visit remembers each entry that is done, so each one runs one time in a visit. The runner then asks `observe` for the ticket and writes `issue.json`. It builds the facts file, and it starts the turn.
+- Entry of a turn step. The runner runs each `before` entry in order: a job or a verb. A job that does not pass sets the flag `needs-you`. A verb must reach the state `confirmed`. The visit remembers each entry that is done, so each one runs one time in a visit. The runner then asks `observe` for the ticket and writes `issue.json`. It writes `related.md` (section 16), builds the facts file, and starts the turn.
 - If each end fact holds and a gate qa has `notify = true`, the issues of its report that do not block become one notice for the person. A notice never stops a ticket and never sets a flag.
 - A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
 - A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
@@ -1018,6 +1040,9 @@ vision promote VERB | demote VERB  move a verb on the trust ladder
 vision report [--week]             the measures
 vision install | uninstall         the timer of the system
 vision app-token ...               print an installation token of a GitHub App, for a secret command
+vision journal search "TEXT" [--json] [--limit N]   search the journal (section 16)
+vision journal show ID | reindex [--all] | rebuild
+vision archive [--dry-run] | fetch TURN-ID | status [--json]
 ```
 
 `vision adapter-script NAME SCRIPT` is hidden. Only the executor calls it, for an adapter with `scripts = "builtin:NAME"`.
@@ -1039,7 +1064,7 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 - Exit codes: 0 done, 1 error, 2 a gate refused, 3 not built yet.
 - Each command that prints a table also takes `--json`.
 - `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` must pass.
-- A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder.
+- A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder. `tests/bin/fake-aws` plays the aws program, first in PATH under the name `aws`, and `tests/journal.rs` serves a fake MemPalace on a free localhost port.
 - Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`. `tests/real_claude.rs` also has a test for the commit of a worker, a test that the sandbox holds, and a probe. The probe runs the commands of `VISION_PROBE_COMMANDS` in the sandbox of a worker, in the folder of `VISION_PROBE_DIR`.
 - No name of a company, a person, or a private project goes into the repo.
 
@@ -1152,3 +1177,15 @@ For `o`, and for the review of a proposal, the app gives the terminal to a child
 The app needs 100 columns and 28 rows. In a smaller window, it shows the size that it needs. If `COLORTERM` says `truecolor` or `24bit`, the app uses 24-bit color. If not, it uses the nearest of the 256 colors. With `NO_COLOR`, it uses no color, and it draws no android and no picture.
 
 Text from outside is data. A ticket title, a status of the tracker, and the error text of a command lose each control character before they reach the screen. A cut goes by the display width of the text.
+
+## 16. The journal and the archive
+
+Each turn of a ticket leaves an entry in `journal/<KEY>/<turn-id>.md`, so that a later turn finds what an earlier one learned. The entry files are the source of truth. MemPalace is an index over them, and an object store keeps the turn folders. Neither is required.
+
+At the end of each tick, the runner writes the entry of each turn of a ticket that ended in the last 7 days and whose facts changed. The entry has a front matter (the ticket, the step, the agent, the model, the times, the outcome, the head, the files, and the cost) and the sections Summary, Notes, Errors and fixes, Gate results, Answers, and Outcome. Each text passes the masking of `[secrets]`, and a second write gives the same file. Errors and fixes lists at most 20 failed Bash calls of 600 characters each. When a later call of the same command passed, it names the commit between them. An entry whose turn folder is gone is never rewritten.
+
+A new text replaces the drawer of the same source in MemPalace: wing `journal.wing`, room the ticket key, source the entry path. The tick files at most 20 entries. When MemPalace does not answer, the log says so once for each tick, and a later tick or `vision journal reindex` files what waits. The search always asks MemPalace with `candidate_strategy` `union`, because the vectors alone miss an exact token. No raw transcript goes to MemPalace.
+
+A work turn gets the best `journal.related` entries in `related.md`: for its ticket title, its diff or plan paths, and the error lines of its log or gate inputs. The turns of the session that it resumes are left out. With the index off or silent, a plain word search reads the files: more distinct words first, newest first among equals. `agents/common.md` tells each agent to search the journal before it debugs an error or designs a fix, to add notes at the end, and to cite the entries that it reused.
+
+The archive uploads a turn folder as `<prefix><KEY>/<turn-id>.tar.gz` when its ticket ended or stopped, or one day after the turn ended. Each entry goes to `<prefix>journal/<KEY>/<turn-id>.md`. Vision runs the `aws` program, with `--endpoint-url` for another service with the same API, such as Cloudflare R2 or Backblaze B2. The credentials stay with that program, and no session gets them. Only an equal size from `aws s3api head-object` marks a turn archived. The tick uploads at most once an hour and deletes nothing. `vision archive` deletes a local turn folder `keep_days` after the confirmation, and only when its ticket no longer moves. `vision archive fetch TURN-ID` brings a folder back. `vision doctor` has a line `journal` and a line `archive`. Its test of MemPalace asks only for `initialize` and the list of tools.

@@ -98,7 +98,71 @@ pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
     checks.extend(check_plugins(ctx));
     checks.push(check_memory(ctx));
     checks.push(check_adapter(ctx));
+    checks.push(check_journal(ctx, ledger.as_ref()));
+    checks.push(check_archive(ctx));
     (checks, ledger)
+}
+
+/// The journal: the count of its entries, and whether MemPalace answers. The test writes
+/// nothing: it only asks for `initialize` and the list of the tools. MemPalace is never
+/// required, so a server that does not answer is a warning.
+fn check_journal(ctx: &Ctx, ledger: Option<&Ledger>) -> Check {
+    let entries = crate::journal::entry_files(&ctx.paths.journal_dir()).len();
+    let waiting = ledger
+        .and_then(|l| l.journal_rows().ok())
+        .map_or(0, |rows| {
+            rows.iter().filter(|r| r.waits_for_index()).count()
+        });
+    let count = format!("{entries} entr(y/ies)");
+    let journal = match ctx.config() {
+        Ok(config) => &config.journal,
+        Err(e) => return Check::new("journal", Level::Fail, format!("{count}; {e:#}")),
+    };
+    if !journal.index_on() {
+        return Check::new(
+            "journal",
+            Level::Ok,
+            format!("{count}. The index of MemPalace is off (journal.mempalace_url is empty), so the search reads the files"),
+        );
+    }
+    let answer = crate::journal::mcp::connect_config(journal)
+        .and_then(|mut client| crate::journal::index::missing_tools(&mut client));
+    match answer {
+        Ok(missing) if missing.is_empty() => Check::new(
+            "journal",
+            Level::Ok,
+            format!("{count}, {waiting} wait for the index. MemPalace answers at {}", journal.mempalace_url),
+        ),
+        Ok(missing) => Check::new(
+            "journal",
+            Level::Fail,
+            format!(
+                "{count}. The server at {} lacks the tool(s) {}. Is it MemPalace?",
+                journal.mempalace_url,
+                missing.join(", ")
+            ),
+        ),
+        Err(e) => Check::new(
+            "journal",
+            Level::Warn,
+            format!("{count}, {waiting} wait for the index. MemPalace does not answer, so the search reads the files: {e:#}"),
+        ),
+    }
+}
+
+/// The archive: off, or the bucket and whether the aws program answers for its prefix.
+fn check_archive(ctx: &Ctx) -> Check {
+    let archive = match ctx.config() {
+        Ok(config) => &config.archive,
+        Err(e) => return Check::new("archive", Level::Fail, format!("{e:#}")),
+    };
+    if !archive.on() {
+        return Check::new("archive", Level::Ok, "off (archive.bucket is empty)");
+    }
+    match crate::journal::archive::Store::new(archive).and_then(|store| store.probe()) {
+        Ok(text) => Check::new("archive", Level::Ok, text),
+        Err(e) => Check::new("archive", Level::Fail, format!("{e:#}")),
+    }
 }
 
 /// The plugins of `claude.plugins`, by name, with the number of their skills. A folder that

@@ -1,0 +1,86 @@
+#!/bin/sh
+# A stand-in for the aws program in the tests of Vision. It never reaches a network.
+#
+# It records each call as one line in $FAKE_AWS_DIR/calls.log, and it keeps the objects of
+# each bucket as files in $FAKE_AWS_DIR/store/<bucket>/<key>. It knows these calls:
+#
+#   s3 cp <file> s3://<bucket>/<key> [options]    copy a file into the store
+#   s3 cp s3://<bucket>/<key> <file> [options]    copy an object out of the store
+#   s3api head-object --bucket B --key K [...]    print {"ContentLength": N}
+#   s3 ls s3://<bucket>/<prefix> [options]        list the objects under the prefix
+#
+# FAKE_AWS_SHORT=1 makes head-object give one byte less than the object has.
+# FAKE_AWS_LS_FAIL=1 makes ls fail as a call with no credentials does.
+
+if [ -z "$FAKE_AWS_DIR" ]; then
+    echo "fake-aws: FAKE_AWS_DIR is not set" >&2
+    exit 99
+fi
+mkdir -p "$FAKE_AWS_DIR/store"
+echo "$*" >> "$FAKE_AWS_DIR/calls.log"
+
+# The path in the store of s3://<bucket>/<key>.
+store_path() {
+    echo "$FAKE_AWS_DIR/store/${1#s3://}"
+}
+
+case "$1 $2" in
+"s3 cp")
+    src="$3"
+    dst="$4"
+    case "$src" in
+    s3://*)
+        from=$(store_path "$src")
+        if [ ! -f "$from" ]; then
+            echo "fatal error: An error occurred (404) when calling the HeadObject operation: Key \"$src\" does not exist" >&2
+            exit 1
+        fi
+        cp "$from" "$dst" || exit 1
+        ;;
+    *)
+        to=$(store_path "$dst")
+        mkdir -p "$(dirname "$to")"
+        cp "$src" "$to" || exit 1
+        ;;
+    esac
+    exit 0
+    ;;
+"s3api head-object")
+    shift 2
+    bucket=""
+    key=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+        --bucket) bucket="$2"; shift ;;
+        --key) key="$2"; shift ;;
+        esac
+        shift
+    done
+    file="$FAKE_AWS_DIR/store/$bucket/$key"
+    if [ ! -f "$file" ]; then
+        echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2
+        exit 254
+    fi
+    size=$(wc -c < "$file" | tr -d ' ')
+    if [ "$FAKE_AWS_SHORT" = "1" ]; then
+        size=$((size - 1))
+    fi
+    printf '{"AcceptRanges": "bytes", "ContentLength": %s, "ContentType": "binary/octet-stream"}\n' "$size"
+    exit 0
+    ;;
+"s3 ls")
+    if [ "$FAKE_AWS_LS_FAIL" = "1" ]; then
+        echo "Unable to locate credentials. You can configure credentials by running \"aws configure\"." >&2
+        exit 255
+    fi
+    under=$(store_path "$3")
+    found=$(ls "$under" 2>/dev/null | head -1)
+    if [ -z "$found" ]; then
+        exit 1
+    fi
+    echo "                           PRE $found"
+    exit 0
+    ;;
+esac
+echo "fake-aws: unknown call: $*" >&2
+exit 2

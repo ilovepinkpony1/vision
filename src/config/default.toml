@@ -55,6 +55,20 @@ allow_unix_sockets = []
 max_diff_lines = 3000
 sensitive = [".github/", "db/migrate/"]
 
+[journal]                     # one entry for each turn in journal/, the source of truth, and an index over it
+mempalace_url = ""            # the MCP server of MemPalace over HTTP, such as "http://127.0.0.1:8765/mcp". "" means: no index, the search reads the files.
+wing = "vision"               # the wing of MemPalace for the entries. The room is the ticket key.
+related = 5                   # the entries that a work turn gets in related.md
+timeout = 5                   # seconds for one call to MemPalace
+
+[archive]                     # the turn folders and the entries in an object store. The aws program does each call with its own credentials.
+bucket = ""                   # "" means: no archive
+prefix = "vision/"            # the start of each key in the bucket
+endpoint = ""                 # "" means AWS. The address of another service with the same API, such as "https://store.example.com"
+profile = ""                  # the profile of the aws program. "" means its default.
+keep_days = 14                # days that a local turn folder stays after the archive confirmed it
+region = ""                   # "" means the region of the profile
+
 [modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
 
 [secrets]                     # name -> how the executor gets it. A session never gets one.

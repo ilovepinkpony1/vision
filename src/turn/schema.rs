@@ -100,6 +100,32 @@ mod tests {
     }
 
     #[test]
+    fn notes_fit_and_an_old_result_with_no_notes_still_fits() {
+        let schema = turn_schema();
+        let old = json!({"kind": "result", "summary": "done"});
+        assert_eq!(problems(&schema, &old), Vec::<String>::new());
+        let notes = json!({"kind": "result", "summary": "done", "notes": [
+            {"kind": "fix", "text": "Import x.", "files": ["a.rs"], "commit": "abc1234",
+             "cites": ["20261110T100000Z-DEMO-7-build-1"]},
+            {"kind": "dead-end", "text": "A retry did not help."}]});
+        assert_eq!(problems(&schema, &notes), Vec::<String>::new());
+        let bad = json!({"kind": "result", "summary": "done", "notes": [
+            {"kind": "guess", "text": "x"}, {"text": "no kind"}, {"kind": "fact", "text": "t", "why": 1}]});
+        let found = problems(&schema, &bad);
+        assert!(
+            found
+                .iter()
+                .any(|p| p.starts_with("/notes/0/kind must be one of")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|p| p == "/notes/1 lacks `kind`"),
+            "{found:?}"
+        );
+        assert!(found.iter().any(|p| p.contains("has `why`")), "{found:?}");
+    }
+
+    #[test]
     fn each_kind_of_problem_is_named() {
         let schema = turn_schema();
         assert_eq!(
