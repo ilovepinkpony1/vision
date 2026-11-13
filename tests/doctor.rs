@@ -62,7 +62,8 @@ fn doctor_writes_each_result_to_the_health_table() {
             "home",
             "journal",
             "ledger",
-            "memory"
+            "memory",
+            "sessions"
         ]
     );
     assert!(rows.iter().all(|r| r.ok));

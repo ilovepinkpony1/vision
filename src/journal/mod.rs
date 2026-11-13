@@ -5,7 +5,7 @@
 //! The entry files are the source of truth. MemPalace is only an index over them, and it is
 //! never required: when it is off or does not answer, the search reads the files, and a later
 //! tick or `vision journal reindex` files what waits. The archive is off until the person names
-//! a bucket.
+//! a local folder or a bucket.
 //!
 //! - [`tick`] is the hook at the end of each tick: it writes the entries of the turns that
 //!   ended, files the entries that wait for the index, and runs the upload of the archive at
@@ -14,6 +14,8 @@
 //!   same file.
 //! - [`search`] finds entries for a text, and [`search::related_for`] gives `related.md` of a
 //!   work turn.
+//! - [`sessions`] archives the session files of Claude Code of the person and writes a summary
+//!   of each session to `session-journal/`, which no work turn reads.
 
 pub mod archive;
 mod commands;
@@ -22,6 +24,7 @@ pub mod errors;
 pub mod index;
 pub mod mcp;
 pub mod search;
+pub mod sessions;
 
 use std::cell::{Cell, OnceCell};
 use std::path::{Path, PathBuf};
@@ -68,9 +71,11 @@ pub fn tick(pass: &mut Pass) {
             "journal: the entries wait for the next tick: {e:#}"
         ));
     }
+    let mut answers = true;
     match index::file_waiting(ctx, &pass.ledger, Some(INDEX_PER_TICK)) {
         Ok(report) => {
             if let Some(why) = &report.error {
+                answers = false;
                 // One line for each tick, however many entries wait.
                 ctx.log(&format!(
                     "journal: {} entr(y/ies) wait for the index, because MemPalace does not answer: {why}",
@@ -86,6 +91,24 @@ pub fn tick(pass: &mut Pass) {
         ctx.log(&format!(
             "archive: the upload waits for the next run: {e:#}"
         ));
+    }
+    // The summaries of the sessions go after the archive run, which writes them. They wait
+    // when MemPalace did not answer in this tick, so that a dead server costs one time limit,
+    // not two.
+    if answers && ctx.config().is_ok_and(|c| c.sessions.enabled) {
+        match sessions::file_waiting(ctx, &pass.ledger, Some(INDEX_PER_TICK)) {
+            Ok(report) => {
+                if let Some(why) = &report.error {
+                    ctx.log(&format!(
+                        "sessions: {} summar(y/ies) wait for the index, because MemPalace does not answer: {why}",
+                        report.waiting
+                    ));
+                }
+            }
+            Err(e) => ctx.log(&format!(
+                "sessions: the index waits for the next tick: {e:#}"
+            )),
+        }
     }
 }
 
@@ -200,7 +223,9 @@ pub fn write_entry(
         .and_then(|e| e.head.clone())
         .or_else(|| first_head(ctx, ledger, row, &key, &id));
     let built = entry::build(ctx, ledger, row, inputs.adapter(), head.clone())?;
-    let text = inputs.secrets()?.mask(&entry::render(&built));
+    // The values of [secrets], then the common forms of tokens that the gates detect.
+    let text =
+        crate::executor::gates::mask_token_forms(&inputs.secrets()?.mask(&entry::render(&built)));
     let hash = ids::sha256_hex(text.as_bytes());
     let relative = relative_path(&key, &id);
     let now = time::now_rfc3339();

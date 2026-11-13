@@ -61,13 +61,20 @@ wing = "vision"               # the wing of MemPalace for the entries. The room 
 related = 5                   # the entries that a work turn gets in related.md
 timeout = 5                   # seconds for one call to MemPalace
 
-[archive]                     # the turn folders and the entries in an object store. The aws program does each call with its own credentials.
-bucket = ""                   # "" means: no archive
+[archive]                     # the turn folders and the entries in a local folder or an object store. The aws program does each call to a store with its own credentials.
+dir = ""                      # a local folder, such as "~/vision-archive". "" means: no folder. Never together with bucket.
+bucket = ""                   # "" means: no bucket. With no folder and no bucket, there is no archive.
 prefix = "vision/"            # the start of each key in the bucket
 endpoint = ""                 # "" means AWS. The address of another service with the same API, such as "https://store.example.com"
 profile = ""                  # the profile of the aws program. "" means its default.
 keep_days = 14                # days that a local turn folder stays after the archive confirmed it
 region = ""                   # "" means the region of the profile
+
+[sessions]                    # the session files of Claude Code of the person in the archive, and a short summary of each one in the journal
+enabled = false               # true needs the archive (archive.dir or archive.bucket)
+projects = "~/.claude/projects"   # the folder of the session files. Vision only reads it.
+quiet_hours = 24              # a session file counts as finished when it has not changed for this many hours
+wing = "claude-sessions"      # the wing of MemPalace for the summaries. The room is the project folder.
 
 [modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
 

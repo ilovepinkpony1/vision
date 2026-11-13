@@ -55,6 +55,7 @@ $VISION_HOME/
   agents/                optional: a file here replaces the role file or the schema of that name
     project.md           optional: the standing rules of the project, for each work agent
   journal/<KEY>/<turn-id>.md   one entry for each turn of a ticket (section 16)
+  session-journal/<project>/<session-id>.md   a summary of each Claude Code session of the person (section 16). No turn reads it.
   memory/                a git repo (section 9)
     decisions/D-0001.md
     principles/P-001.md
@@ -129,13 +130,20 @@ wing = "vision"               # the wing of MemPalace for the entries. The room 
 related = 5                   # the entries that a work turn gets in related.md
 timeout = 5                   # seconds for one call to MemPalace
 
-[archive]                     # the turn folders and the entries in an object store. The aws program does each call with its own credentials.
-bucket = ""                   # "" means: no archive
+[archive]                     # the turn folders and the entries in a local folder or an object store. The aws program does each call to a store with its own credentials.
+dir = ""                      # a local folder, such as "~/vision-archive". "" means: no folder. Never together with bucket.
+bucket = ""                   # "" means: no bucket. With no folder and no bucket, there is no archive.
 prefix = "vision/"            # the start of each key in the bucket
 endpoint = ""                 # "" means AWS. The address of another service with the same API, such as "https://store.example.com"
 profile = ""                  # the profile of the aws program. "" means its default.
 keep_days = 14                # days that a local turn folder stays after the archive confirmed it
 region = ""                   # "" means the region of the profile
+
+[sessions]                    # the session files of Claude Code of the person in the archive, and a short summary of each one in the journal
+enabled = false               # true needs the archive (archive.dir or archive.bucket)
+projects = "~/.claude/projects"   # the folder of the session files. Vision only reads it.
+quiet_hours = 24              # a session file counts as finished when it has not changed for this many hours
+wing = "claude-sessions"      # the wing of MemPalace for the summaries. The room is the project folder.
 
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
@@ -249,6 +257,8 @@ Migration 3 adds `title` to `tickets`. `vision take` writes the title that the q
 Migration 4 adds the table `notices (id, ticket, step, turn, gate, doc, issues, note, created, read)`. A gate qa with `notify = true` that passes writes one row in the transaction of the end fact, with its issues as JSON. One turn gives at most one row for each document. `read` holds the time when the person read it.
 
 Migration 5 adds the table `journal (turn, ticket, path, hash, signature, head, written, filed_hash, filed, archived, archive_bytes, entry_sent, removed)`. One row holds the entry of a turn, what MemPalace holds of it, and what the object store holds. An entry waits for the index while `filed_hash` differs from `hash`. No row and no entry is ever deleted.
+
+Migration 6 adds the table `sessions (path, project, session, main, hash, size, mtime, key, archived, archive_bytes, entry, summary_hash, summary_of, filed_hash, filed)`. One row holds one session file of Claude Code, with `path` relative to `sessions.projects`. It records what the archive holds of the file, the summary of a main file, and what MemPalace holds of that summary. A run reads a file again only when its size or its change time differs from its row. No row is ever deleted.
 
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
@@ -1042,7 +1052,8 @@ vision install | uninstall         the timer of the system
 vision app-token ...               print an installation token of a GitHub App, for a secret command
 vision journal search "TEXT" [--json] [--limit N]   search the journal (section 16)
 vision journal show ID | reindex [--all] | rebuild
-vision archive [--dry-run] | fetch TURN-ID | status [--json]
+vision archive [--dry-run] | fetch TURN-ID | status [--json] | move-to-bucket --from DIR [--dry-run]
+vision sessions archive [--dry-run] | search "TEXT" [--json] [--limit N] | fetch SESSION-ID [--to DIR]
 ```
 
 `vision adapter-script NAME SCRIPT` is hidden. Only the executor calls it, for an adapter with `scripts = "builtin:NAME"`.
@@ -1189,3 +1200,11 @@ A new text replaces the drawer of the same source in MemPalace: wing `journal.wi
 A work turn gets the best `journal.related` entries in `related.md`: for its ticket title, its diff or plan paths, and the error lines of its log or gate inputs. The turns of the session that it resumes are left out. With the index off or silent, a plain word search reads the files: more distinct words first, newest first among equals. `agents/common.md` tells each agent to search the journal before it debugs an error or designs a fix, to add notes at the end, and to cite the entries that it reused.
 
 The archive uploads a turn folder as `<prefix><KEY>/<turn-id>.tar.gz` when its ticket ended or stopped, or one day after the turn ended. Each entry goes to `<prefix>journal/<KEY>/<turn-id>.md`. Vision runs the `aws` program, with `--endpoint-url` for another service with the same API, such as Cloudflare R2 or Backblaze B2. The credentials stay with that program, and no session gets them. Only an equal size from `aws s3api head-object` marks a turn archived. The tick uploads at most once an hour and deletes nothing. `vision archive` deletes a local turn folder `keep_days` after the confirmation, and only when its ticket no longer moves. `vision archive fetch TURN-ID` brings a folder back. `vision doctor` has a line `journal` and a line `archive`. Its test of MemPalace asks only for `initialize` and the list of tools.
+
+`archive.dir` and `archive.bucket` together is an error. The archive writes into a local folder when `archive.dir` is set, or to a bucket when `archive.bucket` is set. A folder holds the same keys as paths under it, so a change of the configuration moves the archive later. A copy into the folder goes to a temporary name first and then takes its own name, and only an equal file size confirms it. `vision doctor` names the folder and its size. `vision archive move-to-bucket --from DIR` uploads each file of an old folder to the same key in the bucket of the configuration and confirms its size. Only then does it delete the local file. It leaves out names that start with `.`, deletes the folders that it empties, and keeps the folder itself.
+
+Claude Code keeps one file of JSON lines for each session in `~/.claude/projects/<project folder>/<session id>.jsonl`, and the files of its subagents in `<session id>/subagents/`. It deletes all of them after 30 days. With `sessions.enabled`, Vision copies each `*.jsonl` file that has not changed for `sessions.quiet_hours` hours to `<prefix>sessions/<project folder>/<path>.gz`. It copies the file to a temporary folder first, hashes the copy, and packs it with the `gzip` program. A file that grew, such as a resumed session, goes again under the same key. Vision never writes, moves, or deletes a file of Claude Code. The tick runs this in the hourly run of the archive, with at most 40 files or 1 GB. `vision sessions archive` copies each file that waits. `sessions.enabled` without the archive is an error, and `sessions.wing` must differ from `journal.wing`.
+
+Code builds a summary of each session, with no model call, in `session-journal/<project folder>/<session id>.md`. That folder is outside `journal/`, because a work turn reads `journal/`, and a summary holds the asks of each project of the person. The front matter holds the session id, the project folder, the working folder, the branch, the title, the times, the counts of the messages of the person and of the tool calls, and the key in the archive. The sections are Asks, Files, Errors and fixes, Commits, and Outcome. Asks holds the first line of each message that the person typed, at most 30. A message of the person is a user line with `origin.kind` `human`. Tool results, lines with `isMeta`, summaries of a compaction, task notices, and local commands such as `/clear` are left out. Each text passes the masking of `[secrets]` and of the forms of tokens that the gates detect, and the same masking applies to each turn entry. A summary has at most 20,000 characters. MemPalace files it in the wing `sessions.wing`, with the project folder as the room and the entry path as the source. The raw session text never goes to MemPalace.
+
+`vision sessions search TEXT` asks MemPalace with `union` in that wing, or reads the summary files. Each hit shows the session id, the project, the day, the first ask, and the key. `vision sessions fetch SESSION-ID --to DIR` puts the session file and the files of its subagents back in DIR. It refuses `sessions.projects` and `~/.claude/projects`, and it writes over no file. `vision doctor` has a line `sessions`.

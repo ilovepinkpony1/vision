@@ -145,6 +145,13 @@ impl Paths {
         self.home.join("journal")
     }
 
+    /// The summaries of the Claude Code sessions of the person (section 16). It is not in the
+    /// journal folder, because a work turn reads that folder, and a summary holds the asks of
+    /// each project of the person.
+    pub fn session_journal_dir(&self) -> PathBuf {
+        self.home.join("session-journal")
+    }
+
     /// The journal entry of one turn: `journal/<KEY>/<turn-id>.md`.
     pub fn journal_entry(&self, key: &TicketKey, id: &TurnId) -> PathBuf {
         self.journal_dir()

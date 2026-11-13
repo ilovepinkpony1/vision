@@ -150,13 +150,59 @@ pub fn archive(ctx: &Ctx, args: ArchiveArgs) -> Result<()> {
             Ok(())
         }
         Some(ArchiveCommand::Status { json }) => status(ctx, json),
+        Some(ArchiveCommand::MoveToBucket { from, dry_run }) => move_to_bucket(ctx, &from, dry_run),
     }
+}
+
+/// `vision archive move-to-bucket --from DIR [--dry-run]`.
+fn move_to_bucket(ctx: &Ctx, from: &str, dry_run: bool) -> Result<()> {
+    let config = &ctx.config()?.archive;
+    if !config.bucket_on() {
+        bail!("archive.bucket is empty. Name the bucket in config.toml (and leave archive.dir empty), then move the folder");
+    }
+    let root = crate::paths::expand_tilde(from.trim())?;
+    if !root.is_dir() {
+        bail!("{} is not a folder", root.display());
+    }
+    let files = archive::folder_files(&root)?;
+    let bytes: u64 = files.iter().map(|f| f.bytes).sum();
+    let human = crate::util::fs::human_bytes;
+    if dry_run {
+        println!(
+            "{} file(s), {}, wait to move from {} to s3://{}/. Nothing changed",
+            files.len(),
+            human(bytes),
+            root.display(),
+            config.bucket.trim()
+        );
+        for file in &files {
+            println!("move  {}", file.key);
+        }
+        return Ok(());
+    }
+    let store = Store::bucket(config)?;
+    let report = archive::move_to_bucket(&store, &root, &files);
+    println!(
+        "{} file(s), {}, moved to s3://{}/; {} failed and stay in {}",
+        report.moved,
+        human(report.bytes),
+        config.bucket.trim(),
+        report.failed.len(),
+        root.display()
+    );
+    for failure in &report.failed {
+        println!("failed: {failure}");
+    }
+    if !report.failed.is_empty() {
+        bail!("{} file(s) did not move", report.failed.len());
+    }
+    Ok(())
 }
 
 fn run(ctx: &Ctx, dry_run: bool) -> Result<()> {
     let config = &ctx.config()?.archive;
     if !config.on() {
-        bail!("the archive is off. Set archive.bucket in config.toml to turn it on");
+        bail!("{}", archive::OFF);
     }
     let ledger = ctx.ledger()?;
     let now = time::now();
@@ -221,7 +267,7 @@ fn status(ctx: &Ctx, json: bool) -> Result<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "on": config.on(), "bucket": config.bucket, "prefix": config.prefix,
+                "on": config.on(), "dir": config.dir, "bucket": config.bucket, "prefix": config.prefix,
                 "endpoint": config.endpoint, "profile": config.profile, "region": config.region,
                 "keep_days": config.keep_days, "archived": archived, "removed": removed,
                 "entries_sent": sent, "waiting": plan.uploads.len(),
@@ -232,11 +278,11 @@ fn status(ctx: &Ctx, json: bool) -> Result<()> {
         return Ok(());
     }
     if config.on() {
-        let mut where_ = format!("s3://{}/{}", config.bucket.trim(), config.prefix);
-        if !config.endpoint.is_empty() {
+        let mut where_ = archive::place(config);
+        if config.bucket_on() && !config.endpoint.is_empty() {
             where_.push_str(&format!(" at {}", config.endpoint));
         }
-        if !config.profile.is_empty() {
+        if config.bucket_on() && !config.profile.is_empty() {
             where_.push_str(&format!(" with the profile {}", config.profile));
         }
         println!(
@@ -244,7 +290,7 @@ fn status(ctx: &Ctx, json: bool) -> Result<()> {
             config.keep_days
         );
     } else {
-        println!("archive   off. Set archive.bucket in config.toml to turn it on");
+        println!("archive   off. Set archive.dir or archive.bucket in config.toml to turn it on");
     }
     println!(
         "folders   {archived} archived, {removed} of them deleted here; {} wait for the upload; {} due for deletion",

@@ -117,15 +117,23 @@ pub fn calls_of(text: &str) -> Vec<BashCall> {
     facts_of(text).calls
 }
 
+/// The reader of a stream, one event at a time, so that a large session file never sits in
+/// memory whole. A session file of Claude Code has the same events as `stream.jsonl`.
 #[derive(Default)]
-struct Calls {
+pub struct Calls {
     /// The Bash calls that wait for their result: tool use id -> command.
     open: Vec<(String, String)>,
     facts: StreamFacts,
 }
 
 impl Calls {
-    fn add(&mut self, value: &Value) {
+    /// The facts of the events so far.
+    pub fn finish(self) -> StreamFacts {
+        self.facts
+    }
+
+    /// Reads one event: a tool call of an assistant event, or a tool result of a user event.
+    pub fn add(&mut self, value: &Value) {
         let blocks = value
             .pointer("/message/content")
             .and_then(Value::as_array)
@@ -217,7 +225,7 @@ fn normal(command: &str) -> String {
 }
 
 /// True for a command that makes a commit.
-fn commits(command: &str) -> bool {
+pub fn commits(command: &str) -> bool {
     let words: Vec<&str> = command.split_whitespace().collect();
     words
         .iter()

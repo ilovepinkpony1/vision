@@ -17,6 +17,7 @@ pub mod notices;
 pub mod operations;
 pub mod pipeline;
 pub mod questions;
+pub mod sessions;
 mod tickets;
 pub mod turns;
 
@@ -365,6 +366,29 @@ mod tests {
         };
         assert!(ledger.add_notice(&notice).unwrap().is_some());
         assert_eq!(ledger.unread_notices().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn migration_6_adds_the_sessions_and_keeps_the_journal_of_before() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.version <= 5) {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        conn.execute_batch(
+            "INSERT INTO journal (turn, ticket, path, hash) VALUES ('T1', 'DEMO-1', 'journal/DEMO-1/T1.md', 'h')",
+        )
+        .unwrap();
+        assert_eq!(migrate(&mut conn).unwrap(), Some(5));
+        let ledger = Ledger {
+            conn,
+            migrated_from: Some(5),
+        };
+        assert_eq!(
+            ledger.journal_row("T1").unwrap().unwrap().hash.as_deref(),
+            Some("h")
+        );
+        assert!(ledger.session_rows().unwrap().is_empty());
     }
 
     #[test]

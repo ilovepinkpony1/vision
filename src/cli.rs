@@ -126,10 +126,14 @@ pub enum Command {
     #[command(display_order = 35, subcommand)]
     Journal(JournalCommand),
 
-    /// Upload the turn folders and the journal to the object store, then delete the local
-    /// turn folders that are due
+    /// Upload the turn folders and the journal to the archive, then delete the local turn
+    /// folders that are due
     #[command(display_order = 36)]
     Archive(ArchiveArgs),
+
+    /// Archive, search, and fetch the sessions of Claude Code of the person
+    #[command(display_order = 37, subcommand)]
+    Sessions(SessionsCommand),
 
     /// Run one call of a built-in adapter: JSON on standard input, JSON on standard output
     #[command(hide = true)]
@@ -710,6 +714,50 @@ pub enum ArchiveCommand {
         #[arg(long)]
         json: bool,
     },
+
+    /// Upload each file of an old archive folder to the same key in the bucket of the
+    /// configuration, confirm its size, and then delete the local file
+    MoveToBucket {
+        /// The old archive folder, such as ~/vision-archive
+        #[arg(long, value_name = "DIR")]
+        from: String,
+        /// Print what waits to move, and change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// `vision sessions ...` (section 16): the sessions of Claude Code of the person.
+#[derive(Debug, Subcommand)]
+pub enum SessionsCommand {
+    /// Copy each finished session file to the archive, and write the summary of each session
+    Archive {
+        /// Print what waits, and change nothing
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Search the summaries of the sessions: MemPalace when the index is on, else the files
+    Search {
+        /// The text to search for, such as a path, an error text, or a commit
+        text: String,
+        /// Print JSON instead of text
+        #[arg(long)]
+        json: bool,
+        /// The most sessions to show (default 10)
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+
+    /// Bring the archived files of a session back into a folder, never into the folder of
+    /// Claude Code
+    Fetch {
+        /// The session id, or its first 8 or more characters
+        session: String,
+        /// The folder for the files (default: the current folder)
+        #[arg(long, value_name = "DIR")]
+        to: Option<PathBuf>,
+    },
 }
 
 /// The commands of the executor (section 12).
@@ -870,6 +918,13 @@ mod tests {
             &["archive", "--dry-run"],
             &["archive", "fetch", "20261116T143000Z-DEMO-12-build-1"],
             &["archive", "status", "--json"],
+            &["archive", "move-to-bucket", "--from", "~/vision-archive"],
+            &["archive", "move-to-bucket", "--from", "/srv/a", "--dry-run"],
+            &["sessions", "archive"],
+            &["sessions", "archive", "--dry-run"],
+            &["sessions", "search", "export", "--json", "--limit", "3"],
+            &["sessions", "fetch", "0b1c2d3e"],
+            &["sessions", "fetch", "0b1c2d3e", "--to", "/tmp/x"],
         ];
         for line in lines {
             if let Err(e) = parse(line) {
@@ -894,6 +949,10 @@ mod tests {
             &["journal", "search"],
             &["archive", "fetch", "build-1"],
             &["archive", "--dry-run", "status"],
+            &["archive", "move-to-bucket"],
+            &["sessions"],
+            &["sessions", "search"],
+            &["sessions", "fetch"],
             &["memory", "show", "D-1", "--kind", "code"],
             &["memory", "review", "--accept", "0"],
             &["memory", "review", "--accept", "some"],

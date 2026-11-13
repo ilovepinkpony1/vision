@@ -407,3 +407,188 @@ fn the_doctor_tests_the_prefix_of_the_archive() {
     refused.expect_code(1);
     assert!(refused.stderr.contains("the archive is off"), "{refused:?}");
 }
+
+/// The world of [`World::new`] with the archive in a local folder instead of the bucket.
+fn local_world() -> (World, PathBuf) {
+    let w = World::new();
+    let dir = w.aws_dir.parent().unwrap().join("local-archive");
+    let text = dir.display().to_string();
+    w.edit_config(|doc| {
+        doc["archive"]["bucket"] = toml_edit::value("");
+        doc["archive"]["dir"] = toml_edit::value(text);
+    });
+    (w, dir)
+}
+
+#[test]
+fn a_local_folder_holds_the_same_keys_and_gives_a_folder_back() {
+    let (w, dir) = local_world();
+    w.ticket("DONE-1", true);
+    let done = w.turn("DONE-1", "build", 1, 120);
+    w.run(&["journal", "rebuild"]).expect_code(0);
+    let doctor = w.run(&["doctor"]);
+    let line = doctor
+        .stdout
+        .lines()
+        .find(|l| l.split_whitespace().nth(1) == Some("archive"))
+        .unwrap()
+        .to_string();
+    assert!(line.starts_with("ok "), "{line}");
+    assert!(
+        line.ends_with(&format!(
+            "the folder {} does not exist yet; the first run makes it",
+            dir.display()
+        )),
+        "{line}"
+    );
+
+    let first = w.run(&["archive"]);
+    first.expect_code(0);
+    assert!(
+        first
+            .stdout
+            .starts_with("1 turn folder(s) and 1 entr(y/ies) went up"),
+        "{first:?}"
+    );
+    assert!(w.calls().is_empty(), "no aws call: {:?}", w.calls());
+    let tar = dir.join(format!("vision/DONE-1/{done}.tar.gz"));
+    assert!(tar_list(&tar).contains(&format!("{done}/result.json")));
+    assert_eq!(
+        std::fs::read_to_string(dir.join(format!("vision/journal/DONE-1/{done}.md"))).unwrap(),
+        w.home.read(&format!("journal/DONE-1/{done}.md"))
+    );
+    let row = w.ledger().journal_row(&done).unwrap().unwrap();
+    assert_eq!(
+        row.archive_bytes,
+        Some(std::fs::metadata(&tar).unwrap().len() as i64)
+    );
+    let names: Vec<String> = std::fs::read_dir(tar.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [format!("{done}.tar.gz")], "no temporary copy stays");
+
+    let status = w.run(&["archive", "status"]);
+    status.expect_code(0);
+    assert!(
+        status.stdout.starts_with(&format!(
+            "archive   on: the folder {}/vision/.",
+            dir.display()
+        )),
+        "{status:?}"
+    );
+    let doctor = w.run(&["doctor"]);
+    let line = doctor
+        .stdout
+        .lines()
+        .find(|l| l.split_whitespace().nth(1) == Some("archive"))
+        .unwrap()
+        .to_string();
+    assert!(
+        line.contains(&format!("the folder {} holds 2 file(s), ", dir.display())),
+        "{line}"
+    );
+
+    // The folder goes after keep_days, and fetch gives it back from the archive folder.
+    w.edit_config(|doc| doc["archive"]["keep_days"] = toml_edit::value(0));
+    w.run(&["archive"]).expect_code(0);
+    assert!(!w.turn_dir("DONE-1", &done).exists());
+    w.run(&["archive", "fetch", &done]).expect_code(0);
+    assert!(w.turn_dir("DONE-1", &done).join("result.json").is_file());
+
+    // A folder and a bucket together are refused.
+    w.edit_config(|doc| doc["archive"]["bucket"] = toml_edit::value("test-bucket"));
+    let both = w.run(&["archive", "status"]);
+    both.expect_code(1);
+    assert!(
+        both.stderr.contains("archive.dir and archive.bucket"),
+        "{both:?}"
+    );
+}
+
+#[test]
+fn move_to_bucket_uploads_each_file_confirms_its_size_and_only_then_deletes_it() {
+    let (w, dir) = local_world();
+    w.ticket("DONE-1", true);
+    let done = w.turn("DONE-1", "build", 1, 120);
+    w.run(&["journal", "rebuild"]).expect_code(0);
+    w.run(&["archive"]).expect_code(0);
+    let keys = [
+        format!("vision/DONE-1/{done}.tar.gz"),
+        format!("vision/journal/DONE-1/{done}.md"),
+    ];
+    let bytes: Vec<Vec<u8>> = keys
+        .iter()
+        .map(|k| std::fs::read(dir.join(k)).unwrap())
+        .collect();
+    let from = dir.display().to_string();
+
+    // With no bucket in the configuration, nothing moves.
+    let refused = w.run(&["archive", "move-to-bucket", "--from", &from]);
+    refused.expect_code(1);
+    assert!(
+        refused.stderr.contains("archive.bucket is empty"),
+        "{refused:?}"
+    );
+
+    w.edit_config(|doc| {
+        doc["archive"]["dir"] = toml_edit::value("");
+        doc["archive"]["bucket"] = toml_edit::value("test-bucket");
+    });
+    let dry = w.run(&["archive", "move-to-bucket", "--from", &from, "--dry-run"]);
+    dry.expect_code(0);
+    let total = bytes.iter().map(|b| b.len() as u64).sum::<u64>();
+    assert!(
+        dry.stdout.starts_with(&format!(
+            "2 file(s), {}, wait to move from {from} to s3://test-bucket/. Nothing changed",
+            vision::util::fs::human_bytes(total)
+        )),
+        "{dry:?}"
+    );
+    assert!(
+        dry.stdout.contains(&format!("move  {}", keys[0])),
+        "{dry:?}"
+    );
+    assert!(w.calls().is_empty());
+
+    // A size that differs in the store deletes nothing.
+    let short = w.run_with(
+        &["archive", "move-to-bucket", "--from", &from],
+        &[("FAKE_AWS_SHORT", "1")],
+    );
+    short.expect_code(1);
+    assert!(
+        short.stdout.starts_with("0 file(s), 0 B, moved"),
+        "{short:?}"
+    );
+    assert!(keys.iter().all(|k| dir.join(k).is_file()));
+
+    let moved = w.run(&["archive", "move-to-bucket", "--from", &from]);
+    moved.expect_code(0);
+    assert!(
+        moved.stdout.starts_with("2 file(s), ")
+            && moved
+                .stdout
+                .contains("moved to s3://test-bucket/; 0 failed"),
+        "{moved:?}"
+    );
+    for (key, content) in keys.iter().zip(&bytes) {
+        assert_eq!(&std::fs::read(w.object(key)).unwrap(), content, "{key}");
+        assert!(!dir.join(key).exists(), "{key} left the folder");
+        assert!(
+            w.calls().contains(&format!(
+                "s3api head-object --bucket test-bucket --key {key} --output json --endpoint-url https://store.example.com --profile archive"
+            )),
+            "{:?}",
+            w.calls()
+        );
+    }
+    assert!(dir.is_dir(), "the folder itself stays");
+    assert!(!dir.join("vision").exists(), "empty folders go");
+    // The archive now reads from the bucket: fetch works with the same keys.
+    w.edit_config(|doc| doc["archive"]["keep_days"] = toml_edit::value(0));
+    w.run(&["archive"]).expect_code(0);
+    assert!(!w.turn_dir("DONE-1", &done).exists());
+    w.run(&["archive", "fetch", &done]).expect_code(0);
+    assert!(w.turn_dir("DONE-1", &done).join("result.json").is_file());
+}

@@ -42,8 +42,10 @@ pub struct Config {
     pub git: Git,
     /// The journal of the turns and its index in MemPalace (section 16).
     pub journal: Journal,
-    /// The archive of the turn folders in an object store (section 16).
+    /// The archive of the turn folders in a local folder or an object store (section 16).
     pub archive: Archive,
+    /// The archive of the sessions of Claude Code of the person (section 16).
+    pub sessions: Sessions,
     /// Verb -> mode. Only `vision promote` and `vision demote` change them.
     pub modes: BTreeMap<String, Mode>,
     /// Name -> how the executor gets it. A session never gets one.
@@ -72,6 +74,7 @@ impl Default for Config {
             git: Git::default(),
             journal: Journal::default(),
             archive: Archive::default(),
+            sessions: Sessions::default(),
             modes: BTreeMap::new(),
             secrets: BTreeMap::new(),
             adapter: toml::Table::new(),
@@ -344,13 +347,16 @@ impl Journal {
     }
 }
 
-/// The archive of the turn folders and the journal entries in an object store (section 16):
-/// S3, or a service that speaks the same API. The `aws` program does each call, with its own
-/// credentials. With no bucket, the archive is off.
+/// The archive of the turn folders and the journal entries (section 16): a local folder, or an
+/// object store, S3 or a service that speaks the same API. The `aws` program does each call to
+/// a store, with its own credentials. With no folder and no bucket, the archive is off.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Archive {
-    /// The bucket, such as `my-vision-archive`. `""` turns the archive off.
+    /// A local folder that holds the archive, such as `~/vision-archive`, with the same keys as
+    /// paths under it. `""` means: no folder. It never goes together with a bucket.
+    pub dir: String,
+    /// The bucket, such as `my-vision-archive`. `""` means: no bucket.
     pub bucket: String,
     /// The start of each key in the bucket.
     pub prefix: String,
@@ -367,6 +373,7 @@ pub struct Archive {
 impl Default for Archive {
     fn default() -> Archive {
         Archive {
+            dir: String::new(),
             bucket: String::new(),
             prefix: "vision/".into(),
             endpoint: String::new(),
@@ -378,9 +385,61 @@ impl Default for Archive {
 }
 
 impl Archive {
-    /// True when the archive is on.
+    /// True when the archive is on: in a folder or in a bucket.
     pub fn on(&self) -> bool {
+        self.dir_on() || self.bucket_on()
+    }
+
+    /// True when the archive writes into a local folder.
+    pub fn dir_on(&self) -> bool {
+        !self.dir.trim().is_empty()
+    }
+
+    /// True when the archive goes to a bucket.
+    pub fn bucket_on(&self) -> bool {
         !self.bucket.trim().is_empty()
+    }
+
+    /// The local folder with `~` expanded, or `None` when the archive has no folder.
+    pub fn dir_path(&self) -> Result<Option<PathBuf>> {
+        if !self.dir_on() {
+            return Ok(None);
+        }
+        expand_tilde(self.dir.trim()).map(Some)
+    }
+}
+
+/// The archive of the sessions of Claude Code of the person (section 16). Claude Code deletes
+/// its session files after some days; Vision copies each finished file to the archive, and
+/// writes a short summary of each session to the journal.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Sessions {
+    /// True turns the archive of the sessions on. It needs the archive.
+    pub enabled: bool,
+    /// The folder of the session files of Claude Code. `~` is allowed. Vision only reads it.
+    pub projects: String,
+    /// A session file counts as finished when it has not changed for this many hours.
+    pub quiet_hours: u32,
+    /// The wing of MemPalace for the summaries. The room is the project folder.
+    pub wing: String,
+}
+
+impl Default for Sessions {
+    fn default() -> Sessions {
+        Sessions {
+            enabled: false,
+            projects: "~/.claude/projects".into(),
+            quiet_hours: 24,
+            wing: "claude-sessions".into(),
+        }
+    }
+}
+
+impl Sessions {
+    /// The folder of the session files, with `~` expanded.
+    pub fn projects_path(&self) -> Result<PathBuf> {
+        expand_tilde(self.projects.trim())
     }
 }
 
@@ -560,6 +619,7 @@ impl Config {
         }
         self.check_journal()?;
         self.check_archive()?;
+        self.check_sessions()?;
         let (name, email) = (self.git.name.trim(), self.git.email.trim());
         if name.is_empty() != email.is_empty() {
             bail!("git.name and git.email go together: set both, or leave both empty");
@@ -643,6 +703,41 @@ impl Config {
             if !value.is_empty() && !safe_name(value) {
                 bail!("{key} must be a name of letters, digits, `-`, `_`, or `.`");
             }
+        }
+        let dir = archive.dir.trim();
+        if !dir.is_empty() {
+            let rooted = dir == "~" || dir.starts_with("~/") || dir.starts_with('/');
+            if !rooted || dir.chars().any(char::is_control) {
+                bail!("archive.dir must be an absolute path or a path that starts with ~/, such as \"~/vision-archive\"");
+            }
+            if !bucket.is_empty() {
+                bail!("archive.dir and archive.bucket go to different places: set one of them, and leave the other empty. To move a folder into a bucket, see `vision archive move-to-bucket`");
+            }
+        }
+        Ok(())
+    }
+
+    fn check_sessions(&self) -> Result<()> {
+        let sessions = &self.sessions;
+        if !safe_name(&sessions.wing) {
+            bail!("sessions.wing must be a name of letters, digits, `-`, `_`, or `.`, such as \"claude-sessions\"");
+        }
+        if sessions.wing == self.journal.wing {
+            bail!("sessions.wing and journal.wing are both \"{}\": give the summaries of the sessions a wing of their own, such as \"claude-sessions\"", sessions.wing);
+        }
+        if !(1..=8760).contains(&sessions.quiet_hours) {
+            bail!(
+                "sessions.quiet_hours is {}, but it must be from 1 to 8760 hours",
+                sessions.quiet_hours
+            );
+        }
+        let projects = sessions.projects.trim();
+        let rooted = projects == "~" || projects.starts_with("~/") || projects.starts_with('/');
+        if !rooted || projects.chars().any(char::is_control) {
+            bail!("sessions.projects must be an absolute path or a path that starts with ~/, such as \"~/.claude/projects\"");
+        }
+        if sessions.enabled && !self.archive.on() {
+            bail!("sessions.enabled needs the archive: set archive.dir (a local folder) or archive.bucket in config.toml");
         }
         Ok(())
     }
@@ -821,6 +916,47 @@ mod tests {
             assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
         }
         assert!(Config::parse("[archive]\nprefix = \"\"\n").is_ok());
+    }
+
+    #[test]
+    fn the_archive_takes_a_folder_or_a_bucket_and_the_sessions_need_one() {
+        let config = Config::default();
+        assert!(!config.archive.dir_on());
+        assert_eq!(config.archive.dir_path().unwrap(), None);
+        assert!(!config.sessions.enabled);
+        assert_eq!(config.sessions.projects, "~/.claude/projects");
+        assert_eq!(config.sessions.quiet_hours, 24);
+        assert_eq!(config.sessions.wing, "claude-sessions");
+        let local = Config::parse("[archive]\ndir = \"/srv/archive\"\n").unwrap();
+        assert!(local.archive.on() && local.archive.dir_on() && !local.archive.bucket_on());
+        assert_eq!(
+            local.archive.dir_path().unwrap(),
+            Some(PathBuf::from("/srv/archive"))
+        );
+        let on = Config::parse(
+            "[archive]\ndir = \"~/vision-archive\"\n[sessions]\nenabled = true\nquiet_hours = 2\n",
+        )
+        .unwrap();
+        assert!(on.sessions.enabled);
+        for (text, part) in [
+            (
+                "[archive]\ndir = \"/a\"\nbucket = \"my-archive\"\n",
+                "archive.dir and archive.bucket",
+            ),
+            ("[archive]\ndir = \"relative/x\"\n", "archive.dir"),
+            (
+                "[sessions]\nenabled = true\n",
+                "sessions.enabled needs the archive",
+            ),
+            ("[sessions]\nquiet_hours = 0\n", "sessions.quiet_hours"),
+            ("[sessions]\nwing = \"a b\"\n", "sessions.wing"),
+            ("[sessions]\nwing = \"vision\"\n", "a wing of their own"),
+            ("[sessions]\nprojects = \"x\"\n", "sessions.projects"),
+            ("[sessions]\nenable = true\n", "enable"),
+        ] {
+            let err = Config::parse(text).unwrap_err();
+            assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
+        }
     }
 
     #[test]

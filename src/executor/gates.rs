@@ -297,20 +297,77 @@ const FORMS: &[Form] = &[
 ];
 
 fn has_form(line: &str, form: &Form) -> bool {
-    let bytes = line.as_bytes();
-    for (start, _) in line.match_indices(form.prefix) {
-        if start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
+    form_spans(line, form).next().is_some()
+}
+
+/// The byte spans of a text that have the form: from the prefix to the end of the body. The
+/// body holds only ASCII, so each span ends at a character boundary.
+fn form_spans<'a>(text: &'a str, form: &'a Form) -> impl Iterator<Item = (usize, usize)> + 'a {
+    let bytes = text.as_bytes();
+    text.match_indices(form.prefix)
+        .filter_map(move |(start, _)| {
+            if start > 0 && bytes[start - 1].is_ascii_alphanumeric() {
+                return None;
+            }
+            let body = &bytes[start + form.prefix.len()..];
+            let len = body.iter().take_while(|b| (form.class)(**b)).count();
+            let fits = len >= form.min && form.max.is_none_or(|max| len == max);
+            let ends = body.get(len).is_none_or(|b| !b.is_ascii_alphanumeric());
+            (fits && ends).then_some((start, start + form.prefix.len() + len))
+        })
+}
+
+/// The text with each part that [`token_form`] detects replaced by its kind in brackets, such
+/// as `[a personal access token]`. A private key goes from its `-----BEGIN` line to its
+/// `-----END` line, or to the end of the text when it has no end line.
+pub fn mask_token_forms(text: &str) -> String {
+    let mut text = mask_private_keys(text);
+    for form in FORMS {
+        let spans: Vec<(usize, usize)> = form_spans(&text, form).collect();
+        if spans.is_empty() {
             continue;
         }
-        let body = &bytes[start + form.prefix.len()..];
-        let len = body.iter().take_while(|b| (form.class)(**b)).count();
-        let fits = len >= form.min && form.max.is_none_or(|max| len == max);
-        let ends = body.get(len).is_none_or(|b| !b.is_ascii_alphanumeric());
-        if fits && ends {
-            return true;
+        let mut out = String::with_capacity(text.len());
+        let mut at = 0;
+        for (start, end) in spans {
+            out.push_str(&text[at..start]);
+            out.push_str(&format!("[{}]", form.what));
+            at = end;
+        }
+        out.push_str(&text[at..]);
+        text = out;
+    }
+    text
+}
+
+fn mask_private_keys(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("-----BEGIN") {
+        let line_end = rest[start..].find('\n').map_or(rest.len(), |n| start + n);
+        if !rest[start..line_end].contains("PRIVATE KEY") {
+            out.push_str(&rest[..line_end]);
+            rest = &rest[line_end..];
+            continue;
+        }
+        out.push_str(&rest[..start]);
+        out.push_str("[a private key]");
+        let after = &rest[start..];
+        let end = after.find("-----END").map(|at| {
+            let tail = &after[at + "-----END".len()..];
+            // The end line closes with five dashes after the words PRIVATE KEY.
+            let close = tail.find("-----").map_or(tail.len(), |n| n + "-----".len());
+            at + "-----END".len() + close
+        });
+        match end {
+            Some(end) => rest = &after[end..],
+            None => {
+                rest = "";
+            }
         }
     }
-    false
+    out.push_str(rest);
+    out
 }
 
 /// Refuses a diff with more changed lines than `max`.
@@ -542,6 +599,27 @@ Binary files a/logo.png and b/logo.png differ
         }];
         let err = secrets_gate(&[], &texts, &[("FORGE_TOKEN", "s3cr3t-value")]).unwrap_err();
         assert!(err.contains("FORGE_TOKEN in args.body line 2"), "{err}");
+    }
+
+    #[test]
+    fn token_forms_and_private_keys_are_masked_and_other_text_stays() {
+        let personal = format!("{}{}", "ghp_", "a".repeat(36));
+        let access = format!("{}{}", "AKIA", "ABCDEFGHIJKLMNOP");
+        let text = format!("use {personal} and {access}, then {personal}.\nghp_short stays");
+        assert_eq!(
+            mask_token_forms(&text),
+            "use [a personal access token] and [an access key id], then [a personal access token].\nghp_short stays"
+        );
+        let key = format!(
+            "before\n{}\nAAAAB3Nz\nC1yc2E=\n{}\nafter",
+            "-----BEGIN OPENSSH PRIVATE KEY-----", "-----END OPENSSH PRIVATE KEY-----"
+        );
+        assert_eq!(mask_token_forms(&key), "before\n[a private key]\nafter");
+        let open = format!("x {}\nAAAA", "-----BEGIN RSA PRIVATE KEY-----");
+        assert_eq!(mask_token_forms(&open), "x [a private key]");
+        let public = "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----";
+        assert_eq!(mask_token_forms(public), public);
+        assert_eq!(mask_token_forms("plain"), "plain");
     }
 
     #[test]

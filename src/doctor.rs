@@ -100,7 +100,53 @@ pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
     checks.push(check_adapter(ctx));
     checks.push(check_journal(ctx, ledger.as_ref()));
     checks.push(check_archive(ctx));
+    checks.push(check_sessions(ctx, ledger.as_ref()));
     (checks, ledger)
+}
+
+/// The archive of the sessions of Claude Code: off, or what the archive holds and what waits.
+/// The test reads the folder of the sessions and the ledger, and writes nothing.
+fn check_sessions(ctx: &Ctx, ledger: Option<&Ledger>) -> Check {
+    let config = match ctx.config() {
+        Ok(config) => config,
+        Err(e) => return Check::new("sessions", Level::Fail, format!("{e:#}")),
+    };
+    if !config.sessions.enabled {
+        return Check::new("sessions", Level::Ok, "off (sessions.enabled is false)");
+    }
+    let Some(ledger) = ledger else {
+        return Check::new("sessions", Level::Fail, "the ledger does not open");
+    };
+    let projects = match config.sessions.projects_path() {
+        Ok(projects) => projects,
+        Err(e) => return Check::new("sessions", Level::Fail, format!("{e:#}")),
+    };
+    match crate::journal::sessions::health(ctx, ledger) {
+        Ok(health) => {
+            let mut detail = format!(
+                "{} file(s) of {} session(s) archived ({} gzip); {} wait, {} of them still change; {} summar(y/ies)",
+                health.archived,
+                health.sessions,
+                crate::util::fs::human_bytes(health.archive_bytes),
+                health.waiting,
+                health.changing,
+                health.summaries,
+            );
+            if config.journal.index_on() {
+                detail.push_str(&format!(", {} wait for the index", health.to_index));
+            }
+            if projects.is_dir() {
+                Check::new("sessions", Level::Ok, detail)
+            } else {
+                Check::new(
+                    "sessions",
+                    Level::Warn,
+                    format!("{detail}. The folder {} does not exist", projects.display()),
+                )
+            }
+        }
+        Err(e) => Check::new("sessions", Level::Fail, format!("{e:#}")),
+    }
 }
 
 /// The journal: the count of its entries, and whether MemPalace answers. The test writes
@@ -150,14 +196,19 @@ fn check_journal(ctx: &Ctx, ledger: Option<&Ledger>) -> Check {
     }
 }
 
-/// The archive: off, or the bucket and whether the aws program answers for its prefix.
+/// The archive: off, the local folder and its size, or the bucket and whether the aws program
+/// answers for its prefix.
 fn check_archive(ctx: &Ctx) -> Check {
     let archive = match ctx.config() {
         Ok(config) => &config.archive,
         Err(e) => return Check::new("archive", Level::Fail, format!("{e:#}")),
     };
     if !archive.on() {
-        return Check::new("archive", Level::Ok, "off (archive.bucket is empty)");
+        return Check::new(
+            "archive",
+            Level::Ok,
+            "off (archive.dir and archive.bucket are empty)",
+        );
     }
     match crate::journal::archive::Store::new(archive).and_then(|store| store.probe()) {
         Ok(text) => Check::new("archive", Level::Ok, text),

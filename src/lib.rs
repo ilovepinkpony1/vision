@@ -85,6 +85,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Executor(command) => executor::run(ctx, command),
         Command::Journal(command) => journal::run(ctx, command),
         Command::Archive(args) => journal::run_archive(ctx, args),
+        Command::Sessions(command) => journal::sessions::run(ctx, command),
         Command::Install { print } => install::install(ctx, print),
         Command::Uninstall { print } => install::uninstall(ctx, print),
         Command::AdapterScript { name, script } => adapter_script(&name, &script),

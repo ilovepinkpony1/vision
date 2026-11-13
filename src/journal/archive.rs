@@ -1,13 +1,16 @@
-//! The archive in an object store (section 16): S3, or another service with the same API.
-//! Vision runs the `aws` program as a child process with the environment of the tick, so
-//! the credentials stay with that program. No session ever gets them.
+//! The archive (section 16): a local folder, or an object store, S3 or another service with
+//! the same API. For a store, Vision runs the `aws` program as a child process with the
+//! environment of the tick, so the credentials stay with that program. No session ever gets
+//! them. A local folder holds the same keys as paths under it, so that a change of the
+//! configuration and `vision archive move-to-bucket` move the archive into a bucket later.
 //!
 //! - A turn folder goes up as `<prefix><KEY>/<turn-id>.tar.gz` (tar with gzip, as child
 //!   processes) when its ticket ended (done or stopped), or when the turn ended more than one
 //!   day ago. Each journal entry goes up as `<prefix>journal/<KEY>/<turn-id>.md`, and again
 //!   after each new text.
-//! - After each upload, `aws s3api head-object` reads the size in the store. Only an equal size
-//!   marks the turn archived.
+//! - After each upload, `aws s3api head-object` (or the file in the folder) gives the size in
+//!   the store. Only an equal size marks the turn archived. A copy into the folder goes to a
+//!   temporary name first and then takes the name of its key.
 //! - A local turn folder is deleted only when it is archived, `keep_days` days after the
 //!   confirmation, and only when its ticket no longer moves, so that the pipeline never misses a
 //!   folder that it reads. The journal and the ledger are never deleted.
@@ -48,25 +51,53 @@ const LOOK_TIMEOUT: Duration = Duration::from_secs(60);
 /// The program of the store.
 pub const PROGRAM: &str = "aws";
 
-/// The store of `[archive]`, through the `aws` program.
+/// The message when the archive is off.
+pub const OFF: &str =
+    "the archive is off. Set archive.dir (a local folder) or archive.bucket in config.toml to turn it on";
+
+/// Where a store keeps its objects.
+#[derive(Clone, Debug)]
+enum Place {
+    /// A bucket, through the `aws` program.
+    Bucket { program: PathBuf },
+    /// A local folder: each key is a path under it.
+    Dir { root: PathBuf },
+}
+
+/// The store of `[archive]`: a local folder, or a bucket through the `aws` program.
 #[derive(Clone, Debug)]
 pub struct Store {
     config: Archive,
-    program: PathBuf,
+    place: Place,
 }
 
 impl Store {
-    /// The store of the configuration. Fails when the archive is off or `aws` is not found.
+    /// The store of the configuration. Fails when the archive is off, or when it uses a bucket
+    /// and `aws` is not found.
     pub fn new(config: &Archive) -> Result<Store> {
         if !config.on() {
-            bail!("the archive is off. Set archive.bucket in config.toml to turn it on");
+            bail!("{OFF}");
+        }
+        if let Some(root) = config.dir_path()? {
+            return Ok(Store {
+                config: config.clone(),
+                place: Place::Dir { root },
+            });
+        }
+        Store::bucket(config)
+    }
+
+    /// The store of the bucket of the configuration, also for `vision archive move-to-bucket`.
+    pub fn bucket(config: &Archive) -> Result<Store> {
+        if !config.bucket_on() {
+            bail!("archive.bucket is empty. Name the bucket in config.toml first");
         }
         let Some(program) = crate::util::process::find_program(PROGRAM) else {
             bail!("the aws program is not found in PATH. Install the AWS CLI, or turn the archive off with archive.bucket = \"\"");
         };
         Ok(Store {
             config: config.clone(),
-            program,
+            place: Place::Bucket { program },
         })
     }
 
@@ -86,17 +117,50 @@ impl Store {
         out
     }
 
-    fn bucket(&self) -> &str {
+    fn bucket_name(&self) -> &str {
         self.config.bucket.trim()
     }
 
-    /// The address of a key, such as `s3://bucket/vision/DEMO-12/T1.tar.gz`.
+    /// The local folder of the store, or `None` for a bucket.
+    pub fn dir(&self) -> Option<&Path> {
+        match &self.place {
+            Place::Dir { root } => Some(root),
+            Place::Bucket { .. } => None,
+        }
+    }
+
+    /// The address of a key, such as `s3://bucket/vision/DEMO-12/T1.tar.gz`, or its path in
+    /// the local folder.
     pub fn url(&self, key: &str) -> String {
-        format!("s3://{}/{key}", self.bucket())
+        match &self.place {
+            Place::Bucket { .. } => format!("s3://{}/{key}", self.bucket_name()),
+            Place::Dir { root } => root.join(key).display().to_string(),
+        }
+    }
+
+    /// The path of a key in the local folder. A key part that is empty, `.`, or `..` is refused,
+    /// so that no key leaves the folder.
+    fn local_path(root: &Path, key: &str) -> Result<PathBuf> {
+        let mut path = root.to_path_buf();
+        for part in key.split('/') {
+            if part.is_empty() || part == "." || part == ".." || part.contains(['\0', '\\']) {
+                bail!("the key `{key}` is not a safe path in the archive folder");
+            }
+            path.push(part);
+        }
+        Ok(path)
+    }
+
+    fn program(&self) -> Result<&Path> {
+        match &self.place {
+            Place::Bucket { program } => Ok(program),
+            Place::Dir { .. } => bail!("the archive is a local folder, so it runs no aws program"),
+        }
     }
 
     fn call(&self, args: Vec<String>, timeout: Duration) -> Result<proc::Output> {
-        let mut command = Command::new(&self.program);
+        let program = self.program()?;
+        let mut command = Command::new(program);
         command.args(&args).args(self.options());
         let output = proc::run(
             command,
@@ -107,7 +171,7 @@ impl Store {
                 merge: false,
             },
         )
-        .with_context(|| format!("could not run {}", self.program.display()))?;
+        .with_context(|| format!("could not run {}", program.display()))?;
         if output.timed_out {
             bail!(
                 "aws {} took more than {} s",
@@ -131,8 +195,16 @@ impl Store {
         Ok(output)
     }
 
-    /// Copies a local file to a key.
+    /// Copies a local file to a key. In a local folder, the copy goes to a temporary name
+    /// first and then takes the name of the key.
     pub fn upload(&self, file: &Path, key: &str) -> Result<()> {
+        if let Place::Dir { root } = &self.place {
+            let path = Store::local_path(root, key)?;
+            if let Some(parent) = path.parent() {
+                crate::util::fs::ensure_dir(parent)?;
+            }
+            return crate::util::fs::atomic_copy(file, &path).map(|_| ());
+        }
         self.checked(
             vec![
                 "s3".into(),
@@ -148,6 +220,16 @@ impl Store {
 
     /// Copies a key to a local file.
     pub fn download(&self, key: &str, file: &Path) -> Result<()> {
+        if let Place::Dir { root } = &self.place {
+            let path = Store::local_path(root, key)?;
+            if !path.is_file() {
+                bail!("the archive folder has no {}", path.display());
+            }
+            std::fs::copy(&path, file).with_context(|| {
+                format!("could not copy {} to {}", path.display(), file.display())
+            })?;
+            return Ok(());
+        }
         self.checked(
             vec![
                 "s3".into(),
@@ -163,12 +245,18 @@ impl Store {
 
     /// The size of a key in the store.
     pub fn size(&self, key: &str) -> Result<u64> {
+        if let Place::Dir { root } = &self.place {
+            let path = Store::local_path(root, key)?;
+            return Ok(std::fs::metadata(&path)
+                .with_context(|| format!("could not read {}", path.display()))?
+                .len());
+        }
         let output = self.checked(
             vec![
                 "s3api".into(),
                 "head-object".into(),
                 "--bucket".into(),
-                self.bucket().to_string(),
+                self.bucket_name().to_string(),
                 "--key".into(),
                 key.to_string(),
                 "--output".into(),
@@ -200,8 +288,12 @@ impl Store {
         Ok(local)
     }
 
-    /// One look at the prefix, for `vision doctor`. An empty prefix answers too.
+    /// One look at the prefix, for `vision doctor`. An empty prefix answers too. For a local
+    /// folder: its path and its size, with no write.
     pub fn probe(&self) -> Result<String> {
+        if let Place::Dir { root } = &self.place {
+            return probe_dir(root);
+        }
         let prefix = self.url(&self.config.prefix);
         let output = self.call(
             vec![
@@ -226,6 +318,161 @@ impl Store {
                 cut(stderr.trim(), 300)
             ),
         }
+    }
+}
+
+/// Where the archive of the configuration is, for a person: `s3://bucket/prefix`, or the
+/// folder.
+pub fn place(config: &Archive) -> String {
+    match config.dir_path() {
+        Ok(Some(root)) => format!("the folder {}", root.join(&config.prefix).display()),
+        Ok(None) => format!("s3://{}/{}", config.bucket.trim(), config.prefix),
+        Err(e) => format!("archive.dir ({e:#})"),
+    }
+}
+
+/// The files and the bytes under a folder, with no link followed. A missing folder holds
+/// nothing.
+pub fn folder_size(root: &Path) -> (u64, u64) {
+    let (mut files, mut bytes) = (0, 0);
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                files += 1;
+                bytes += meta.len();
+            }
+        }
+    }
+    (files, bytes)
+}
+
+/// The line of `vision doctor` for a local folder: its path and its size. A folder that does
+/// not exist yet is fine: the first run makes it.
+fn probe_dir(root: &Path) -> Result<String> {
+    if !root.exists() {
+        return Ok(format!(
+            "the folder {} does not exist yet; the first run makes it",
+            root.display()
+        ));
+    }
+    if !root.is_dir() {
+        bail!(
+            "archive.dir names {}, which is not a folder",
+            root.display()
+        );
+    }
+    let c_path = std::ffi::CString::new(root.as_os_str().as_encoded_bytes())
+        .context("the path of the archive folder has a NUL byte")?;
+    // SAFETY: access only reads the path and the permissions; it changes nothing.
+    if unsafe { libc::access(c_path.as_ptr(), libc::W_OK) } != 0 {
+        bail!("the folder {} is not writable", root.display());
+    }
+    let (files, bytes) = folder_size(root);
+    Ok(format!(
+        "the folder {} holds {files} file(s), {}",
+        root.display(),
+        crate::util::fs::human_bytes(bytes)
+    ))
+}
+
+/// One file of an old archive folder: its key and its size.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct FolderFile {
+    pub key: String,
+    #[serde(skip)]
+    pub path: PathBuf,
+    pub bytes: u64,
+}
+
+/// Each file under an archive folder, by key: its path under the folder, with `/`. A name that
+/// starts with `.` is left out: a copy that is not done yet, or a file of the system. A link is
+/// never followed.
+pub fn folder_files(root: &Path) -> Result<Vec<FolderFile>> {
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), String::new())];
+    while let Some((dir, prefix)) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).with_context(|| format!("could not read {}", dir.display()))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(meta) = entry.path().symlink_metadata() else {
+                continue;
+            };
+            let key = format!("{prefix}{name}");
+            if meta.is_dir() {
+                stack.push((entry.path(), format!("{key}/")));
+            } else if meta.is_file() {
+                out.push(FolderFile {
+                    key,
+                    path: entry.path(),
+                    bytes: meta.len(),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(out)
+}
+
+/// What a move of a folder into the bucket did.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Moved {
+    /// The files that the bucket now holds and that left the folder.
+    pub moved: usize,
+    pub bytes: u64,
+    pub failed: Vec<String>,
+}
+
+/// Uploads each file of an old archive folder to the same key in the bucket, confirms its
+/// size, and only then deletes the local file. Empty folders that stay go too, but never the
+/// folder itself.
+pub fn move_to_bucket(store: &Store, root: &Path, files: &[FolderFile]) -> Moved {
+    let mut report = Moved::default();
+    for file in files {
+        match store.upload_checked(&file.path, &file.key) {
+            Ok(bytes) => match std::fs::remove_file(&file.path) {
+                Ok(()) => {
+                    report.moved += 1;
+                    report.bytes += bytes;
+                }
+                Err(e) => report.failed.push(format!(
+                    "{}: the bucket holds it, but the local file could not be deleted: {e}",
+                    file.key
+                )),
+            },
+            Err(e) => report.failed.push(format!("{}: {e:#}", file.key)),
+        }
+    }
+    remove_empty_dirs(root, root);
+    report
+}
+
+/// Removes each empty folder under `dir`, deepest first, but never `root`.
+fn remove_empty_dirs(root: &Path, dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+            remove_empty_dirs(root, &path);
+        }
+    }
+    if dir != root {
+        // Only an empty folder goes: remove_dir refuses any other.
+        let _ = std::fs::remove_dir(dir);
     }
 }
 
@@ -468,11 +715,12 @@ pub fn delete_due(ledger: &Ledger, plan: &Plan, report: &mut Report) -> Result<(
     Ok(())
 }
 
-/// The tick hook: with the archive on, at most once an hour, it uploads what waits. It deletes
-/// nothing: `vision archive` does that.
+/// The tick hook: with the archive on, at most once an hour, it uploads what waits, and then
+/// runs the archive of the sessions of Claude Code when it is on. It deletes nothing: `vision
+/// archive` does that.
 pub fn tick(ctx: &Ctx, ledger: &Ledger, now: OffsetDateTime) -> Result<()> {
-    let config = &ctx.config()?.archive;
-    if !config.on() {
+    let config = ctx.config()?;
+    if !config.archive.on() {
         return Ok(());
     }
     if let Some(last) = ledger.last_event_at(RUN_EVENT)? {
@@ -482,6 +730,20 @@ pub fn tick(ctx: &Ctx, ledger: &Ledger, now: OffsetDateTime) -> Result<()> {
     }
     // The event comes first, so that a run that fails waits an hour too.
     ledger.add_event(&Event::now("tick", RUN_EVENT).detail(json!({"by": "tick"})))?;
+    let turns = upload_turns(ctx, ledger, now);
+    if config.sessions.enabled {
+        if let Err(e) = super::sessions::tick(ctx, ledger) {
+            ctx.log(&format!(
+                "sessions: the archive waits for the next run: {e:#}"
+            ));
+        }
+    }
+    turns
+}
+
+/// The upload of the turn folders and the entries of one run of the tick.
+fn upload_turns(ctx: &Ctx, ledger: &Ledger, now: OffsetDateTime) -> Result<()> {
+    let config = &ctx.config()?.archive;
     let plan = plan(ctx, ledger, now)?;
     if plan.uploads.is_empty() && plan.entries.is_empty() {
         return Ok(());
