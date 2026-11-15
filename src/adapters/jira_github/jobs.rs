@@ -36,10 +36,11 @@ const USER_AGENT: &str = "vision-jira-github-adapter";
 
 type Job = fn(&Config, &Map<String, Value>) -> Res<Value>;
 
-const JOBS: [(&str, Job); 5] = [
+const JOBS: [(&str, Job); 6] = [
     ("app-start", app_start),
     ("ci-log", ci_log),
     ("comments", comments),
+    ("precheck", super::precheck::precheck),
     ("proof", proof),
     ("second-review", second_review),
 ];
@@ -73,7 +74,7 @@ fn unexpected(e: std::io::Error) -> Error {
 }
 
 /// The last `keep` characters of a text.
-fn tail_chars(text: &str, keep: usize) -> &str {
+pub(super) fn tail_chars(text: &str, keep: usize) -> &str {
     let count = text.chars().count();
     if count <= keep {
         return text;
@@ -183,7 +184,10 @@ fn shell(command: &str, args: &[String]) -> Vec<String> {
     argv
 }
 
-fn need_commits(call: &Map<String, Value>, what: &str) -> Res<(PathBuf, String, String)> {
+pub(super) fn need_commits(
+    call: &Map<String, Value>,
+    what: &str,
+) -> Res<(PathBuf, String, String)> {
     let clone = match call.get("clone") {
         Some(Value::String(c)) if Path::new(c).is_dir() => PathBuf::from(c),
         _ => return fail(format!("{what} needs the clone of the ticket")),
@@ -323,7 +327,7 @@ fn globs_of(value: Option<&Value>) -> Res<Vec<Glob>> {
 
 /// `test_canary`: one test file, or a list of test files, that exist on the base commit and
 /// pass there. An empty list when the key is missing.
-fn canaries_of(value: Option<&Value>) -> Res<Vec<String>> {
+pub(super) fn canaries_of(value: Option<&Value>) -> Res<Vec<String>> {
     let items: Vec<&str> = match value {
         None => return Ok(Vec::new()),
         Some(Value::String(s)) => vec![s.as_str()],
@@ -461,7 +465,7 @@ pub fn plan_green(text: Option<&str>) -> (bool, BTreeSet<String>) {
 
 /// The real path of a path whose end can be missing: the links of the part that exists are
 /// followed, and the rest is read as it is.
-fn real_path(path: &Path) -> PathBuf {
+pub(super) fn real_path(path: &Path) -> PathBuf {
     let mut existing = path.to_path_buf();
     let mut rest: Vec<std::ffi::OsString> = Vec::new();
     loop {
@@ -490,7 +494,11 @@ fn real_path(path: &Path) -> PathBuf {
 
 /// Runs `body` with a temporary worktree of the clone at the commit. The worktree is always
 /// removed.
-fn with_worktree<T>(clone: &Path, commit: &str, body: impl FnOnce(&Path) -> Res<T>) -> Res<T> {
+pub(super) fn with_worktree<T>(
+    clone: &Path,
+    commit: &str,
+    body: impl FnOnce(&Path) -> Res<T>,
+) -> Res<T> {
     let tmp = TempDir::new("vision-proof-").map_err(unexpected)?;
     let path = tmp.path.join("base");
     let path_text = path.display().to_string();
@@ -934,7 +942,7 @@ fn keep_end(text: &str, keep: usize) -> String {
 
 /// The last `count` lines of a text that are not empty, each one with no control character and
 /// cut to 300 characters.
-fn last_lines(text: &str, count: usize) -> String {
+pub(super) fn last_lines(text: &str, count: usize) -> String {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     lines[lines.len().saturating_sub(count)..]
         .iter()
@@ -1174,7 +1182,7 @@ pub fn ci_log_text(
 }
 
 /// Removes the color codes of a terminal from a text.
-fn strip_ansi(text: &str) -> String {
+pub(super) fn strip_ansi(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;

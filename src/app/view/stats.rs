@@ -156,12 +156,29 @@ pub fn draw(app: &App, c: &mut Canvas) {
             x = c.put(x, ya + 2, &money(*cost), ink(T.dim)) + 4;
         }
     }
-    c.put(
-        2,
-        c.h - 4,
-        "The measures come from the ledger. Vision keeps them from the first ticket.",
-        ink(T.faint),
-    );
+    // The escape check, once a review of a review bot was checked.
+    if data.escapes.checked_prs > 0 {
+        let x = c.put(2, c.h - 4, "REVIEW ESCAPES  ", ink(T.dim).bold());
+        let line = crate::escapes::measures_line(&data.escapes, &data.counted);
+        let color = if data.escapes.escapes > 0 {
+            T.warn
+        } else {
+            T.ok
+        };
+        c.put(
+            x,
+            c.h - 4,
+            &cut(&line, (c.w - x - 2).max(10) as usize),
+            ink(color),
+        );
+    } else {
+        c.put(
+            2,
+            c.h - 4,
+            "The measures come from the ledger. Vision keeps them from the first ticket.",
+            ink(T.faint),
+        );
+    }
     footer(c, week);
 }
 

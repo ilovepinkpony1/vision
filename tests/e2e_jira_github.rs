@@ -697,7 +697,13 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .collect();
     assert_eq!(
         requests,
-        ["ci.log", "github.pr", "jira.issue", "jira.search"]
+        [
+            "ci.log",
+            "github.pr",
+            "jira.issue",
+            "jira.search",
+            "review.read"
+        ]
     );
     assert!(review_facts["requests"][0]["about"]
         .as_str()

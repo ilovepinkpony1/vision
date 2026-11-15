@@ -454,6 +454,12 @@ about = "The issues of a JQL query as jira-search.json: key, title, status, type
 read = true
 about = "The pull request as pr-<N>.json: its facts, review state, reviews, and comment threads. args: number (default: the pull request of the ticket)"
 
+# review.read gives the escape check of the core (design section 11.6) the first review of a
+# login after a time, with its inline comments. [escapes] verb of config.toml names it.
+[verbs."review.read"]
+read = true
+about = "The first review of a login after a time on the pull request, with its inline comments, as review.json. args: reviewer, after (an RFC 3339 time)"
+
 [verbs."ci.log"]
 read = true
 timeout = 180
@@ -484,6 +490,54 @@ about = "The end of the log of each failed job of a CI run as ci-log-<run>.txt. 
 # At the time limit, the executor stops the command. A step names the job as any other job:
 # before = ["job:regression"], or "job:regression" in expects. A command with the name of a job
 # above, such as proof, replaces that job.
+
+# The job precheck runs the lint, the specs, and the migrations of the project on this machine
+# before a push, so that a failure shows here and not in CI. A step names it in expects before
+# git.push runs: expects = [..., { job = "precheck" }]. Its table holds the commands; each key is
+# optional:
+#
+#   [jobs.precheck]
+#   lint = [                             # each lint, with the globs of its files
+#     { run = "bundle exec rubocop --format emacs {files}", globs = ["**/*.rb", "**/*.rake", "Gemfile"] },
+#     { run = "npx eslint --format unix {files}", globs = ["**/*.{js,jsx,ts,tsx}"] },
+#   ]
+#   specs = "bin/rspec {files}"          # {files} is the spec files to run
+#   specs_map = "rails"                  # "rails" or "": only the changed spec files
+#   jest = { run = "npx jest --findRelatedTests {files}", globs = ["**/*.{js,jsx,ts,tsx}"] }
+#   migrations = ["bin/rails db:migrate:up VERSION={version}",
+#                 "bin/rails db:migrate:down VERSION={version}",
+#                 "bin/rails db:migrate:up VERSION={version}"]
+#   migrations_env = { RAILS_ENV = "test" }
+#   cap = "10m"                          # the cap: cap + cap_per_file x the checked files,
+#   cap_per_file = "15s"                 # at most cap_max, for the lint, the specs, and jest
+#   cap_max = "30m"
+#
+# {files} is the changed files of the branch against its base, deleted files left out, filtered
+# by the globs of the command, each one quoted for the shell. A command whose globs match no
+# changed file does not run. {base} is the base commit, and {version} the version of a migration.
+# A lint can also be a plain text, for a lint of each changed file. Each command runs with sh -c in
+# the clone, with the environment of a work session ([claude] env and env_pass of config.toml),
+# and never with a secret. The executor refuses a command that opens a shell or a console on a
+# remote machine or a pod, such as kubectl exec, or that changes the schema of a live database,
+# such as gh-ost.
+#
+# A lint offense counts only on a changed line, in the form path:line[:column]: message (rubocop
+# --format emacs, eslint --format unix). A lint that fails and names no offense in that form is
+# broken, and the job fails with the end of its standard error. With specs_map = "rails", a
+# changed file app/<dir>/<path>.rb runs spec/<dir>/<path>_spec.rb, and lib/<path>.rb runs
+# spec/lib/<path>_spec.rb, when that file exists. A spec that fails at the head and whose file the
+# branch did not change runs again in a worktree of the base commit, after setup_command and the
+# spec files of test_canary. A spec that fails there too is not ours: the job passes and names it.
+# Each added file under a folder db/<...migrate...>/ whose name starts with digits (its version),
+# outside spec/ and test/, runs the migrations commands in order, with migrations_env. Afterwards,
+# each tracked file that they changed, such as db/schema.rb, goes back to the state of the branch.
+#
+# When the cap stops the specs or jest, the job passes with the note "unfinished: CI is their
+# only run". When the cap stops the lint, the job fails as a hang. The red specs on the base and
+# the migrations always run to their end, each command bounded by cap. The timeout of the job is
+# cap_max + 6 x cap when the table has none. The job writes precheck.md: what ran, the offenses
+# on changed lines, the red specs and which are not ours, the migrations, the cap, and what did
+# not finish. A turn whose end fact the job failed gets precheck.md in its facts file.
 
 [jobs.proof]
 timeout = 3600

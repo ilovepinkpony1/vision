@@ -417,16 +417,30 @@ fn notices_text(notices: &[NoticeRow]) -> String {
         n => format!("\n{n} notices wait until you read them. A notice never stops a ticket:\n"),
     };
     for notice in notices {
-        let (count, verb) = match notice.issues.len() {
-            1 => ("1 issue".to_string(), "does"),
-            n => (format!("{n} issues"), "do"),
+        // A notice of the gate cr names the findings that keep coming back after their fix.
+        let what = if notice.gate == crate::pipeline::rounds::CR_SOURCE {
+            let (count, verb) = match notice.issues.len() {
+                1 => ("1 finding".to_string(), "keeps"),
+                n => (format!("{n} findings"), "keep"),
+            };
+            format!(
+                "{count} of {} of the step {} {verb} coming back after the fix",
+                notice.doc, notice.step
+            )
+        } else {
+            let (count, verb) = match notice.issues.len() {
+                1 => ("1 issue".to_string(), "does"),
+                n => (format!("{n} issues"), "do"),
+            };
+            format!(
+                "the gate {} of the step {} passed with {count} that {verb} not block",
+                notice.gate, notice.step
+            )
         };
         out.push_str(&format!(
-            "  {}  {}  the gate {} of the step {} passed with {count} that {verb} not block (turn {})\n",
+            "  {}  {}  {what} (turn {})\n",
             notice.name(),
             notice.ticket,
-            notice.gate,
-            notice.step,
             notice.turn
         ));
         for issue in &notice.issues {

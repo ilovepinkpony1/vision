@@ -29,8 +29,10 @@ pub const NONE: &str = "none";
 /// The turns that one visit of a turn step gets for failed end facts when `rounds` is missing:
 /// the first turn and one resume.
 pub const DEFAULT_ROUNDS: u32 = 2;
-/// The most turns that `rounds` can give one visit.
+/// The most turns that `rounds` can give one visit, with `extra_rounds`.
 pub const MAX_ROUNDS: u32 = 20;
+/// The most turns that `extra_rounds` can add to one visit.
+pub const MAX_EXTRA_ROUNDS: u32 = 10;
 
 /// A parsed and tested `adapter.toml`.
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +79,10 @@ pub struct Step {
     /// `rounds` of a turn step: the turns that one visit gets for failed end facts. After that
     /// many failed turns, the ticket gets the flag needs-you. [`DEFAULT_ROUNDS`] when missing.
     pub rounds: u32,
+    /// `extra_rounds` of a turn step with a gate: after `rounds` failed turns of a visit, one
+    /// more turn each time, up to this many, while the loop converges: the failing items of
+    /// the gate are fewer than in the turn before, and none is critical. 0 when missing.
+    pub extra_rounds: u32,
     /// `fail` of a turn step: the end fact of a gate (such as `gate:qa:qa.md`) -> the step that
     /// the ticket goes to at once when that gate fails on a blocking item of its document.
     pub fail: BTreeMap<String, String>,
@@ -404,6 +410,10 @@ pub struct Job {
     pub doc: Option<String>,
     /// `env`: the environment of the call. Only a job with `command` can have `full`.
     pub env: JobEnv,
+    /// The keys of the table of a job that a built-in adapter knows by its name, such as the
+    /// precheck of jira-github, as JSON. The call of `bin/job` gets them in `table`. Empty for
+    /// each other job.
+    pub settings: Map<String, Value>,
 }
 
 /// The environment of the call of a job.
@@ -416,6 +426,10 @@ pub enum JobEnv {
     /// person. A variable whose value is a secret of `[secrets]` stays out, unless the job has
     /// `secrets = true`. A turn never gets it.
     Full,
+    /// The environment of a work session (section 7.3): the names of its allow list,
+    /// `claude.env_pass`, and the values of `claude.env`, with no secret. A job that runs the
+    /// commands of the project as a session does, such as the precheck, gets it.
+    Session,
 }
 
 impl JobEnv {
@@ -423,7 +437,15 @@ impl JobEnv {
         match self {
             JobEnv::Plain => "plain",
             JobEnv::Full => "full",
+            JobEnv::Session => "session",
         }
+    }
+
+    /// Reads `plain`, `session`, or `full`.
+    pub fn parse(text: &str) -> Option<JobEnv> {
+        [JobEnv::Plain, JobEnv::Session, JobEnv::Full]
+            .into_iter()
+            .find(|e| e.as_str() == text)
     }
 }
 
@@ -625,7 +647,7 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
         None => (dir.to_path_buf(), None),
     };
     let verbs = parse_verbs(table.remove("verbs"), problems);
-    let jobs = parse_jobs(table.remove("jobs"), problems);
+    let jobs = parse_jobs(table.remove("jobs"), builtin.as_deref(), problems);
     let envs = parse_envs(table.remove("envs"), problems);
     let steps = parse_steps(table.remove("step"), problems);
     for key in table.keys() {
@@ -783,7 +805,11 @@ fn parse_mode(text: &str) -> Option<Mode> {
     }
 }
 
-fn parse_jobs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<String, Job> {
+fn parse_jobs(
+    value: Option<toml::Value>,
+    builtin: Option<&str>,
+    problems: &mut Problems,
+) -> BTreeMap<String, Job> {
     let mut jobs = BTreeMap::new();
     let Some(value) = value else {
         return jobs;
@@ -833,25 +859,80 @@ fn parse_jobs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<S
                 );
             }
         }
-        let env = match string(fields.remove("env"), &format!("{at} env"), problems).as_deref() {
-            None | Some("plain") => JobEnv::Plain,
-            Some("full") => JobEnv::Full,
-            Some(other) => {
-                problems.add(&at, format!("env `{other}` is not plain or full"));
-                JobEnv::Plain
+        // A job that a built-in adapter knows by its name can have keys of its own, such as
+        // the commands of the precheck.
+        let kind = builtin.and_then(|b| crate::adapters::job_settings(b, &name));
+        let mut settings = Map::new();
+        if let Some(kind) = kind {
+            for key in kind.keys {
+                if let Some(value) = fields.remove(*key) {
+                    settings.insert((*key).to_string(), toml_to_json(&value));
+                }
             }
+            if command.is_some() && !settings.is_empty() {
+                problems.add(
+                    &at,
+                    format!("a job with command runs that command, so it has none of the keys of the job {name}: {}", kind.keys.join(", ")),
+                );
+            }
+            for problem in (kind.check)(&settings) {
+                problems.add(&at, problem);
+            }
+        }
+        let env_text = string(fields.remove("env"), &format!("{at} env"), problems);
+        let env = match env_text.as_deref() {
+            None => kind
+                .filter(|_| command.is_none())
+                .map_or(JobEnv::Plain, |k| k.env),
+            Some(text) => JobEnv::parse(text).unwrap_or_else(|| {
+                problems.add(&at, format!("env `{text}` is not plain, session, or full"));
+                JobEnv::Plain
+            }),
         };
-        if command.is_none() && (doc.is_some() || env != JobEnv::Plain) {
+        if command.is_none() && (doc.is_some() || env == JobEnv::Full) {
             problems.add(
                 &at,
-                "doc and env belong to a job with command. A job that the adapter knows by its name keeps the plain environment",
+                "doc and env belong to a job with command, and env = \"full\" only to such a job. A job that the adapter knows by its name keeps the plain environment or the environment of a session",
             );
         }
+        if env == JobEnv::Session && secrets {
+            problems.add(
+                &at,
+                "env = \"session\" is the environment of a work session, which never holds a secret, so the job cannot have secrets = true",
+            );
+        }
+        if kind.is_some_and(|k| k.no_secrets)
+            && command.is_none()
+            && (secrets || env == JobEnv::Full)
+        {
+            problems.add(
+                &at,
+                format!("the job {name} runs code of the project, so it gets no secret and never the environment of the tick: leave out secrets = true and env = \"full\""),
+            );
+        }
+        let timeout = match (timeout, kind.filter(|_| command.is_none())) {
+            (None, Some(kind)) => Some((kind.timeout)(&settings).0),
+            (Some(given), Some(kind)) => {
+                let least = (kind.timeout)(&settings).1;
+                if given <= least {
+                    problems.add(
+                        &at,
+                        format!("timeout is {given} s, but the job {name} needs more than {least} s: its own time limits stop it first"),
+                    );
+                }
+                Some(given)
+            }
+            (timeout, None) => timeout,
+        };
         for key in fields.keys() {
+            let more = kind
+                .filter(|_| command.is_none())
+                .map(|k| format!(", {}", k.keys.join(", ")))
+                .unwrap_or_default();
             problems.add(
                 &at,
                 format!(
-                    "`{key}` is not a key of a job. The keys: timeout, secrets, command, doc, env"
+                    "`{key}` is not a key of a job. The keys: timeout, secrets, command, doc, env{more}"
                 ),
             );
         }
@@ -864,6 +945,7 @@ fn parse_jobs(value: Option<toml::Value>, problems: &mut Problems) -> BTreeMap<S
                 command: command.map(|c| c.trim().to_string()),
                 doc,
                 env,
+                settings,
             },
         );
     }
@@ -900,8 +982,21 @@ fn parse_envs(
 fn allowed_keys(kind: &str) -> &'static [&'static str] {
     match kind {
         "turn" => &[
-            "agent", "turn", "reads", "expects", "with", "before", "after", "start", "next", "cap",
-            "findings", "on", "rounds", "fail",
+            "agent",
+            "turn",
+            "reads",
+            "expects",
+            "with",
+            "before",
+            "after",
+            "start",
+            "next",
+            "cap",
+            "findings",
+            "on",
+            "rounds",
+            "fail",
+            "extra_rounds",
         ],
         "job" => &[
             "job", "args", "expects", "before", "after", "start", "next", "cap",
@@ -1005,6 +1100,13 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         }
     };
     let (expects, expect_args) = expects(table.remove("expects"), &at, problems);
+    let extra_rounds = extra_rounds(
+        table.remove("extra_rounds"),
+        rounds,
+        &expects,
+        &at,
+        problems,
+    );
     let fail = fail_routes(table.remove("fail"), &expects, &at, problems);
     if kind != "turn" && expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
         problems.add(
@@ -1095,6 +1197,7 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         on,
         cap,
         rounds,
+        extra_rounds,
         fail,
         expects,
         expect_args,
@@ -1184,6 +1287,44 @@ fn expects(
         list.push(expect);
     }
     (list, args)
+}
+
+/// `extra_rounds` of a turn step: from 0 to [`MAX_EXTRA_ROUNDS`], only with a gate in
+/// `expects`, and with `rounds` at most [`MAX_ROUNDS`] in all.
+fn extra_rounds(
+    value: Option<toml::Value>,
+    rounds: u32,
+    expects: &[Expect],
+    at: &str,
+    problems: &mut Problems,
+) -> u32 {
+    let extra = match value {
+        None => return 0,
+        Some(toml::Value::Integer(n)) if (0..=i64::from(MAX_EXTRA_ROUNDS)).contains(&n) => n as u32,
+        Some(other) => {
+            problems.add(
+                at,
+                format!("extra_rounds is the number of turns that a converging loop adds, from 0 to {MAX_EXTRA_ROUNDS}, such as extra_rounds = 2, not `{other}`"),
+            );
+            return 0;
+        }
+    };
+    if extra > 0 && !expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
+        problems.add(
+            at,
+            "extra_rounds needs a gate in expects: a loop converges when the failing items of its gate get fewer",
+        );
+    }
+    if rounds + extra > MAX_ROUNDS {
+        problems.add(
+            at,
+            format!(
+                "rounds + extra_rounds is {}, above {MAX_ROUNDS}",
+                rounds + extra
+            ),
+        );
+    }
+    extra
 }
 
 /// `fail` of a turn step: a table from a gate of `expects` to a step. A key is the kind of the
@@ -2000,6 +2141,60 @@ url = "http://localhost:3000"
     }
 
     #[test]
+    fn a_job_of_a_built_in_adapter_can_have_keys_of_its_own() {
+        let builtin = with(
+            "base = \"origin/trunk\"",
+            "scripts = \"builtin:jira-github\"",
+        );
+        let text = builtin.replacen(
+            "[jobs.lint]",
+            "[jobs.precheck]\nlint = [{ run = \"bin/lint {files}\", globs = [\"**/*.rb\"] }]\nspecs = \"bin/rspec {files}\"\ncap = \"5m\"\ncap_max = \"20m\"\n\n[jobs.lint]",
+            1,
+        );
+        let adapter = parse(&text).unwrap();
+        let precheck = &adapter.jobs["precheck"];
+        assert_eq!(
+            precheck.env,
+            JobEnv::Session,
+            "a precheck runs as a session does"
+        );
+        assert_eq!(precheck.timeout, Some(1200 + 6 * 300));
+        assert_eq!(precheck.settings["specs"], "bin/rspec {files}");
+        assert_eq!(precheck.settings["lint"][0]["globs"][0], "**/*.rb");
+        assert!(adapter.jobs["lint"].settings.is_empty());
+        for (keys, expected) in [
+            ("specs = 3", "specs is one command"),
+            ("secrets = true", "the job precheck runs code of the project, so it gets no secret"),
+            ("env = \"full\"", "env = \"full\" only to such a job"),
+            ("timeout = 60\ncap_max = \"10m\"", "timeout is 60 s, but the job precheck needs more than 600 s"),
+            ("lint = [\"ssh deploy@host make\"]", "the executor refuses: a shell on a remote machine (ssh)"),
+            ("command = \"x\"\nspecs = \"y\"", "a job with command runs that command, so it has none of the keys of the job precheck"),
+            ("speks = \"x\"", "`speks` is not a key of a job. The keys: timeout, secrets, command, doc, env, lint, specs"),
+        ] {
+            let text = builtin.replacen("[jobs.lint]", &format!("[jobs.precheck]\n{keys}\n\n[jobs.lint]"), 1);
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        // A precheck of an adapter with scripts in bin/ is a job like any other.
+        let err = error(&with(
+            "[jobs.lint]",
+            "[jobs.precheck]\nspecs = \"x\"\n\n[jobs.lint]",
+        ));
+        assert!(err.contains("`specs` is not a key of a job"), "{err}");
+        // Any job can have the environment of a session, with no secret.
+        let session = with("[jobs.lint]", "[jobs.lint]\nenv = \"session\"");
+        assert_eq!(parse(&session).unwrap().jobs["lint"].env, JobEnv::Session);
+        let err = error(&with(
+            "[jobs.lint]",
+            "[jobs.lint]\nenv = \"session\"\nsecrets = true",
+        ));
+        assert!(
+            err.contains("env = \"session\" is the environment of a work session"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn each_error_names_the_file_the_step_and_the_problem() {
         let cases: Vec<(String, &str)> = vec![
             (with("id = \"ci\"", "id = \"refine\""), "step `refine`: the id is used by more than one step (steps 1 and 3)"),
@@ -2411,6 +2606,49 @@ url = "http://localhost:3000"
     }
 
     #[test]
+    fn extra_rounds_need_a_gate_and_stay_in_their_bounds() {
+        let line = "expects = [\"commits\", \"clean\", \"doc:pr.md\", \"job:proof\"]";
+        let gate = "expects = [\"commits\", { gate = \"cr\" }]";
+        assert_eq!(parse(GOOD).unwrap().step("build").unwrap().extra_rounds, 0);
+        let text = with(line, &format!("{gate}\nextra_rounds = 3"));
+        assert_eq!(parse(&text).unwrap().step("build").unwrap().extra_rounds, 3);
+        let err = error(&with(line, &format!("{line}\nextra_rounds = 2")));
+        assert!(
+            err.contains("step `build`: extra_rounds needs a gate in expects"),
+            "{err}"
+        );
+        for bad in [
+            "extra_rounds = 11",
+            "extra_rounds = -1",
+            "extra_rounds = \"2\"",
+        ] {
+            let err = error(&with(line, &format!("{gate}\n{bad}")));
+            assert!(
+                err.contains(
+                    "extra_rounds is the number of turns that a converging loop adds, from 0 to 10"
+                ),
+                "{bad}: {err}"
+            );
+        }
+        let err = error(&with(
+            line,
+            &format!("{gate}\nrounds = 15\nextra_rounds = 6"),
+        ));
+        assert!(
+            err.contains("rounds + extra_rounds is 21, above 20"),
+            "{err}"
+        );
+        let err = error(&with(
+            "action = \"approve-merge\"",
+            "action = \"approve-merge\"\nextra_rounds = 1",
+        ));
+        assert!(
+            err.contains("the key `extra_rounds` does not belong to a human step"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn a_fail_route_names_a_gate_and_a_step() {
         let line = "expects = [\"commits\", \"clean\", \"doc:pr.md\", \"job:proof\"]";
         let gates =
@@ -2553,7 +2791,7 @@ url = "http://localhost:3000"
             ),
             (
                 "command = \"x\"\nenv = \"some\"",
-                "env `some` is not plain or full",
+                "env `some` is not plain, session, or full",
             ),
             (
                 "command = \"x\"\ndoc = \"../x\"",

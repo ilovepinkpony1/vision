@@ -11,7 +11,8 @@
 //! - [`http`], [`git`], [`proc`]: HTTP with a time limit, git, and child processes.
 //! - [`adf`]: Atlassian Document Format to Markdown and back.
 //! - [`jira`], [`forge`]: the two clients.
-//! - [`observe`], [`act`], [`jobs`]: the three calls of the contract.
+//! - [`observe`], [`act`], [`jobs`]: the three calls of the contract. [`precheck`] is the job
+//!   that runs the lint, the specs, and the migrations of the project before a push.
 //! - [`app_token`]: `vision app-token`, the installation token of a GitHub App.
 
 pub mod act;
@@ -24,6 +25,7 @@ pub mod http;
 pub mod jira;
 pub mod jobs;
 pub mod observe;
+pub mod precheck;
 pub mod proc;
 
 /// The name of the adapter after `builtin:`.

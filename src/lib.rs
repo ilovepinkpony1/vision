@@ -11,6 +11,7 @@ pub mod config;
 pub mod ctx;
 pub mod curator;
 pub mod doctor;
+pub mod escapes;
 pub mod executor;
 pub mod exit;
 pub mod init;

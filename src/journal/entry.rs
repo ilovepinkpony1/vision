@@ -301,11 +301,20 @@ pub fn signature(ledger: &Ledger, row: &TurnRow) -> Result<String> {
         None => Vec::new(),
     };
     let resumed = resumed_by(ledger, row)?;
-    let value = json!({
+    // The notes that code adds: a finding that keeps coming back, and each escape of a review
+    // bot. They can come long after the turn ended.
+    let notes: Vec<String> = ledger_notes(ledger, &row.id)?
+        .iter()
+        .map(|n| n.text.clone())
+        .collect();
+    let mut value = json!({
         "format": FORMAT, "status": row.status, "reason": row.reason, "ended": row.ended,
         "end_fact": row.end_fact, "cost": row.cost_usd, "questions": questions,
         "events": events, "next": to, "resumed": resumed,
     });
+    if !notes.is_empty() {
+        value["notes"] = json!(notes);
+    }
     Ok(ids::sha256_hex(value.to_string().as_bytes()))
 }
 
@@ -455,12 +464,69 @@ pub fn build(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
-        notes: result.as_ref().map(notes_of).unwrap_or_default(),
+        notes: {
+            let mut notes = result.as_ref().map(notes_of).unwrap_or_default();
+            notes.extend(ledger_notes(ledger, &row.id)?);
+            notes
+        },
         errors: error_lines,
         gates,
         answers,
         outcome_lines,
     })
+}
+
+/// The notes that code adds to the entry of a turn from the ledger: each finding of a notice of
+/// the gate cr of the turn, which keeps coming back after its fix, and each escape of a review
+/// bot after the gate cr of the turn passed. A later turn and the index find them there.
+pub fn ledger_notes(ledger: &Ledger, turn: &str) -> Result<Vec<Note>> {
+    let mut notes = Vec::new();
+    if let Some(row) = ledger.turn(turn)? {
+        for notice in ledger.notices_of(&row.ticket)? {
+            if notice.turn != turn || notice.gate != crate::pipeline::rounds::CR_SOURCE {
+                continue;
+            }
+            for issue in &notice.issues {
+                notes.push(Note {
+                    kind: "problem".into(),
+                    text: cut(
+                        &one_line(&format!(
+                            "The finding {} of {} keeps coming back after its fix: {}",
+                            issue.id, notice.doc, issue.title
+                        )),
+                        MAX_NOTE_CHARS,
+                    ),
+                    ..Note::default()
+                });
+            }
+        }
+    }
+    for escape in ledger.escapes_of_turn(turn)? {
+        let place = match (&escape.path, escape.line) {
+            (Some(path), Some(line)) => format!("{path}:{line}"),
+            (Some(path), None) => path.clone(),
+            _ => "a line of the diff".into(),
+        };
+        let priority = escape
+            .priority
+            .as_deref()
+            .map(|p| format!(" (priority {p})"))
+            .unwrap_or_default();
+        notes.push(Note {
+            kind: "problem".into(),
+            text: cut(
+                &one_line(&format!(
+                    "The review missed a finding{priority} that {} found at {place}: {}",
+                    escape.reviewer,
+                    escape.title.as_deref().unwrap_or("(no title)")
+                )),
+                MAX_NOTE_CHARS,
+            ),
+            files: escape.path.iter().cloned().collect(),
+            ..Note::default()
+        });
+    }
+    Ok(notes)
 }
 
 /// The working folder of a turn, from its `launch.json`.

@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 use vision::adapters::jira_github::adf;
 
 use crate::fixtures::{
-    adf_doc, comment, issue_comment, jira_issue, pull, reply, review, review_with, run_ended,
-    run_open, GitHubWorld, Issue, Pull, Run, HEAD, OTHER, REPO_PATH,
+    adf_doc, comment, comment_at, issue_comment, jira_issue, pull, reply, review, review_with,
+    run_ended, run_open, GitHubWorld, Issue, Pull, Run, HEAD, OTHER, REPO_PATH,
 };
 use crate::jira_github_support::world::{install, World};
 use crate::jira_github_support::{
@@ -1584,6 +1584,92 @@ fn read_ci_log() {
             .run(),
     );
     assert_eq!(name, "ci-log-41.txt");
+}
+
+#[test]
+fn read_review_read_gives_the_first_review_of_a_login_after_a_time() {
+    let t = AdapterTest::new();
+    let w = GitHubWorld::new(&t.server, Some(pull(false)));
+    {
+        let mut s = w.lock();
+        let at = |r: Value, when: &str| {
+            let mut r = r;
+            r["submitted_at"] = json!(when);
+            r["commit_id"] = json!(HEAD);
+            r
+        };
+        s.reviews = vec![
+            at(
+                review(1, "review-bot[bot]", "COMMENTED"),
+                "2026-11-02T09:00:00Z",
+            ),
+            at(review(2, "lead", "COMMENTED"), "2026-11-02T11:00:00Z"),
+            at(
+                review(4, "review-bot[bot]", "COMMENTED"),
+                "2026-11-02T13:00:00Z",
+            ),
+            at(
+                review(3, "review-bot[bot]", "COMMENTED"),
+                "2026-11-02T12:00:00Z",
+            ),
+        ];
+        let mut first = comment_at(
+            30,
+            "review-bot[bot]",
+            "**[P1] A nil user**\n\nMore.",
+            None,
+            "app/a.rb",
+            Some(12),
+        );
+        first["pull_request_review_id"] = json!(3);
+        first["html_url"] = json!("https://github.example/acme/widgets/pull/7#discussion_r30");
+        let mut reply = comment_at(31, "lead", "agreed", Some(30), "app/a.rb", Some(12));
+        reply["pull_request_review_id"] = json!(3);
+        let mut other = comment_at(
+            40,
+            "review-bot[bot]",
+            "**[P0] Old**",
+            None,
+            "app/b.rb",
+            Some(1),
+        );
+        other["pull_request_review_id"] = json!(1);
+        s.comments = vec![first, reply, other];
+    }
+    let read = |after: &str| {
+        t.act("review.read")
+            .args(json!({"reviewer": "review-bot[bot]", "after": after}))
+            .read()
+            .field("pr", json!(7))
+            .run()
+    };
+    let (name, content) = doc_of(&read("2026-11-02T10:00:00Z"));
+    assert_eq!(name, "review.json");
+    let data: Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(
+        data["review"]["id"], 3,
+        "the first one after the time: {data}"
+    );
+    assert_eq!(data["review"]["submitted_at"], "2026-11-02T12:00:00Z");
+    let comments = data["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1, "a reply and another review are left out");
+    assert_eq!(comments[0]["path"], "app/a.rb");
+    assert_eq!(comments[0]["line"], 12);
+    assert_eq!(comments[0]["untrusted"], "**[P1] A nil user**\n\nMore.");
+    assert!(comments[0]["url"]
+        .as_str()
+        .unwrap()
+        .ends_with("discussion_r30"));
+    let (_, none) = doc_of(&read("2026-11-02T14:00:00Z"));
+    let none: Value = serde_json::from_str(&none).unwrap();
+    assert_eq!(none["review"], Value::Null);
+    let bad = t
+        .act("review.read")
+        .args(json!({"reviewer": "review-bot[bot]", "after": "yesterday"}))
+        .read()
+        .run();
+    assert_eq!(bad.code, 1);
+    assert!(bad.stderr.contains("args.after"), "{bad:?}");
 }
 
 #[test]

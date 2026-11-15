@@ -53,7 +53,7 @@ pub use ops::{
     waiting, OpState, OperationResult, Outcome, SetValues, APPROVED_PLAN, LADDER,
 };
 pub use scripts::{
-    Answer, Builtin, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT, PASSED_ENV,
+    Answer, Builtin, Runner, Script, ScriptError, Secrets, SessionEnv, DEFAULT_TIMEOUT, PASSED_ENV,
 };
 
 /// `vision approve`, `promote`, and `demote`.

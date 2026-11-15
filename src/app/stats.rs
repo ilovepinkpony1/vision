@@ -27,6 +27,10 @@ pub struct StatsData {
     /// The cost of the turns that no ticket owns, such as the turns of the Curator, by agent.
     /// The cost of the window does not count them.
     pub outside: Vec<(String, f64)>,
+    /// The escape check: the checked pull requests and the escapes by priority.
+    pub escapes: crate::escapes::EscapeMeasures,
+    /// The priorities that `[escapes]` counts, in its order.
+    pub counted: Vec<String>,
 }
 
 /// The measures of one ticket.

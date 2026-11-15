@@ -69,6 +69,10 @@ pub enum KindFacts {
         /// The step of `fail` for the gate that failed in the last turn, when the gate found a
         /// blocking item in its document. It wins over a resume and over `rounds`.
         route: Option<String>,
+        /// Why the loop converges: the gate that failed in the last turn failed on fewer items
+        /// than in the turn before, and none is critical. `None` when it does not converge, or
+        /// when the failed end fact is no gate.
+        converge: Option<String>,
         /// The entries of `after`, in order, with their label.
         after: Vec<(String, OpFact)>,
         /// The session and the message of the first turn of the visit.
@@ -128,6 +132,8 @@ pub struct Facts {
     pub cap: Option<(String, u32)>,
     /// `rounds` of the step: the turns of one visit for failed end facts.
     pub rounds: u32,
+    /// `extra_rounds` of the step: the turns that a converging loop adds after `rounds`.
+    pub extra_rounds: u32,
     /// The entry number of the visit.
     pub n: u32,
     /// The person let the ticket go on above the cap.
@@ -171,8 +177,13 @@ pub enum Next {
         resume: Option<String>,
         message: Option<String>,
     },
-    /// Resume the session of the last turn with a message, after a failed end fact.
-    Resume { session: String, message: String },
+    /// Resume the session of the last turn with a message, after a failed end fact. `extra`
+    /// says why an extra round of `extra_rounds` was granted, for its event.
+    Resume {
+        session: String,
+        message: String,
+        extra: Option<String>,
+    },
     /// Serve the read verbs of a turn that ended with requests, then resume its session.
     Serve { turn: String, session: String },
     /// Request the entry `index` of `after` or `start` through the executor.
@@ -226,6 +237,7 @@ pub fn decide(facts: &Facts) -> Next {
             failures,
             failure,
             route,
+            converge,
             after,
             resume,
             message,
@@ -250,6 +262,7 @@ pub fn decide(facts: &Facts) -> Next {
                 *failures,
                 failure.as_deref(),
                 route.as_deref(),
+                converge.as_deref(),
                 after,
             ),
         },
@@ -334,6 +347,7 @@ fn turn_next(
     failures: u32,
     failure: Option<&str>,
     route: Option<&str>,
+    converge: Option<&str>,
     after: &[(String, OpFact)],
 ) -> Next {
     match turn.status {
@@ -383,8 +397,35 @@ fn turn_next(
                             how: format!("fail {fact}"),
                         };
                     }
-                    if failures >= facts.rounds.max(1) {
-                        return flag(rounds_text(fact, facts.rounds, found));
+                    let rounds = facts.rounds.max(1);
+                    let mut extra = None;
+                    if failures >= rounds {
+                        // After `rounds`, a loop that converges gets one more turn at a time,
+                        // up to `extra_rounds`.
+                        let used = failures - rounds;
+                        match converge {
+                            Some(why) if used < facts.extra_rounds => {
+                                extra = Some(format!(
+                                    "extra round {} of {} (extra_rounds) after {failures} failed turn(s): {why}",
+                                    used + 1,
+                                    facts.extra_rounds
+                                ));
+                            }
+                            _ => {
+                                let mut text = rounds_text(fact, facts.rounds, failures, found);
+                                if facts.extra_rounds > 0 {
+                                    text.push_str(&if used >= facts.extra_rounds {
+                                        format!(
+                                            ". Each of the {} extra round(s) of extra_rounds is used",
+                                            facts.extra_rounds
+                                        )
+                                    } else {
+                                        ". The loop does not converge, so extra_rounds gives no more turn: the failing items of the gate are not fewer than in the turn before, or one is critical".to_string()
+                                    });
+                                }
+                                return flag(text);
+                            }
+                        }
                     }
                     if let Some(refused) = refusal_flag(&facts.refusal) {
                         return refused;
@@ -393,6 +434,7 @@ fn turn_next(
                         Some(session) => Next::Resume {
                             session: session.clone(),
                             message: resume_message(fact, found),
+                            extra,
                         },
                         None => flag(format!(
                             "the end fact {fact} did not hold, and the turn {} has no session to resume: {found}",
@@ -411,9 +453,10 @@ fn turn_next(
 }
 
 /// The reason of the flag after the last round of a visit failed: the fact, the resumes that
-/// the step allowed, and what was found.
-fn rounds_text(fact: &str, rounds: u32, found: &str) -> String {
-    match rounds.max(1) - 1 {
+/// the visit had (the failed turns less the first one), the `rounds` of the step, and what was
+/// found.
+fn rounds_text(fact: &str, rounds: u32, failures: u32, found: &str) -> String {
+    match failures.max(1) - 1 {
         0 => format!(
             "the end fact {fact} did not hold, and rounds = 1 of the step allows no resume: {found}"
         ),
@@ -717,6 +760,7 @@ mod tests {
                 failures: 0,
                 failure: None,
                 route: None,
+                converge: None,
                 after,
                 resume: None,
                 message: None,
@@ -729,6 +773,7 @@ mod tests {
             refusal: None,
             cap: None,
             rounds: crate::adapter::DEFAULT_ROUNDS,
+            extra_rounds: 0,
             n: 1,
             skip_cap: false,
             open: Vec::new(),
@@ -867,7 +912,12 @@ mod tests {
             *failure = Some("the result has no document plan.md".into());
         }
         match decide(&facts) {
-            Next::Resume { session, message } => {
+            Next::Resume {
+                session,
+                message,
+                extra,
+            } => {
+                assert_eq!(extra, None);
                 assert_eq!(session, "s-1");
                 assert!(message.contains("The end fact doc:plan.md does not hold: the result has no document plan.md"), "{message}");
             }
@@ -932,6 +982,69 @@ mod tests {
         assert!(matches!(decide(&facts), Next::Resume { .. }));
         set_failures(&mut facts, 2, None);
         assert!(is_flag(&decide(&facts), NEEDS_YOU, "after a resume"));
+    }
+
+    #[test]
+    fn extra_rounds_go_on_while_the_loop_converges() {
+        let mut facts = turn_facts(
+            Some(turn(
+                TurnStatus::Done,
+                Some("result"),
+                Some("failed:gate:cr:cr.md"),
+            )),
+            vec![],
+        );
+        facts.rounds = 2;
+        facts.extra_rounds = 2;
+        let set_converge = |facts: &mut Facts, why: Option<&str>| {
+            if let KindFacts::Turn { converge, .. } = &mut facts.kind {
+                *converge = why.map(str::to_string);
+            }
+        };
+        // Within rounds, a plain resume.
+        set_failures(&mut facts, 1, None);
+        assert!(matches!(decide(&facts), Next::Resume { extra: None, .. }));
+        // After rounds, a converging loop gets an extra round with its reason.
+        set_failures(&mut facts, 2, None);
+        set_converge(
+            &mut facts,
+            Some("the gate cr failed on 1 item(s), fewer than the 3"),
+        );
+        match decide(&facts) {
+            Next::Resume {
+                extra: Some(why), ..
+            } => {
+                assert!(why.starts_with("extra round 1 of 2 (extra_rounds) after 2 failed turn(s): the gate cr failed on 1"), "{why}");
+            }
+            other => panic!("{other:?}"),
+        }
+        set_failures(&mut facts, 3, None);
+        assert!(matches!(
+            decide(&facts),
+            Next::Resume { extra: Some(why), .. } if why.starts_with("extra round 2 of 2")
+        ));
+        // Each extra round is used.
+        set_failures(&mut facts, 4, None);
+        assert!(is_flag(
+            &decide(&facts),
+            NEEDS_YOU,
+            "Each of the 2 extra round(s) of extra_rounds is used"
+        ));
+        // A loop that does not converge gets needs-you as before.
+        set_failures(&mut facts, 2, None);
+        set_converge(&mut facts, None);
+        assert!(is_flag(
+            &decide(&facts),
+            NEEDS_YOU,
+            "The loop does not converge"
+        ));
+        // With no extra_rounds, the text stays as it was.
+        facts.extra_rounds = 0;
+        set_converge(&mut facts, Some("fewer"));
+        match decide(&facts) {
+            Next::Flag { reason, .. } => assert!(!reason.contains("extra_rounds"), "{reason}"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

@@ -279,6 +279,19 @@ pub fn notice_text(notice: &NoticeRow) -> String {
         .iter()
         .map(|i| format!("{} {}: {}", i.id, i.severity, i.title))
         .collect();
+    // A notice of the gate cr names the findings that keep coming back after their fix.
+    if notice.gate == super::rounds::CR_SOURCE {
+        let (count, verb) = match notice.issues.len() {
+            1 => ("1 finding".to_string(), "keeps"),
+            n => (format!("{n} findings"), "keep"),
+        };
+        return format!(
+            "{count} of {} of the step {} {verb} coming back after the fix: {}",
+            notice.doc,
+            notice.step,
+            list.join("; ")
+        );
+    }
     let (count, verb) = match notice.issues.len() {
         1 => ("1 issue".to_string(), "does"),
         n => (format!("{n} issues"), "do"),

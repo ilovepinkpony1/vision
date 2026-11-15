@@ -253,9 +253,11 @@ pub enum PipelineCommand {
         key: TicketKey,
     },
 
-    /// Show the measures
+    /// Show the measures, or the measures and the escapes of one ticket
     #[command(display_order = 31)]
     Report {
+        /// One ticket, such as DEMO-12: its measures and each escape of its reviews
+        key: Option<TicketKey>,
         /// Only the last 7 days
         #[arg(long)]
         week: bool,

@@ -40,6 +40,16 @@ pub struct FindingRow {
     pub fix_commit: Option<String>,
     /// True when an earlier round of the ticket had the same finding.
     pub came_back: bool,
+    /// The file of the finding, when its document names one, such as `app/order.rb`.
+    pub path: Option<String>,
+    /// The line of the finding in that file.
+    pub line: Option<i64>,
+    /// The title of the finding, masked and cut to 200 characters.
+    pub title: Option<String>,
+    /// The turn whose document held the finding.
+    pub turn: Option<String>,
+    /// The row of `finding_tracks` of a finding of a gate cr.
+    pub track: Option<i64>,
 }
 
 /// One row of `review_rows`: a review comment of a person with the verdict of the step.
@@ -212,8 +222,9 @@ impl Ledger {
     /// Adds a finding.
     pub fn add_finding(&self, row: &FindingRow) -> Result<()> {
         self.conn().execute(
-            "INSERT INTO findings (ticket, round, fingerprint, priority, source, verdict, reason_code, fix_commit, came_back)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO findings (ticket, round, fingerprint, priority, source, verdict, reason_code, fix_commit, came_back,
+                                   path, line, title, turn, track)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 row.ticket,
                 row.round,
@@ -223,7 +234,12 @@ impl Ledger {
                 row.verdict,
                 row.reason_code,
                 row.fix_commit,
-                i64::from(row.came_back)
+                i64::from(row.came_back),
+                row.path,
+                row.line,
+                row.title,
+                row.turn,
+                row.track
             ],
         )?;
         Ok(())
@@ -233,7 +249,8 @@ impl Ledger {
     pub fn findings_of(&self, ticket: &str) -> Result<Vec<FindingRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT coalesce(ticket, ''), coalesce(round, 0), coalesce(fingerprint, ''), priority,
-                    coalesce(source, ''), coalesce(verdict, ''), reason_code, fix_commit, coalesce(came_back, 0)
+                    coalesce(source, ''), coalesce(verdict, ''), reason_code, fix_commit, coalesce(came_back, 0),
+                    path, line, title, turn, track
              FROM findings WHERE ticket = ?1 ORDER BY rowid",
         )?;
         let rows = stmt.query_map([ticket], |row| {
@@ -247,6 +264,11 @@ impl Ledger {
                 reason_code: row.get(6)?,
                 fix_commit: row.get(7)?,
                 came_back: row.get::<_, i64>(8)? != 0,
+                path: row.get(9)?,
+                line: row.get(10)?,
+                title: row.get(11)?,
+                turn: row.get(12)?,
+                track: row.get(13)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

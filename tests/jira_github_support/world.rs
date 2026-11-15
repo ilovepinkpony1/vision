@@ -14,8 +14,8 @@
 //!   as a real run takes its time.
 //!
 //! A person or a test plays the team with the control calls (`POST /_control/<action>`, a JSON
-//! body): ready, review, comment (with `in_reply_to` for a reply in a thread), issue_comment,
-//! conflict, merge, and `GET /_control/state`.
+//! body): ready, review, comment (with `in_reply_to` for a reply in a thread, and `review` for
+//! an inline comment of a review), issue_comment, conflict, merge, and `GET /_control/state`.
 //! They are not calls of the adapter, so the request log leaves them out.
 //!
 //! Each call of the adapter must carry the token of its service. The world checks it, and the
@@ -1026,9 +1026,14 @@ impl World {
                 let mut comment = json!({"id": id, "node_id": format!("PRRC_{id}"),
                                      "user": {"login": body["login"]}, "body": body["body"],
                                      "path": body.get("path").cloned().unwrap_or(Value::Null),
-                                     "line": line, "original_line": line, "created_at": now()});
+                                     "line": line, "original_line": line, "created_at": now(),
+                                     "html_url": format!("https://github.example/{REPO}/pull/{number}#discussion_r{id}")});
                 if let Some(root) = body.get("in_reply_to").and_then(Value::as_i64) {
                     comment["in_reply_to_id"] = json!(root);
+                }
+                // An inline comment of a review names its review, as GitHub does.
+                if let Some(review) = body.get("review").and_then(Value::as_i64) {
+                    comment["pull_request_review_id"] = json!(review);
                 }
                 self.comments
                     .entry(number)

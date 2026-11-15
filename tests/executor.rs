@@ -1730,6 +1730,56 @@ env = "full"
 }
 
 #[test]
+fn the_environment_of_a_session_has_the_values_of_claude_env_and_no_secret() {
+    let demo = Demo::new();
+    command_adapter(
+        &demo,
+        r#"[jobs.session]
+command = "env | sort"
+doc = "session.txt"
+env = "session"
+
+[jobs.precheck]
+lint = ["printf 'WT=%s TOKEN=%s\\n' \"$WT_BRANCH\" \"$COMMAND_TOKEN\" >&2; exit 2"]
+"#,
+    );
+    demo.edit_config(|doc| {
+        doc["claude"]["env"]["WT_BRANCH"] = toml_edit::value("vision/DEMO-12");
+    });
+    demo.commit(&[("notes.txt", "a change\n")], "Change the notes");
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let result = executor::job(&ctx, &ledger, &job("session", json!({}))).unwrap();
+    assert!(result.ok, "{result:?}");
+    let session = ticket_doc(&demo, "session.txt");
+    assert!(session.contains("WT_BRANCH=vision/DEMO-12\n"), "{session}");
+    assert!(session.contains("PATH="), "{session}");
+    assert!(!session.contains("COMMAND_TOKEN="), "{session}");
+    assert!(!session.contains(COMMAND_SECRET), "{session}");
+    assert!(
+        !session.contains("CARGO_PKG_NAME="),
+        "only the names of a session: {session}"
+    );
+    // The precheck runs its commands in that environment, and its document goes to the
+    // ticket folder for the turn that failed it.
+    let result = executor::job(&ctx, &ledger, &job("precheck", json!({}))).unwrap();
+    assert!(!result.ok, "{result:?}");
+    assert_eq!(result.documents, ["precheck.md"]);
+    let doc = ticket_doc(&demo, "precheck.md");
+    assert!(
+        doc.contains("WT=vision/DEMO-12 TOKEN=\n"),
+        "no secret: {doc}"
+    );
+    assert!(doc.contains("so it is broken"), "{doc}");
+    assert!(
+        result.detail.contains("precheck.md names each one"),
+        "{result:?}"
+    );
+    let kinds: Vec<&str> = result.checks.iter().map(|c| c.kind.as_str()).collect();
+    assert_eq!(kinds, ["precheck-lint"]);
+}
+
+#[test]
 fn a_command_job_that_never_ends_stops_at_its_time_limit() {
     let demo = Demo::new();
     let marker = demo.home.user_home.join("the command went on");

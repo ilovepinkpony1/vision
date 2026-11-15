@@ -145,6 +145,14 @@ projects = "~/.claude/projects"   # the folder of the session files. Vision only
 quiet_hours = 24              # a session file counts as finished when it has not changed for this many hours
 wing = "claude-sessions"      # the wing of MemPalace for the summaries. The room is the project folder.
 
+[escapes]                     # what the review bot of the team found on our pull request that our own review missed
+reviewers = []                # the logins of the review bots, such as ["review-bot[bot]"]. [] means: no check.
+priority = "\\*\\*\\[P([0-3])\\]"   # a regular expression whose group 1 is the priority of an inline comment
+count = ["0", "1", "2"]       # the priorities that count as an escape when no finding of ours matches
+lines = 3                     # a finding of ours matches a comment on the same path within this many lines
+verb = "review.read"          # the read verb of the adapter that gives the review and its inline comments
+every = 900                   # seconds between two looks at a pull request while the review is missing
+
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
 email = ""                    # "" means: an address that names nobody. A bot: "<id>+<app>[bot]@users.noreply.github.com"
@@ -211,6 +219,8 @@ Rules:
 - `vision` edits the file with `toml_edit`, so that comments and order stay.
 - `~` at the start of a path means the home folder.
 
+`escapes.priority` is a regular expression of a small syntax: characters, `.`, `\d`, `\w`, `\s` and their opposites, classes such as `[0-3]`, groups `( )` and `(?: )`, `|`, `*`, `+`, `?`, `{n,m}`, `^`, `$`, and `(?i)` at the start. It must have a group. A search that takes too many steps finds nothing.
+
 ## 5. The ledger
 
 SQLite in WAL mode, with a busy timeout of 5 seconds. `PRAGMA user_version` holds the schema version. Each migration is one numbered SQL file that the binary embeds.
@@ -259,6 +269,15 @@ Migration 4 adds the table `notices (id, ticket, step, turn, gate, doc, issues, 
 Migration 5 adds the table `journal (turn, ticket, path, hash, signature, head, written, filed_hash, filed, archived, archive_bytes, entry_sent, removed)`. One row holds the entry of a turn, what MemPalace holds of it, and what the object store holds. An entry waits for the index while `filed_hash` differs from `hash`. No row and no entry is ever deleted.
 
 Migration 6 adds the table `sessions (path, project, session, main, hash, size, mtime, key, archived, archive_bytes, entry, summary_hash, summary_of, filed_hash, filed)`. One row holds one session file of Claude Code, with `path` relative to `sessions.projects`. It records what the archive holds of the file, the summary of a main file, and what MemPalace holds of that summary. A run reads a file again only when its size or its change time differs from its row. No row is ever deleted.
+
+Migration 7 adds `path`, `line`, `title`, `turn`, and `track` to `findings`, and four tables:
+
+- `gate_rounds (turn, ticket, step, gate, doc, round, head, passed, failing, critical, findings, at)`, with the key (turn, doc). One row holds one gate document of one turn, with its round among the turns of that kind of gate in the ticket.
+- `finding_tracks (id, ticket, fingerprint, path, line, severity, title, first_round, last_round, came_back, noticed)`. One row follows one finding of the gate cr across rounds.
+- `escape_checks (id, ticket, pr, reviewer, pass_turn, head, passed_at, looked, review_id, submitted, checked, comments, counted, escapes)`, unique on (ticket, reviewer, pass_turn).
+- `escapes (id, check_id, path, line, priority, title, url)`.
+
+A row of `findings` with the source `cr` is one finding of one round of a gate cr. A row with the source `escape` is one comment of a review bot that no finding of ours matched. No comment text is stored beyond its title, masked and cut to 200 characters.
 
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
@@ -859,6 +878,7 @@ findings = "review"           # a turn step: each finding of its documents becom
 on = { findings = "fix-qa", none = "ready" }   # a turn step with findings: it replaces next
 rounds = 3                    # a turn step: the turns of one visit for failed end facts. The default is 2.
 fail = { qa = "fix-qa" }      # a turn step: a gate that fails on a blocking item goes to this step at once
+extra_rounds = 2              # a turn step with a gate: more turns while the loop converges (section 11.3)
 from = "09:00"                # a wait step: the visit starts at the first such local time after its entry
 ```
 
@@ -871,6 +891,12 @@ A turn step with the key `findings` can have `on` in the place of `next`. This `
 A turn step can have `rounds`: the number of turns that one visit gets for failed end facts, from 1 to 20. The default is 2, the first turn and one resume. `rounds = 1` allows no resume.
 
 A turn step with a gate can have `fail`, a table from a gate to a step. A key is the kind of the gate, such as `qa`, or its end fact, such as `gate:qa:qa.md`, for a step with two gates of one kind. The loader refuses a key that names no gate of `expects`, a key that names an end fact of another kind, such as `commits` or `job:proof`, and a target that is not a step.
+
+A turn step with a gate can have `extra_rounds`, from 0 to 10, with a default of 0. `rounds + extra_rounds` is at most 20. The loader refuses `extra_rounds` on a step with no gate.
+
+A job can have `env = "session"`: the environment of a work session. It holds the names of section 7.3, the names of `claude.env_pass`, and the values of `claude.env`, and no variable that has the name or the value of a secret. Such a job cannot have `secrets = true`.
+
+A job that a built-in adapter knows by its name can have keys of its own, such as the commands of the precheck (section 11.5). The loader tests them. The call of `bin/job` gets them in `table`, with `timeout`.
 
 A wait step can have `from`, a time of day such as `"09:00"` in the local time of the machine.
 
@@ -914,6 +940,9 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - `rounds` and `cap` count different things. `rounds` counts the failed turns of one visit, and each resume continues the same session. `cap` counts the entries into a step from `next`, `on`, or `fail`, so it limits the loops between steps.
 - A wait step with `from` does nothing before the first moment after its entry with that local time: no `start` verb and no `observe`. With `from = "09:00"`, an entry at 23:00 starts at 09:00 the next day, an entry at 08:00 starts at 09:00 the same day, and an entry at 09:30 starts at 09:00 the next day. The visit keeps that moment in `opens`. `vision retry KEY` keeps the moment, so a retry never waits for a later day. The limit counts from the first look, which comes at the first pass after that moment. The column NOW of `vision status` and the app say `waits until 09:00`.
 - If each end fact holds, the `after` verbs run in order. After each one has the state `confirmed`, the ticket moves to `next`.
+- After `rounds` failed turns, a step with `extra_rounds` gets one more turn at a time, up to `extra_rounds` more, while the loop converges. The loop converges when the gate of the failed end fact fails on fewer items in the last turn than in the turn before it, and no failing item is CRITICAL (cr) or critical (qa). A turn whose document the gate cannot read gives no number, so the loop does not converge. Otherwise the ticket gets the flag `needs-you`, and the reason says whether the extra rounds are used or the loop does not converge. The event `extra-round` of each extra turn says why it was granted.
+- When the end facts of a turn are tested, each gate of the step that has a document gets a row of `gate_rounds`. Each finding of a gate cr with a place gets a row of `findings` with the source `cr` and a fingerprint: its path and a hash of its title in lower case, with no digits and no punctuation. Two findings of two rounds are the same when their fingerprints are equal, or when their paths are equal and their lines are at most 3 apart. A finding that comes back two times after a round where it was gone becomes one notice for the person, `this finding keeps coming back after its fix`, with its first line, and a problem note in the journal entry of that turn.
+- The resume after a failed job names its documents, such as `.vision/precheck.md`.
 - A turn step with `on` moves by its findings. If the documents of its last turn hold a kept finding, the ticket moves to the step of `findings`. If they hold none, it moves to the step of `none`.
 - A step with a `cap` counts each entry that comes from `next` or `on`. One entry above the cap sets the flag `needs-you` with the open items. An entry by `vision retry` or `vision take` does not count.
 - A wait step first runs its `start` verbs. After each one has the state `confirmed`, it runs `observe` each `every` seconds, and it moves on the value of `watch`.
@@ -992,11 +1021,28 @@ The key `test_canary` names test files that pass on the base commit. The proof r
 
 A job with `command` in the `adapter.toml` of a project is a command of the person, and the built-in adapter runs it. The command runs with `sh -c` in the clone, or in the adapter folder when the call has no clone. It gets `VISION_KEY`, `VISION_CLONE`, `VISION_BRANCH`, `VISION_HEAD`, and `VISION_BASE`. Exit code 0 passes, and each other code fails. The last 20 lines of standard error are the detail of a failure, with each secret masked. The standard output goes into `doc` after a pass and after a failure. The time limit of the job stops the command too. A command with the name of a job of the adapter, such as `proof`, replaces that job.
 
+The job `precheck` runs the lint, the specs, jest, and the migrations of the project before a push. A step names it in `expects` before `git.push`. Its keys are `lint`, `specs`, `specs_map`, `jest`, `migrations`, `migrations_env`, `cap`, `cap_per_file`, and `cap_max`, as the comment of `adapters/jira-github/adapter.toml` shows. An entry of `lint` or `jest` is a command, or `{ run, globs }`, and a command with no changed file that matches its globs does not run. Each command runs with `sh -c` in the clone, with `env = "session"` and no secret. The default timeout is `cap_max + 6 x cap`.
+
+- A lint offense counts only on a changed line, read as `path:line[:column]: message`. A lint that fails and names no offense is broken, and the job fails.
+- `specs_map = "rails"` maps `app/<dir>/<path>.rb` to `spec/<dir>/<path>_spec.rb` and `lib/<path>.rb` to `spec/lib/<path>_spec.rb`, when that file exists. A changed spec file runs itself.
+- A red spec in a file that the branch did not change runs again in a worktree of the base commit, after `setup_command` and the files of `test_canary`. If it fails there too, it is not ours, and it passes.
+- Each added migration runs the `migrations` commands in version order, with `migrations_env`. Each tracked file that they changed, such as `db/schema.rb`, goes back to the state of the branch.
+- The cap is `cap + cap_per_file x the checked files`, at most `cap_max`. When the cap stops the specs or jest, the job passes with the note `unfinished: CI is their only run`. When the cap stops the lint, the job fails as a hang. The reruns on the base and each migration command have `cap` alone.
+- The job writes `precheck.md`.
+
+The executor refuses a command of the precheck that opens a shell or a console on a remote machine or a pod, such as `kubectl exec`, `ssh`, or `heroku run`, or that changes the schema of a live database, such as `gh-ost`.
+
+The read verb `review.read` gives the first review of `args.reviewer` that was submitted after `args.after`, with its inline comments, as `review.json`.
+
 `review.resolve` resolves the review thread of each inline comment that `verdicts.json` settles. `review.minimize` hides each comment that it settles: an inline comment, a review, or a conversation comment. A row settles its comment with `settle`: `true` or `"resolved"` (the classifier RESOLVED), or `"outdated"` (OUTDATED). Both verbs take `{ verdicts = "{doc:verdicts.json}" }`, as `review.reply` does, and both use the GraphQL API of GitHub.
 
 These two verbs touch only a thread or a comment of a bot. A bot has a login that ends with `[bot]`, or a login of the key `bot_logins`. Each other comment of a thread must come from a bot or from a login of `own_logins`. The verbs refuse each other item, go on with the rest, and name each refused item in the detail. A missing comment fails the operation after the others. A reconcile reads whether each thread is resolved and each comment is hidden.
 
 `tests/e2e_jira_github.rs` drives the whole path against a fake Jira and GitHub with state (`tests/jira_github_support/world.rs`). A thread of the test serves it on a free localhost port. `tests/adapter_jira_github.rs` tests each verb, read verb, job, and observe call of the built-in adapter against a fake server. No run against the real services is part of the tests.
+
+### 11.6 The escape check
+
+When a ticket has a pull request and our gate cr passed at a head, the tick looks for the first review of each login of `escapes.reviewers` that was submitted after that pass. It looks through the read verb `escapes.verb`, at most once each `escapes.every` seconds, and it reads that review once. Each inline comment whose priority (group 1 of `escapes.priority`) is in `escapes.count` is matched against each finding of every round of the gate cr of the ticket, on the same path within `escapes.lines` lines. A comment with no match is an escape: a row of `escapes`, a row of `findings` with the source `escape`, and a problem note in the journal entry of the turn whose gate passed. A new pass of the gate at a new head opens a new check.
 
 ## 12. The executor
 
@@ -1047,7 +1093,7 @@ vision memory ...                  section 9.2
 vision curate                      run the Curator now
 vision model ...                   section 10
 vision promote VERB | demote VERB  move a verb on the trust ladder
-vision report [--week]             the measures
+vision report [KEY] [--week] [--json]   the measures; with KEY, the escape checks and escapes of one ticket
 vision install | uninstall         the timer of the system
 vision app-token ...               print an installation token of a GitHub App, for a secret command
 vision journal search "TEXT" [--json] [--limit N]   search the journal (section 16)
@@ -1177,7 +1223,7 @@ While a turn runs, the card of `o` has a second `o`. It stops the turn with `vis
 
 `m` on Home opens Models. It has one row for each agent: its model, its effort, pinned or the default, and its measured turns with their mean cost. The left and right arrows change the model, and `e` changes the effort. Enter runs `vision model set`, and `u` runs `vision model reset`. A change that is not pinned has a mark, and Esc drops it. A change holds for the next turn of the agent, not for a turn that runs now.
 
-`s` on Home opens Stats. It shows the cost, the tickets that finished, the questions that got an answer without the person, and the minutes of the person. A table lists the tickets. Bars show the time and the cost of each step, in the order of the adapter. A last line gives the cost of each agent. The cost of a turn with no ticket, such as a turn of the Curator, shows apart, because the report does not count it. `w` switches between the last 7 days and all time.
+`s` on Home opens Stats. It shows the cost, the tickets that finished, the questions that got an answer without the person, and the minutes of the person. A table lists the tickets. Bars show the time and the cost of each step, in the order of the adapter. A last line gives the cost of each agent. The cost of a turn with no ticket, such as a turn of the Curator, shows apart, because the report does not count it. `w` switches between the last 7 days and all time. Stats shows the line REVIEW ESCAPES once a review of a review bot was checked: the checked pull requests, the escapes by priority, and the escapes for each checked pull request. A notice of the gate cr can say that a finding keeps coming back after its fix, with its first line.
 
 ### 15.4 The terminal
 

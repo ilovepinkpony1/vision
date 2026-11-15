@@ -7,4 +7,5 @@ pub mod git;
 pub mod ids;
 pub mod log;
 pub mod process;
+pub mod regex;
 pub mod time;

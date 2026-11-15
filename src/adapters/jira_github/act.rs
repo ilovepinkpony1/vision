@@ -48,11 +48,12 @@ const VERBS: [(&str, Verb); 11] = [
     ("tracker.move", tracker_move),
 ];
 
-const READS: [(&str, Read); 4] = [
+const READS: [(&str, Read); 5] = [
     ("ci.log", ci_log_read),
     ("github.pr", github_pr),
     ("jira.issue", jira_issue),
     ("jira.search", jira_search),
+    ("review.read", review_read),
 ];
 
 pub fn act(call: &Map<String, Value>) -> Res<Value> {
@@ -1979,6 +1980,97 @@ fn github_pr(config: &Config, call: &Map<String, Value>) -> Res<Value> {
         &format!("pr-{n}.json"),
         &data,
         &format!("the pull request #{n}"),
+    )
+}
+
+/// `review.read`: the first review of the login `args.reviewer` that was submitted after
+/// `args.after` (an RFC 3339 time) on the pull request of the ticket, with its inline comments,
+/// as review.json. With no such review, `review` is null. The texts are untrusted data. The
+/// escape check of the core reads it (design section 11.6).
+fn review_read(config: &Config, call: &Map<String, Value>) -> Res<Value> {
+    let args = args_of(call);
+    let reviewer = text_of(args.get("reviewer")).trim().to_string();
+    if reviewer.is_empty()
+        || reviewer
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+    {
+        return fail(
+            "review.read needs args.reviewer: the login of a reviewer, such as review-bot[bot]",
+        );
+    }
+    let after_text = text_of(args.get("after"));
+    let Ok(after) = crate::util::time::parse_rfc3339(after_text.trim()) else {
+        return fail(
+            "review.read needs args.after: an RFC 3339 time, such as 2026-11-16T14:30:00Z",
+        );
+    };
+    let number = match truthy(args.get("number")).or(call.get("pr")) {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) if n.as_i64().is_some() => n.as_i64(),
+        Some(_) => return fail("review.read takes args.number: a pull request number"),
+    };
+    let gh = GitHub::new(config, "review.read", None)?;
+    let branch = text_of(call.get("branch"));
+    let Some(pull) = gh.find_pr(number, &branch)? else {
+        return fail("review.read found no pull request of the ticket");
+    };
+    let n = forge::int(&pull, "number")
+        .ok_or_else(|| Error::Unexpected("KeyError: 'number'".into()))?;
+    let submitted =
+        |r: &Value| crate::util::time::parse_rfc3339(forge::text(r, "submitted_at")).ok();
+    let mut found: Vec<(::time::OffsetDateTime, Value)> = gh
+        .reviews(n)?
+        .into_iter()
+        .filter(|r| forge::login(r.get("user")).eq_ignore_ascii_case(&reviewer))
+        .filter(|r| r.get("state").and_then(Value::as_str) != Some("PENDING"))
+        .filter_map(|r| submitted(&r).filter(|at| *at > after).map(|at| (at, r)))
+        .collect();
+    found.sort_by_key(|(at, _)| *at);
+    let Some((_, review)) = found.into_iter().next() else {
+        let data = json!({"pr": n, "reviewer": reviewer, "after": after_text, "review": null, "comments": []});
+        return read_doc(
+            "review.json",
+            &data,
+            &format!("no review of {reviewer} on #{n} after {after_text}"),
+        );
+    };
+    let id = forge::int(&review, "id")
+        .ok_or_else(|| Error::Unexpected("KeyError: 'id' of a review".into()))?;
+    let comments: Vec<Value> = gh
+        .review_comments(n)?
+        .into_iter()
+        .filter(|c| forge::int(c, "pull_request_review_id") == Some(id))
+        .filter(|c| c.get("in_reply_to_id").is_none_or(Value::is_null))
+        .map(|c| {
+            json!({
+                "id": c.get("id").cloned().unwrap_or(Value::Null),
+                "path": c.get("path").cloned().unwrap_or(Value::Null),
+                "line": truthy(c.get("line")).or(c.get("original_line")).cloned().unwrap_or(Value::Null),
+                "url": c.get("html_url").cloned().unwrap_or(Value::Null),
+                "untrusted": truthy(c.get("body")).cloned().unwrap_or(json!("")),
+            })
+        })
+        .collect();
+    let count = comments.len();
+    let data = json!({
+        "pr": n,
+        "reviewer": reviewer,
+        "after": after_text,
+        "review": {
+            "id": id,
+            "author": forge::login(review.get("user")),
+            "state": review.get("state").cloned().unwrap_or(Value::Null),
+            "submitted_at": review.get("submitted_at").cloned().unwrap_or(Value::Null),
+            "commit": review.get("commit_id").cloned().unwrap_or(Value::Null),
+            "url": review.get("html_url").cloned().unwrap_or(Value::Null),
+        },
+        "comments": comments,
+    });
+    read_doc(
+        "review.json",
+        &data,
+        &format!("the review {id} of {reviewer} on #{n} with {count} inline comment(s)"),
     )
 }
 

@@ -19,6 +19,8 @@ mod fixtures;
 mod jobs;
 #[path = "adapter_jira_github/observe.rs"]
 mod observe;
+#[path = "adapter_jira_github/precheck.rs"]
+mod precheck;
 #[path = "adapter_jira_github/world.rs"]
 mod world;
 

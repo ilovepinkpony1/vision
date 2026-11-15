@@ -1193,6 +1193,12 @@ pub struct Report {
     /// The steps of the measures in the order of the step list of the adapter, then each step
     /// that the adapter no longer has, by name.
     pub steps: Vec<String>,
+    /// The escape check (section 11.6): the checked pull requests and the escapes of the
+    /// window.
+    pub escapes: crate::escapes::EscapeMeasures,
+    /// The priorities that `[escapes]` counts, in its order, for the text.
+    #[serde(skip)]
+    pub counted: Vec<String>,
 }
 
 /// The measures of each ticket and in total.
@@ -1270,6 +1276,8 @@ pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
         tickets,
         total,
         steps,
+        escapes: crate::escapes::measures(ledger, None, since)?,
+        counted: crate::config::Escapes::default().count,
     })
 }
 
@@ -1303,12 +1311,16 @@ pub fn step_order<'a>(
     out
 }
 
-/// `vision report [--week] [--json]`.
-pub fn report(ctx: &Ctx, week: bool, json: bool) -> Result<()> {
+/// `vision report [KEY] [--week] [--json]`.
+pub fn report(ctx: &Ctx, key: Option<&TicketKey>, week: bool, json: bool) -> Result<()> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
     let since = week.then(|| time::rfc3339(time::now() - ::time::Duration::days(7)));
+    if let Some(key) = key {
+        return report_ticket(ctx, &ledger, key, since.as_deref(), json);
+    }
     let mut report = report_of(&ledger, since.as_deref())?;
+    report.counted = ctx.config()?.escapes.count.clone();
     // A broken adapter never breaks the report: the steps then go by name.
     let adapter_steps: Vec<String> = crate::adapter::load(ctx)
         .map(|a| a.steps.iter().map(|s| s.id.clone()).collect())
@@ -1327,6 +1339,116 @@ pub fn report(ctx: &Ctx, week: bool, json: bool) -> Result<()> {
     }
     print!("{}", render_report(&report));
     Ok(())
+}
+
+/// What `vision report KEY --json` prints: the measures of one ticket, its escape checks, and
+/// each escape.
+#[derive(Clone, Debug, Serialize)]
+pub struct TicketReport {
+    pub ticket: String,
+    pub since: Option<String>,
+    pub measures: Measures,
+    pub escapes: crate::escapes::EscapeMeasures,
+    pub checks: Vec<crate::ledger::review::EscapeCheckRow>,
+    pub escape_rows: Vec<crate::ledger::review::EscapeRow>,
+}
+
+/// `vision report KEY`: the measures of one ticket, and each escape of its reviews.
+fn report_ticket(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &TicketKey,
+    since: Option<&str>,
+    json: bool,
+) -> Result<()> {
+    let report = report_of(ledger, since)?;
+    let view = TicketReport {
+        ticket: key.to_string(),
+        since: since.map(str::to_string),
+        measures: report
+            .tickets
+            .get(key.as_str())
+            .cloned()
+            .unwrap_or_default(),
+        escapes: crate::escapes::measures(ledger, Some(key.as_str()), since)?,
+        checks: ledger.escape_checks_of(key.as_str())?,
+        escape_rows: ledger.escapes(Some(key.as_str()), since)?,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&view)?);
+        return Ok(());
+    }
+    print!(
+        "{}",
+        render_ticket_report(&view, &ctx.config()?.escapes.count)
+    );
+    Ok(())
+}
+
+/// The text of `vision report KEY`.
+pub fn render_ticket_report(view: &TicketReport, counted: &[String]) -> String {
+    let window = match &view.since {
+        Some(s) => format!("since {s}"),
+        None => "for all time".into(),
+    };
+    let m = &view.measures;
+    let mut out = format!("Measures of {} {window}\n\n", view.ticket);
+    out.push_str(&render_table(&[
+        ["CARDS TO YOU", "BY MEMORY", "BY JUDGE", "YOUR MIN", "COST"].map(String::from),
+        [
+            m.cards_to_person.to_string(),
+            m.cards_by_memory.to_string(),
+            m.cards_by_judge.to_string(),
+            format!("{:.1}", m.human_minutes),
+            money(m.cost_usd),
+        ],
+    ]));
+    out.push_str(&format!(
+        "\nReview escapes: {}\n",
+        crate::escapes::measures_line(&view.escapes, counted)
+    ));
+    let waiting = view.checks.iter().filter(|c| c.checked.is_none()).count();
+    for check in view.checks.iter().filter(|c| c.checked.is_some()) {
+        out.push_str(&format!(
+            "  {} reviewed #{} after the pass of {}: {} comment(s), {} counted, {} escaped\n",
+            check.reviewer,
+            check
+                .pr
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "-".into()),
+            check.pass_turn,
+            check.comments,
+            check.counted,
+            check.escapes
+        ));
+    }
+    if waiting > 0 {
+        out.push_str(&format!(
+            "  {waiting} check(s) wait for the first review of their reviewer\n"
+        ));
+    }
+    if view.escape_rows.is_empty() {
+        out.push_str("No escape.\n");
+        return out;
+    }
+    out.push_str("\nEscapes:\n");
+    for e in &view.escape_rows {
+        let place = match (&e.path, e.line) {
+            (Some(p), Some(l)) => format!("{p}:{l}"),
+            (Some(p), None) => p.clone(),
+            _ => "-".into(),
+        };
+        out.push_str(&format!(
+            "  P{}  {place}  {}  ({})\n",
+            e.priority.as_deref().unwrap_or("-"),
+            e.title.as_deref().unwrap_or(""),
+            e.reviewer
+        ));
+        if let Some(url) = &e.url {
+            out.push_str(&format!("      {url}\n"));
+        }
+    }
+    out
 }
 
 /// The text of `vision report`.
@@ -1390,6 +1512,10 @@ pub fn render_report(report: &Report) -> String {
             ));
         }
     }
+    out.push_str(&format!(
+        "\nReview escapes: {}\n",
+        crate::escapes::measures_line(&report.escapes, &report.counted)
+    ));
     out
 }
 
@@ -1435,6 +1561,8 @@ mod report_tests {
             tickets: BTreeMap::from([("DEMO-12".to_string(), m.clone())]),
             total: m,
             steps: Vec::new(),
+            escapes: Default::default(),
+            counted: Vec::new(),
         };
         report.steps = step_order(
             &["build".to_string(), "review".to_string()],

@@ -287,6 +287,14 @@ fn the_card_of_a_notice_lists_its_issues() {
 }
 
 #[test]
+fn the_card_of_a_finding_that_keeps_coming_back() {
+    check(
+        "need_notice_back",
+        &open_with(SIZE, vec![back_notice_item()]),
+    );
+}
+
+#[test]
 fn the_card_while_it_loads_and_after_its_load_failed() {
     let mut app = home_with(
         SIZE,

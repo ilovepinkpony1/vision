@@ -186,6 +186,18 @@ pub fn stats_data(week: bool) -> StatsData {
             ("reviewer".into(), 4.74),
         ],
         outside: vec![("curator".into(), 0.4 * scale)],
+        // All time has checked reviews of a review bot; the last 7 days have none.
+        escapes: if week {
+            Default::default()
+        } else {
+            vision::escapes::EscapeMeasures {
+                checked_prs: 4,
+                by_priority: std::collections::BTreeMap::from([("1".to_string(), 3)]),
+                escapes: 3,
+                rate: Some(0.75),
+            }
+        },
+        counted: vec!["0".into(), "1".into(), "2".into()],
     }
 }
 

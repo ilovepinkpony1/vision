@@ -141,5 +141,10 @@ fn read_stats(paths: &Paths, week: bool, wall: OffsetDateTime) -> anyhow::Result
         steps,
         agents,
         outside: outside.into_iter().collect(),
+        escapes: report.escapes.clone(),
+        counted: ctx
+            .config()
+            .map(|c| c.escapes.count.clone())
+            .unwrap_or_default(),
     })
 }

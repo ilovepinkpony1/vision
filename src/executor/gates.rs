@@ -405,6 +405,66 @@ pub fn sensitive_gate(files: &[FileDiff], sensitive: &[String], plan: Option<&st
     held
 }
 
+/// The commands that the executor never lets a job of the project run: a shell or a console on
+/// a remote machine or a pod, and a tool that changes the schema of a live database. Each entry
+/// is the words of one command in their order: the first word is a program, and each later
+/// word comes after it in the same command.
+const DENIED: [(&[&str], &str); 16] = [
+    (&["kubectl", "exec"], "a shell in a pod (kubectl exec)"),
+    (&["kubectl", "attach"], "a shell in a pod (kubectl attach)"),
+    (&["kubectl", "run"], "a new pod (kubectl run)"),
+    (&["kubectl", "debug"], "a shell in a pod (kubectl debug)"),
+    (&["kubectl", "cp"], "a copy into a pod (kubectl cp)"),
+    (&["ssh"], "a shell on a remote machine (ssh)"),
+    (&["mosh"], "a shell on a remote machine (mosh)"),
+    (&["heroku", "run"], "a remote console (heroku run)"),
+    (&["fly", "ssh"], "a remote console (fly ssh)"),
+    (&["flyctl", "ssh"], "a remote console (flyctl ssh)"),
+    (
+        &["aws", "ssm", "start-session"],
+        "a remote console (aws ssm start-session)",
+    ),
+    (
+        &["aws", "ecs", "execute-command"],
+        "a remote console (aws ecs execute-command)",
+    ),
+    (
+        &["gcloud", "compute", "ssh"],
+        "a remote console (gcloud compute ssh)",
+    ),
+    (&["az", "ssh"], "a remote console (az ssh)"),
+    (&["gh-ost"], "a schema change of a live database (gh-ost)"),
+    (
+        &["pt-online-schema-change"],
+        "a schema change of a live database (pt-online-schema-change)",
+    ),
+];
+
+/// Why the executor refuses a shell command of a job, or `None` when it allows it. The test
+/// reads each simple command of the text (split at `;`, `|`, `&`, parentheses, and line ends)
+/// as words, with the folder of a program left out, such as `/usr/bin/ssh`.
+pub fn denied_command(command: &str) -> Option<&'static str> {
+    for part in command.split([';', '|', '&', '(', ')', '\n', '`']) {
+        let words: Vec<String> = part
+            .split_whitespace()
+            .map(|w| {
+                let w = w.trim_matches(['"', '\'', '$', '{', '}']);
+                w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase()
+            })
+            .collect();
+        for (pattern, why) in DENIED {
+            let Some(start) = words.iter().position(|w| w == pattern[0]) else {
+                continue;
+            };
+            let mut rest = words[start + 1..].iter();
+            if pattern[1..].iter().all(|p| rest.any(|w| w == p)) {
+                return Some(why);
+            }
+        }
+    }
+    None
+}
+
 /// True when `path` is the entry, or is in the folder that the entry names.
 fn touches(path: &str, entry: &str) -> bool {
     if entry.is_empty() || path.is_empty() {
@@ -465,6 +525,34 @@ fn unquote(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remote_console_and_a_live_schema_tool_are_denied() {
+        for command in [
+            "kubectl exec -it web -- bin/rails console",
+            "bundle exec rspec && kubectl --context prod exec web -- ls",
+            "/usr/bin/ssh deploy@host",
+            "heroku run rails c -a app",
+            "aws ssm start-session --target i-1",
+            "gh-ost --alter 'add column x'",
+            "echo x | pt-online-schema-change --alter y",
+        ] {
+            assert!(denied_command(command).is_some(), "{command}");
+        }
+        for command in [
+            "bundle exec rubocop --format emacs 'app/a.rb'",
+            "bin/rspec 'spec/ssh_spec.rb'",
+            "bin/rails db:migrate:up VERSION=1",
+            "kubectl get pods",
+            "npx eslint --format unix 'app/exec.js'",
+        ] {
+            assert_eq!(denied_command(command), None, "{command}");
+        }
+        assert_eq!(
+            denied_command("kubectl exec x"),
+            Some("a shell in a pod (kubectl exec)")
+        );
+    }
 
     const DIFF: &str = "\
 diff --git a/src/app.py b/src/app.py

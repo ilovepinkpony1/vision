@@ -397,13 +397,23 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
         Check::Held => ("held".to_string(), json!({"turn": last.id, "held": true})),
         // `blocks`: a failed gate found a blocking item in its document, which was written to
         // the ticket folder above. A `fail` route of the step goes on it.
-        Check::Failed { fact, found: what } => (
-            format!("failed:{fact}"),
-            json!({
-                "turn": last.id, "fact": fact, "found": what, "documents": job_docs,
-                "blocks": gate_blocks(step, fact, &found.docs),
-            }),
-        ),
+        Check::Failed { fact, found: what } => {
+            // The resume names the documents of a failed job, such as precheck.md, so that the
+            // turn reads them in its view.
+            let what = if fact.starts_with("job:") && !job_docs.is_empty() {
+                let names: Vec<String> = job_docs.iter().map(|d| format!(".vision/{d}")).collect();
+                format!("{what}. Read its documents: {}", names.join(", "))
+            } else {
+                what.clone()
+            };
+            (
+                format!("failed:{fact}"),
+                json!({
+                    "turn": last.id, "fact": fact, "found": what, "documents": job_docs,
+                    "blocks": gate_blocks(step, fact, &found.docs),
+                }),
+            )
+        }
         Check::RunJob(_) => return Ok(()),
     };
     if let Check::Failed { .. } = &check {
@@ -422,7 +432,47 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
         Check::Held => gate_notices(ctx, step, &found.docs)?,
         _ => Vec::new(),
     };
+    // The commands of the secrets can be slow, so only a step with a gate reads them.
+    let secrets = if step.expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
+        Secrets::read(ctx.config()?)?
+    } else {
+        Secrets::from_values(Vec::new())
+    };
     in_tx(ledger, |ledger| {
+        // The rounds of the gates and the findings that the rounds follow, with the end fact,
+        // so that a second pass over this turn records nothing new.
+        let back = super::rounds::record(
+            ledger,
+            ticket.key.as_str(),
+            step,
+            &last.id,
+            &head,
+            &found.docs,
+            &secrets,
+            &now,
+        )?;
+        for notice in &back {
+            if let Some(id) = ledger.add_notice(&NewNotice {
+                ticket: ticket.key.as_str(),
+                step: &step.id,
+                turn: &last.id,
+                gate: super::rounds::CR_SOURCE,
+                doc: &notice.doc,
+                issues: &notice.issues,
+                note: Some(&notice.note),
+                created: &now,
+            })? {
+                ledger.add_event(
+                    &Event::now("tick", "notice")
+                        .ticket(ticket.key.as_str())
+                        .external_id(&format!("notice:{}:{}", last.id, notice.doc))
+                        .detail(json!({
+                            "notice": notice_name(id), "turn": last.id, "step": step.id,
+                            "doc": notice.doc, "issues": notice.issues.len(), "why": notice.note,
+                        })),
+                )?;
+            }
+        }
         ledger.set_end_fact(&last.id, &value)?;
         ledger.set_ticket_state(
             ticket.key.as_str(),
@@ -598,6 +648,8 @@ fn write_result_docs(
                         verdict: f.verdict,
                         reason_code: f.reason_code,
                         fix_commit: f.fix_commit,
+                        turn: Some(last.id.clone()),
+                        ..FindingRow::default()
                     });
                 }
             }
@@ -926,13 +978,20 @@ fn select_one(
             Next::Start { resume, message } => {
                 return enter_turn(ctx, ledger, ticket, &step, resume, message)
             }
-            Next::Resume { session, message } => {
+            Next::Resume {
+                session,
+                message,
+                extra,
+            } => {
+                if let Some(why) = extra {
+                    extra_round_event(ctx, ledger, ticket, &step, &why)?;
+                }
                 return Ok(Some(start_action(
                     ticket,
                     &step,
                     Some(session),
                     Some(message),
-                )))
+                )));
             }
             Next::Serve { turn, session } => {
                 return serve(ctx, ledger, adapter, ticket, &step, &turn, &session)
@@ -973,6 +1032,30 @@ fn select_one(
         }
     }
     Ok(None)
+}
+
+/// The event of an extra round of `extra_rounds`, with why it was granted. One event for each
+/// failed turn, so a start that waits for a later tick records it once.
+fn extra_round_event(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    step: &Step,
+    why: &str,
+) -> Result<()> {
+    let Some(last) = last_turn_id(ledger, ticket, step)? else {
+        return Ok(());
+    };
+    let added = ledger.add_event(
+        &Event::now("tick", "extra-round")
+            .ticket(ticket.key.as_str())
+            .external_id(&format!("extra-round:{last}"))
+            .detail(json!({"step": step.id, "turn": last, "why": why})),
+    )?;
+    if added.is_some() {
+        ctx.log(&format!("pipeline: {} gets an {why}", ticket.key));
+    }
+    Ok(())
 }
 
 fn flag_action(ticket: &Ticket, flag: &str, reason: &str) -> Action {
@@ -1218,6 +1301,13 @@ fn gather(
                 .filter(|d| d.get("blocks").and_then(Value::as_bool) == Some(true))
                 .and_then(|d| d.get("fact").and_then(Value::as_str))
                 .and_then(|fact| step.fail.get(fact).cloned());
+            let converge = match failed
+                .as_ref()
+                .and_then(|d| d.get("fact").and_then(Value::as_str))
+            {
+                Some(fact) if step.extra_rounds > 0 => converge_of(ledger, step, &turns, fact)?,
+                _ => None,
+            };
             let after = match &last {
                 Some(t) if t.end_fact.as_deref() == Some("held") => {
                     op_facts(ctx, ledger, ticket, &step.after, Some(&t.id))?
@@ -1237,6 +1327,7 @@ fn gather(
                 failures,
                 failure,
                 route,
+                converge,
                 after,
                 resume: visit.resume.clone(),
                 message: visit.message.clone(),
@@ -1299,6 +1390,7 @@ fn gather(
         refusal,
         cap,
         rounds: step.rounds,
+        extra_rounds: step.extra_rounds,
         n: visit.n,
         skip_cap: visit.skip_cap,
         open: if cap_hit {
@@ -1307,6 +1399,45 @@ fn gather(
             Vec::new()
         },
     })
+}
+
+/// Why the loop of a visit converges on the gate of the failed end fact `fact`: the counts of
+/// that gate in the last turn and in the turn of the visit before it that has them. `None`
+/// when the fact is no gate of the step, or when the loop does not converge.
+fn converge_of(
+    ledger: &Ledger,
+    step: &Step,
+    turns: &[TurnRow],
+    fact: &str,
+) -> Result<Option<String>> {
+    let Some(gate) = step.expects.iter().find_map(|e| match e {
+        Expect::Gate(gate) if gate.fact() == fact => Some(gate),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    let mut counts = Vec::new();
+    for row in turns.iter().rev() {
+        if let Some(round) = ledger.gate_round(&row.id, &gate.doc)? {
+            counts.push(round.count());
+            if counts.len() == 2 {
+                break;
+            }
+        }
+    }
+    // The last turn first: it must have its own count, or the loop gives no number.
+    let last_has = match turns.last() {
+        Some(row) => ledger.gate_round(&row.id, &gate.doc)?.is_some(),
+        None => false,
+    };
+    if !last_has || counts.len() < 2 {
+        return Ok(None);
+    }
+    Ok(super::follow::converges(
+        gate.kind(),
+        Some(counts[1]),
+        Some(counts[0]),
+    ))
 }
 
 /// Where a turn step with `on` moves after its held turn: `findings` when the documents of the

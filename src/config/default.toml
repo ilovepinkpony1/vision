@@ -76,6 +76,14 @@ projects = "~/.claude/projects"   # the folder of the session files. Vision only
 quiet_hours = 24              # a session file counts as finished when it has not changed for this many hours
 wing = "claude-sessions"      # the wing of MemPalace for the summaries. The room is the project folder.
 
+[escapes]                     # what the review bot of the team found on our pull request that our own review missed
+reviewers = []                # the logins of the review bots, such as ["review-bot[bot]"]. [] means: no check.
+priority = "\\*\\*\\[P([0-3])\\]"   # a regular expression whose group 1 is the priority of an inline comment
+count = ["0", "1", "2"]       # the priorities that count as an escape when no finding of ours matches
+lines = 3                     # a finding of ours matches a comment on the same path within this many lines
+verb = "review.read"          # the read verb of the adapter that gives the review and its inline comments
+every = 900                   # seconds between two looks at a pull request while the review is missing
+
 [modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
 
 [secrets]                     # name -> how the executor gets it. A session never gets one.

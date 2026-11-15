@@ -16,9 +16,11 @@ pub mod commands;
 pub mod decide;
 pub mod docs;
 pub mod facts;
+pub mod follow;
 pub mod gates;
 mod machine;
 mod request;
+pub mod rounds;
 pub mod state;
 pub mod view;
 
@@ -49,7 +51,9 @@ pub fn run(ctx: &Ctx, command: PipelineCommand) -> Result<()> {
         PipelineCommand::Diff { key, json } => commands::diff(ctx, &key, json),
         PipelineCommand::Stop { key } => commands::stop(ctx, &key),
         PipelineCommand::Retry { key } => commands::retry(ctx, &key),
-        PipelineCommand::Report { week, json } => commands::report(ctx, week, json),
+        PipelineCommand::Report { key, week, json } => {
+            commands::report(ctx, key.as_ref(), week, json)
+        }
     }
 }
 

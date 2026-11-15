@@ -185,6 +185,26 @@ pub fn notice_item(note: bool) -> NeedItem {
     })
 }
 
+/// A notice of the gate cr of DEMO-12: a finding that keeps coming back after its fix.
+pub fn back_notice_item() -> NeedItem {
+    NeedItem::Notice(NoticeRow {
+        id: 2,
+        ticket: "DEMO-12".into(),
+        step: "review".into(),
+        turn: "20261116T150000Z-DEMO-12-review-5".into(),
+        gate: "cr".into(),
+        doc: "cr.md".into(),
+        issues: vec![NoticeIssue {
+            id: "F1".into(),
+            severity: "major".into(),
+            title: "1. [MAJOR][BLOCKING] app/models/report_export.rb:42: A retry sends the report twice".into(),
+        }],
+        note: Some("this finding keeps coming back after its fix".into()),
+        created: "2026-11-16T15:10:00Z".into(),
+        read: None,
+    })
+}
+
 /// Home with one need of DEMO-12, then `n`, then the items as the load of the card.
 pub fn open_with(size: (u16, u16), items: Vec<NeedItem>) -> App {
     let mut app = home_with(

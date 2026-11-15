@@ -15,6 +15,7 @@
 //! Each string that comes back is untrusted, and each value of a secret in it is masked before
 //! it reaches a log line, an error text, a document, or the ledger.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{Read, Write};
@@ -214,15 +215,25 @@ fn secret_command(name: &str, cmd: &str) -> Result<String> {
         .map_err(|_| anyhow!("the command of the secret {name} printed text that is not UTF-8"))
 }
 
+/// The environment of a work session (section 7.3), for a job with `env = "session"`: the
+/// names of `claude.env_pass` and the values of `claude.env`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionEnv {
+    pub pass: Vec<String>,
+    pub set: BTreeMap<String, String>,
+}
+
 /// The environment of a script, from the variables `vars` of this process. The plain one has
 /// only the names of [`PASSED_ENV`]. The full one has each variable, but a variable with the
 /// name or the value of a secret stays out unless the call gets the secrets. With the secrets,
-/// each one comes under its own name.
+/// each one comes under its own name. The one of a session has the names that a work session
+/// gets and the values of `claude.env`, and never a secret.
 fn script_env(
     vars: Vec<(OsString, OsString)>,
     secrets: &Secrets,
     with_secrets: bool,
     env: JobEnv,
+    session: &SessionEnv,
 ) -> Vec<(OsString, OsString)> {
     let holds_secret = |name: &OsString, value: &OsString| {
         secrets.values.iter().any(|(secret, secret_value)| {
@@ -230,10 +241,21 @@ fn script_env(
                 || value.to_str().map(|v| v.trim_end_matches(['\n', '\r'])) == Some(secret_value)
         })
     };
+    if env == JobEnv::Session {
+        let mut out = crate::turn::session_env(vars, &session.pass);
+        for (name, value) in &session.set {
+            out.retain(|(n, _)| n.to_str() != Some(name.as_str()));
+            out.push((OsString::from(name), OsString::from(value)));
+        }
+        out.retain(|(name, value)| !holds_secret(name, value));
+        return out;
+    }
     let mut out: Vec<(OsString, OsString)> = vars
         .into_iter()
         .filter(|(name, value)| match env {
-            JobEnv::Plain => name.to_str().is_some_and(|n| PASSED_ENV.contains(&n)),
+            JobEnv::Plain | JobEnv::Session => {
+                name.to_str().is_some_and(|n| PASSED_ENV.contains(&n))
+            }
             JobEnv::Full => with_secrets || !holds_secret(name, value),
         })
         .collect();
@@ -333,6 +355,8 @@ pub struct Runner<'a> {
     /// The `base` of `adapter.toml`, such as `origin/main`: the one place of the base branch.
     pub base_ref: String,
     pub secrets: &'a Secrets,
+    /// The environment of a work session, for a job with `env = "session"`.
+    pub session: SessionEnv,
 }
 
 impl<'a> Runner<'a> {
@@ -343,6 +367,10 @@ impl<'a> Runner<'a> {
             config: Value::Object(table_to_json(&config.adapter)),
             base_ref: adapter.base.clone(),
             secrets,
+            session: SessionEnv {
+                pass: config.claude.env_pass.clone(),
+                set: config.claude.env.clone(),
+            },
         }
     }
 
@@ -438,11 +466,18 @@ impl<'a> Runner<'a> {
             command.args(["adapter-script", &builtin.name, script.file_name()]);
         }
         command.current_dir(&self.scripts).env_clear();
+        // A session gets the user of the database when the tick has none, as a turn does.
+        let vars: Vec<(OsString, OsString)> = if env == JobEnv::Session {
+            crate::turn::session_env_of_process(&self.session.pass)
+        } else {
+            std::env::vars_os().collect()
+        };
         command.envs(script_env(
-            std::env::vars_os().collect(),
+            vars,
             self.secrets,
             with_secrets,
             env,
+            &self.session,
         ));
         let output = run_child(command, bytes, timeout).map_err(|e| ScriptError::Start {
             path: path_text.clone(),
@@ -724,6 +759,7 @@ mod tests {
             config: json!({"root": "/world"}),
             base_ref: "origin/trunk".into(),
             secrets,
+            session: SessionEnv::default(),
         }
     }
 
@@ -827,33 +863,76 @@ mod tests {
             ("FORGE_TOKEN", "an older value"),
         ]);
         let secrets = Secrets::from_values(vec![("FORGE_TOKEN".into(), "tok-123456".into())]);
+        let none = SessionEnv::default();
         let names = |env: Vec<(OsString, OsString)>| -> Vec<String> {
             env.iter()
                 .map(|(n, v)| format!("{}={}", n.to_string_lossy(), v.to_string_lossy()))
                 .collect()
         };
         assert_eq!(
-            names(script_env(tick.clone(), &secrets, false, JobEnv::Plain)),
+            names(script_env(
+                tick.clone(),
+                &secrets,
+                false,
+                JobEnv::Plain,
+                &none
+            )),
             ["PATH=/bin", "HOME=/home/a"]
         );
         assert_eq!(
-            names(script_env(tick.clone(), &secrets, true, JobEnv::Plain)),
+            names(script_env(
+                tick.clone(),
+                &secrets,
+                true,
+                JobEnv::Plain,
+                &none
+            )),
             ["PATH=/bin", "HOME=/home/a", "FORGE_TOKEN=tok-123456"]
         );
         // The full environment has each variable of the tick, but none with the name or the
         // value of a secret.
         assert_eq!(
-            names(script_env(tick.clone(), &secrets, false, JobEnv::Full)),
+            names(script_env(
+                tick.clone(),
+                &secrets,
+                false,
+                JobEnv::Full,
+                &none
+            )),
             ["PATH=/bin", "HOME=/home/a", "SSH_AUTH_SOCK=/tmp/agent.sock"]
         );
         assert_eq!(
-            names(script_env(tick, &secrets, true, JobEnv::Full)),
+            names(script_env(
+                tick.clone(),
+                &secrets,
+                true,
+                JobEnv::Full,
+                &none
+            )),
             [
                 "PATH=/bin",
                 "HOME=/home/a",
                 "SSH_AUTH_SOCK=/tmp/agent.sock",
                 "GH_TOKEN=tok-123456",
                 "FORGE_TOKEN=tok-123456"
+            ]
+        );
+        // The environment of a session has the names of a session and of env_pass, the values
+        // of claude.env, and never a secret, even when the job asks for them.
+        let session = SessionEnv {
+            pass: vec!["SSH_AUTH_SOCK".into(), "GH_TOKEN".into()],
+            set: BTreeMap::from([
+                ("WT_BRANCH".to_string(), "vision/DEMO-12".to_string()),
+                ("HOME".to_string(), "/home/b".to_string()),
+            ]),
+        };
+        assert_eq!(
+            names(script_env(tick, &secrets, true, JobEnv::Session, &session)),
+            [
+                "PATH=/bin",
+                "SSH_AUTH_SOCK=/tmp/agent.sock",
+                "HOME=/home/b",
+                "WT_BRANCH=vision/DEMO-12"
             ]
         );
     }

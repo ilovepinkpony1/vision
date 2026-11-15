@@ -31,6 +31,7 @@ fn runner<'a>(t: &AdapterTest, secrets: &'a Secrets) -> Runner<'a> {
         config: t.config(json!({})),
         base_ref: BASE_REF.into(),
         secrets,
+        session: Default::default(),
     }
 }
 

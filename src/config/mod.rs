@@ -46,6 +46,8 @@ pub struct Config {
     pub archive: Archive,
     /// The archive of the sessions of Claude Code of the person (section 16).
     pub sessions: Sessions,
+    /// The escape check: the findings of a review bot of the team that our review missed.
+    pub escapes: Escapes,
     /// Verb -> mode. Only `vision promote` and `vision demote` change them.
     pub modes: BTreeMap<String, Mode>,
     /// Name -> how the executor gets it. A session never gets one.
@@ -75,6 +77,7 @@ impl Default for Config {
             journal: Journal::default(),
             archive: Archive::default(),
             sessions: Sessions::default(),
+            escapes: Escapes::default(),
             modes: BTreeMap::new(),
             secrets: BTreeMap::new(),
             adapter: toml::Table::new(),
@@ -409,6 +412,49 @@ impl Archive {
     }
 }
 
+/// The escape check (section 11.6): after our gate cr passed, the first review of a review bot
+/// of the team on the pull request. Each comment of a counted priority that no finding of our
+/// review matches is an escape. With no reviewer, the check is off.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Escapes {
+    /// The logins of the review bots whose findings Vision compares, such as `review-bot[bot]`.
+    pub reviewers: Vec<String>,
+    /// A regular expression whose group 1 is the priority of an inline comment, such as
+    /// `\*\*\[P([0-3])\]`. See [`crate::util::regex`] for the syntax.
+    pub priority: String,
+    /// The priorities that count as an escape when no finding of ours matches.
+    pub count: Vec<String>,
+    /// A finding of ours matches a comment on the same path within this many lines.
+    pub lines: u32,
+    /// The read verb of the adapter that gives the first review of a login after a time, with
+    /// its inline comments.
+    pub verb: String,
+    /// Seconds between two looks at the reviews of one pull request while the review is
+    /// missing.
+    pub every: u64,
+}
+
+impl Default for Escapes {
+    fn default() -> Escapes {
+        Escapes {
+            reviewers: Vec::new(),
+            priority: "\\*\\*\\[P([0-3])\\]".into(),
+            count: vec!["0".into(), "1".into(), "2".into()],
+            lines: 3,
+            verb: "review.read".into(),
+            every: 900,
+        }
+    }
+}
+
+impl Escapes {
+    /// True when the check is on: it names a reviewer.
+    pub fn on(&self) -> bool {
+        !self.reviewers.is_empty()
+    }
+}
+
 /// The archive of the sessions of Claude Code of the person (section 16). Claude Code deletes
 /// its session files after some days; Vision copies each finished file to the archive, and
 /// writes a short summary of each session to the journal.
@@ -620,6 +666,7 @@ impl Config {
         self.check_journal()?;
         self.check_archive()?;
         self.check_sessions()?;
+        self.check_escapes()?;
         let (name, email) = (self.git.name.trim(), self.git.email.trim());
         if name.is_empty() != email.is_empty() {
             bail!("git.name and git.email go together: set both, or leave both empty");
@@ -642,6 +689,40 @@ impl Config {
 }
 
 impl Config {
+    fn check_escapes(&self) -> Result<()> {
+        let escapes = &self.escapes;
+        for login in &escapes.reviewers {
+            if login.trim().is_empty() || login.chars().any(|c| c.is_control() || c.is_whitespace())
+            {
+                bail!("escapes.reviewers holds `{login}`, but each entry is one login with no space, such as \"review-bot[bot]\"");
+            }
+        }
+        let regex = crate::util::regex::Regex::new(&escapes.priority)
+            .map_err(|e| anyhow::anyhow!("escapes.priority: {e}"))?;
+        if regex.groups() == 0 {
+            bail!("escapes.priority has no group: its group 1 is the priority, such as \"\\\\*\\\\*\\\\[P([0-3])\\\\]\"");
+        }
+        if escapes.count.iter().any(|c| c.trim().is_empty()) {
+            bail!("escapes.count holds an empty priority. Name each priority that counts, such as [\"0\", \"1\"]");
+        }
+        if escapes.lines > 1000 {
+            bail!(
+                "escapes.lines is {}, but it must be at most 1000",
+                escapes.lines
+            );
+        }
+        if escapes.verb.trim().is_empty() || escapes.verb.contains(char::is_whitespace) {
+            bail!("escapes.verb must name a read verb of the adapter, such as \"review.read\"");
+        }
+        if escapes.every < 60 {
+            bail!(
+                "escapes.every is {}, but it must be at least 60 seconds",
+                escapes.every
+            );
+        }
+        Ok(())
+    }
+
     fn check_journal(&self) -> Result<()> {
         let journal = &self.journal;
         if journal.index_on() {
@@ -916,6 +997,39 @@ mod tests {
             assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
         }
         assert!(Config::parse("[archive]\nprefix = \"\"\n").is_ok());
+    }
+
+    #[test]
+    fn the_escape_check_is_off_by_default_and_its_pattern_needs_a_group() {
+        let config = Config::default();
+        assert!(!config.escapes.on());
+        assert_eq!(config.escapes.priority, r"\*\*\[P([0-3])\]");
+        assert_eq!(config.escapes.count, ["0", "1", "2"]);
+        assert_eq!(config.escapes.lines, 3);
+        assert_eq!(config.escapes.verb, "review.read");
+        let on = Config::parse(
+            "[escapes]\nreviewers = [\"review-bot[bot]\"]\npriority = \"\\\\(P(\\\\d)\\\\)\"\n",
+        )
+        .unwrap();
+        assert!(on.escapes.on());
+        for (text, part) in [
+            (
+                "[escapes]\npriority = \"(a\"\n",
+                "escapes.priority: the pattern `(a`",
+            ),
+            (
+                "[escapes]\npriority = \"P[0-3]\"\n",
+                "escapes.priority has no group",
+            ),
+            ("[escapes]\nreviewers = [\"a b\"]\n", "escapes.reviewers"),
+            ("[escapes]\ncount = [\"\"]\n", "escapes.count"),
+            ("[escapes]\nevery = 5\n", "escapes.every"),
+            ("[escapes]\nlines = 5000\n", "escapes.lines"),
+            ("[escapes]\nverb = \"\"\n", "escapes.verb"),
+        ] {
+            let err = Config::parse(text).unwrap_err();
+            assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
+        }
     }
 
     #[test]

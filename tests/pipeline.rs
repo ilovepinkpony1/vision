@@ -1844,3 +1844,238 @@ mode = "auto"
     world.tick();
     assert_eq!(world.acts_of("ci.run"), 0);
 }
+
+/// A report of a code review in the form of the gate cr: one numbered finding for each item,
+/// each with its place, its tag, its title, and its Net.
+fn cr_report(items: &[(&str, &str, &str, &str)]) -> String {
+    let mut text = String::from("Reviewed the branch against main.\n\n");
+    for (n, (severity, tag, place, title)) in items.iter().enumerate() {
+        text.push_str(&format!(
+            "{}. [{severity}][{tag}] {place}\n   {title}\n   Fix: change it.\n   Net: +6\n\n",
+            n + 1
+        ));
+    }
+    if items.is_empty() {
+        text.push_str("No finding passed the bar.\n");
+    }
+    text
+}
+
+#[test]
+fn extra_rounds_go_on_while_the_failing_findings_get_fewer_and_then_need_you() {
+    let world = World::new();
+    steps_adapter(
+        &world,
+        r#"[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{ gate = "cr", doc = "cr.md" }]
+rounds = 2
+extra_rounds = 2
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+"#,
+    );
+    let three = cr_report(&[
+        ("MAJOR", "BLOCKING", "app/a.rb:10", "One"),
+        ("MAJOR", "BLOCKING", "app/b.rb:20", "Two"),
+        ("MINOR", "BLOCKING", "app/c.rb:30", "Three"),
+    ]);
+    let two = cr_report(&[
+        ("MAJOR", "BLOCKING", "app/a.rb:10", "One"),
+        ("MAJOR", "BLOCKING", "app/b.rb:20", "Two"),
+    ]);
+    let one = cr_report(&[("MAJOR", "BLOCKING", "app/a.rb:11", "One")]);
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([
+            ends_with(result("Three.", &[("cr.md", &three)])),
+            ends_with(result("Two.", &[("cr.md", &two)])),
+            ends_with(result("One.", &[("cr.md", &one)])),
+            ends_with(result("Still one.", &[("cr.md", &one)])),
+        ]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    let turns = step_turns(&world, "review");
+    assert_eq!(
+        turns.len(),
+        4,
+        "rounds = 2, then two extra rounds while 3 > 2 > 1, then no more at 1 = 1"
+    );
+    let ledger = world.ledger();
+    let events: Vec<String> = ledger
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "extra-round")
+        .filter_map(|e| e.detail)
+        .collect();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert!(
+        events[0].contains("extra round 1 of 2 (extra_rounds) after 2 failed turn(s): the gate cr failed on 2 item(s), fewer than the 3 of the turn before, and none is critical"),
+        "{events:?}"
+    );
+    assert!(events[1].contains("extra round 2 of 2"), "{events:?}");
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains("did not hold after 3 resumes (rounds = 2)")
+            && reason.contains("Each of the 2 extra round(s) of extra_rounds is used"),
+        "{reason}"
+    );
+    let rounds = ledger.gate_rounds_of(KEY, "cr").unwrap();
+    let failing: Vec<Option<i64>> = rounds.iter().map(|r| r.failing).collect();
+    assert_eq!(failing, [Some(3), Some(2), Some(1), Some(1)]);
+    assert!(rounds.iter().all(|r| !r.passed && r.head.is_some()));
+    // Each finding of each round is a row with its place, and the rounds follow it: a.rb is one
+    // finding at the lines 10 and 11.
+    let cr: Vec<_> = ledger
+        .findings_of(KEY)
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.source == "cr")
+        .collect();
+    assert_eq!(cr.len(), 3 + 2 + 1 + 1);
+    let tracks = ledger.finding_tracks(KEY).unwrap();
+    assert_eq!(tracks.len(), 3);
+    let a = tracks.iter().find(|t| t.track.path == "app/a.rb").unwrap();
+    assert_eq!((a.track.first_round, a.track.last_round), (1, 4));
+    assert_eq!(a.track.line, Some(11));
+    assert_eq!(a.track.came_back, 0, "it never was gone");
+}
+
+#[test]
+fn a_finding_that_comes_back_two_times_after_its_fix_is_a_notice_and_a_journal_note() {
+    let world = World::new();
+    steps_adapter(
+        &world,
+        r#"[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "reader"
+reads = ["issue.json"]
+expects = [{ gate = "cr", doc = "cr.md" }]
+rounds = 6
+next = "done"
+
+[[step]]
+id = "done"
+kind = "end"
+"#,
+    );
+    let x = cr_report(&[(
+        "MAJOR",
+        "BLOCKING",
+        "app/models/export.rb:42",
+        "A retry sends the report twice",
+    )]);
+    let y = cr_report(&[(
+        "MINOR",
+        "BLOCKING",
+        "app/views/show.erb:3",
+        "A label is long",
+    )]);
+    let clean = cr_report(&[]);
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([
+            ends_with(result("X.", &[("cr.md", &x)])),
+            ends_with(result("Y.", &[("cr.md", &y)])),
+            ends_with(result("X again.", &[("cr.md", &x)])),
+            ends_with(result("Y again.", &[("cr.md", &y)])),
+            ends_with(result("X a third time.", &[("cr.md", &x)])),
+            ends_with(result("Clean.", &[("cr.md", &clean)])),
+        ]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+    let turns = step_turns(&world, "review");
+    assert_eq!(turns.len(), 6);
+    let ledger = world.ledger();
+    let notices = ledger.notices_of(KEY).unwrap();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    let notice = &notices[0];
+    assert_eq!(
+        (
+            notice.gate.as_str(),
+            notice.doc.as_str(),
+            notice.turn.as_str()
+        ),
+        ("cr", "cr.md", turns[4].id.as_str()),
+        "the fifth round brought it back the second time"
+    );
+    assert_eq!(
+        notice.note.as_deref(),
+        Some("this finding keeps coming back after its fix")
+    );
+    assert_eq!(notice.issues[0].id, "F1");
+    assert_eq!(
+        notice.issues[0].title,
+        "1. [MAJOR][BLOCKING] app/models/export.rb:42: A retry sends the report twice"
+    );
+    assert!(world.flags().is_empty(), "a notice never stops a ticket");
+    let needs = world.run(&["needs"]);
+    assert!(
+        needs
+            .stdout
+            .contains("1 finding of cr.md of the step review keeps coming back after the fix"),
+        "{}",
+        needs.stdout
+    );
+    // The entry of the fifth turn holds the note, so that a later turn finds it.
+    let id = TurnId::parse(&turns[4].id).unwrap();
+    let entry = std::fs::read_to_string(world.ctx().paths.journal_entry(&vision_key(), &id))
+        .expect("the journal entry of the turn");
+    assert!(
+        entry.contains("- problem: The finding F1 of cr.md keeps coming back after its fix: 1. [MAJOR][BLOCKING] app/models/export.rb:42: A retry sends the report twice"),
+        "{entry}"
+    );
+}
+
+fn vision_key() -> TicketKey {
+    TicketKey::parse(KEY).unwrap()
+}
+
+#[test]
+fn the_resume_after_a_failed_job_names_its_documents() {
+    let world = World::new();
+    simple_scenarios(&world);
+    // The build commits a change with no test, and the plan declares no proof green: the proof
+    // fails, and the resume names its log.
+    world.scenario(
+        "builder",
+        "build",
+        json!([
+            runs_then(
+                "printf '# A comment.\\n' >> calc.py && git commit -q -am 'Comment calc.py'",
+                result("Built.", &[("pr.md", "Comment calc.py")])
+            ),
+            ends_with(result("Built again.", &[("pr.md", "Comment calc.py")])),
+        ]),
+    );
+    take_and_approve(&world);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    let build = step_turns(&world, "build");
+    assert_eq!(build.len(), 2, "one resume");
+    assert!(build[0]
+        .end_fact
+        .as_deref()
+        .is_some_and(|f| f.starts_with("failed:job:proof")));
+    let facts = facts_of(&world, &build[1].id);
+    let message = facts["message"].as_str().unwrap().to_string();
+    assert!(
+        message.contains("the job proof did not pass at")
+            && message.contains("Read its documents: .vision/proof.txt"),
+        "{message}"
+    );
+    assert_eq!(facts["documents"]["proof.txt"], ".vision/proof.txt");
+}

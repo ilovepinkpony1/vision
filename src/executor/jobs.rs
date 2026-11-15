@@ -99,6 +99,13 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
         .timeout
         .map(Duration::from_secs)
         .unwrap_or(DEFAULT_TIMEOUT);
+    // A job that a built-in adapter knows by its name gets the keys of its table, such as the
+    // commands of the precheck.
+    if !spec.settings.is_empty() && spec.command.is_none() {
+        let mut table = spec.settings.clone();
+        table.insert("timeout".into(), json!(timeout.as_secs()));
+        input["table"] = Value::Object(table);
+    }
     // A job with `command` gets its table of adapter.toml: the script runs the command.
     if let Some(command) = &spec.command {
         input["table"] = json!({

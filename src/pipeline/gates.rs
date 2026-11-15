@@ -39,10 +39,7 @@ pub fn judge(gate: &Gate, text: &str) -> Verdict {
 /// a step goes only on such an item: a report that the gate cannot read goes back to its turn.
 pub fn blocks(gate: &Gate, text: &str) -> bool {
     match &gate.rule {
-        GateRule::Cr { net_max } => cr_report(text).findings.iter().any(|f| {
-            f.header_readable()
-                && (f.blocking == Some(true) || f.net.is_some_and(|net| net > *net_max))
-        }),
+        GateRule::Cr { net_max } => cr_report(text).findings.iter().any(|f| f.fails(*net_max)),
         GateRule::Qa { block, .. } => qa_report(text)
             .issues
             .iter()
@@ -65,11 +62,26 @@ pub struct CrFinding {
     pub blocking: Option<bool>,
     /// The number of its first `Net:` line, such as 12.0 or -2.0.
     pub net: Option<f64>,
+    /// The file of the first line, such as `app/order.rb`; `None` when it names none.
+    pub path: Option<String>,
+    /// The line of the first line, such as 142; `None` when it names none.
+    pub at: Option<u32>,
+    /// The title of the finding: the text after the place on the first line, or else the
+    /// first line of text after it. Empty when the finding has no text.
+    pub title: String,
 }
 
 impl CrFinding {
     fn header_readable(&self) -> bool {
         self.severity.is_some() && self.blocking.is_some()
+    }
+
+    /// True when the finding fails a gate cr with this `net_max`: it is tagged BLOCKING, or its
+    /// Net is above `net_max`. A finding whose first line or Net the gate cannot read does not
+    /// count.
+    pub fn fails(&self, net_max: f64) -> bool {
+        self.header_readable()
+            && (self.blocking == Some(true) || self.net.is_some_and(|net| net > net_max))
     }
 }
 
@@ -101,6 +113,14 @@ pub fn cr_report(text: &str) -> CrReport {
             continue;
         }
         let Some(net) = net_of(line) else {
+            // The first line of text of a finding with no title on its first line is its title.
+            if let Some(last) = report
+                .findings
+                .last_mut()
+                .filter(|l| open && l.title.is_empty())
+            {
+                last.title = title_text(line);
+            }
             continue;
         };
         match report.findings.last_mut() {
@@ -144,13 +164,46 @@ fn cr_header(line: &str) -> Option<CrFinding> {
         "FOLLOW-UP" | "FOLLOWUP" | "FOLLOW UP" => Some(false),
         _ => None,
     });
+    let (path, at, title) = place_of(rest.trim_end_matches(['*', '_']));
     Some(CrFinding {
         number,
         line: line.trim_end_matches(['*', '_']).to_string(),
         severity,
         blocking,
         net: None,
+        path,
+        at,
+        title,
     })
+}
+
+/// The place and the title of the rest of a first line after its tags: `path:line`, `path`, or
+/// nothing, and the text after the place, such as `app/order.rb:142 — retry sends twice`.
+fn place_of(rest: &str) -> (Option<String>, Option<u32>, String) {
+    let rest = rest.trim();
+    let token = rest.split_whitespace().next().unwrap_or("");
+    let after = rest[token.len()..].trim();
+    let token = token.trim_matches(['`', '*', '_', ',', ';', '(', ')']);
+    let (path, at) = match token.split_once(':') {
+        Some((path, tail)) => {
+            let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+            (path, digits.parse().ok())
+        }
+        None => (token, None),
+    };
+    let looks_like_path = !path.is_empty() && (path.contains('/') || path.contains('.'));
+    if !looks_like_path {
+        return (None, None, title_text(rest));
+    }
+    (Some(path.to_string()), at, title_text(after))
+}
+
+/// A line of a report as a title: no list mark, no emphasis marks, no separator in front.
+fn title_text(line: &str) -> String {
+    line.trim()
+        .trim_start_matches(['-', '*', '+', '>', '—', '–', ':', ' ', '\t'])
+        .trim_matches(['*', '_', ' '])
+        .to_string()
 }
 
 /// The number of a line `Net: +12`, `- Net: -2 (undo)`, or `**Net:** +4.5`. `None` for a line

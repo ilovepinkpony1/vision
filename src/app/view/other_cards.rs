@@ -197,19 +197,26 @@ pub(super) fn proposal(_app: &App, _card: &NeedsCard, item: &ProposalItem) -> Pa
 pub(super) fn notice(_app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
     let mut body = Rows::default();
     let n = item.issues.len();
-    body.para(
-        3,
-        &format!(
+    // A notice of the gate cr names the findings that keep coming back after their fix.
+    let head = if item.gate == crate::pipeline::rounds::CR_SOURCE {
+        format!(
+            "{} of the report {} of the step {} {} coming back after the fix, round after round:",
+            count(n, "finding"),
+            item.doc,
+            item.step,
+            if n == 1 { "keeps" } else { "keep" }
+        )
+    } else {
+        format!(
             "The gate {} of the step {} passed, so the ticket went on. Its report {} has {} that {} not block:",
             item.gate,
             item.step,
             item.doc,
             count(n, "issue"),
             if n == 1 { "does" } else { "do" }
-        ),
-        TEXT,
-        ink(T.fg).bold(),
-    );
+        )
+    };
+    body.para(3, &head, TEXT, ink(T.fg).bold());
     body.blank();
     for issue in &item.issues {
         let head = format!("{}  {}  ", issue.id, issue.severity);
