@@ -268,9 +268,28 @@ pub fn args(
 
 /// The prompt of a turn on Codex: the role file, the first line that a Claude turn gets, and
 /// the form of the result object.
-pub fn prompt(role: &str, first_message: &str, schema: &Value) -> String {
+pub fn prompt(
+    role: &str,
+    first_message: &str,
+    schema: &Value,
+    skills: &[(String, PathBuf)],
+) -> String {
+    // Codex has no tool Skill. The folders of the plugins are readable in the profile of the
+    // turn, so the prompt names the file of each skill, and the agent reads it.
+    let skills = if skills.is_empty() {
+        String::new()
+    } else {
+        let lines: Vec<String> = skills
+            .iter()
+            .map(|(name, file)| format!("- {name}: {}", file.display()))
+            .collect();
+        format!(
+            "\n\n# Skills\n\nYou have no tool Skill. To use one of these skills, read its file, and read the files that it names. You never change them.\n\n{}",
+            lines.join("\n")
+        )
+    };
     format!(
-        "{}\n\n# The end of your turn\n\nYou run as a reader: you can read files and run read-only commands, and you change nothing. End your turn with one JSON object as your last message, with no other text and no code fence. It is the result object of the turn, and it fits this JSON schema:\n\n{}\n\n{first_message}\n",
+        "{}{skills}\n\n# The end of your turn\n\nYou run as a reader: you can read files and run read-only commands, and you change nothing. End your turn with one JSON object as your last message, with no other text and no code fence. It is the result object of the turn, and it fits this JSON schema:\n\n{}\n\n{first_message}\n",
         role.trim_end(),
         serde_json::to_string(schema).unwrap_or_default()
     )
@@ -697,6 +716,26 @@ mod tests {
             "a refusal"
         );
         assert_eq!(classify("The model is not supported"), "an error");
+    }
+
+    #[test]
+    fn the_prompt_names_the_file_of_each_skill() {
+        let schema = json!({"type": "object"});
+        let plain = prompt("# Lane\n", "Turn x.", &schema, &[]);
+        assert!(!plain.contains("# Skills"), "{plain}");
+        let skills = vec![(
+            "kit:lane".to_string(),
+            PathBuf::from("/plugins/kit/skills/lane/SKILL.md"),
+        )];
+        let text = prompt("# Lane\n", "Turn x.", &schema, &skills);
+        let at = text.find("# Skills").unwrap();
+        assert!(at > text.find("# Lane").unwrap(), "{text}");
+        assert!(at < text.find("# The end of your turn").unwrap(), "{text}");
+        assert!(
+            text.contains("- kit:lane: /plugins/kit/skills/lane/SKILL.md"),
+            "{text}"
+        );
+        assert!(text.ends_with("Turn x.\n"), "{text}");
     }
 
     #[test]

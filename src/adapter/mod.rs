@@ -27,11 +27,11 @@ use crate::paths::Paths;
 
 pub use find::{locate, Located, Origin};
 pub use model::{
-    cap_names, Adapter, AskStep, CheckStep, Entry, EntryKind, Expect, Gate, GateRule, HumanStep,
-    Job, JobEnv, JobStep, Kinds, LocalTime, Member, Severity, Step, StepKind, TurnStep, Verb,
-    WaitStep, Width, CHANGED, CR_NET_MAX, DEFAULT_BASE, DEFAULT_BRANCH, DEFAULT_EVERY,
-    DEFAULT_ROUNDS, DEFAULT_WIDTH_DOC, DEFAULT_WIDTH_FILES, FINDINGS, MAX_ROUNDS, NARROW, NONE,
-    QA_BLOCK, SAME, WIDE,
+    cap_names, Adapter, AdapterAgent, AskStep, CheckStep, Entry, EntryKind, Expect, Gate, GateRule,
+    HumanStep, Job, JobEnv, JobStep, Kinds, LocalTime, Member, Severity, Step, StepKind, TurnStep,
+    Verb, WaitStep, Width, CHANGED, COMMITS, CR_NET_MAX, DEFAULT_AGENT_EFFORT, DEFAULT_BASE,
+    DEFAULT_BRANCH, DEFAULT_EVERY, DEFAULT_ROUNDS, DEFAULT_WIDTH_DOC, DEFAULT_WIDTH_FILES,
+    FINDINGS, MAX_ROUNDS, NARROW, NONE, QA_BLOCK, SAME, WIDE,
 };
 
 /// The name of the step list in an adapter folder.
@@ -43,13 +43,13 @@ pub fn load(ctx: &Ctx) -> Result<Adapter> {
 }
 
 /// Finds the adapter of `config.project`, parses its `adapter.toml`, and tests it. A turn step
-/// must name an agent that has a role file: one of Vision, one in `$VISION_HOME/agents/`, or one
-/// in `roles/` of the adapter.
+/// names an agent of Vision or an agent of `[agents]` of the file, and each agent of `[agents]`
+/// has its role file.
 pub fn load_with(config: &Config, paths: &Paths) -> Result<Adapter> {
     let located = locate(config, paths)?;
     let mut adapter = Adapter::read(&located.dir)?;
     adapter.origin = Some(located.origin);
-    adapter.check_agents(paths)?;
+    adapter.check_agents()?;
     Ok(adapter)
 }
 

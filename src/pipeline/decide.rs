@@ -150,6 +150,9 @@ pub struct Facts {
 pub struct Branch {
     pub to: String,
     pub how: String,
+    /// More fields for the event of the move, such as the way and the two heads of a move by
+    /// commits.
+    pub detail: Option<serde_json::Value>,
 }
 
 /// The step of `on` of a turn step for the number of kept findings of its turn: `findings`
@@ -163,6 +166,7 @@ pub fn findings_branch(on: &BTreeMap<String, String>, kept: usize) -> Option<Bra
     on.get(key).map(|to| Branch {
         to: to.clone(),
         how: format!("on {key}"),
+        detail: None,
     })
 }
 

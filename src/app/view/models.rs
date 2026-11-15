@@ -98,6 +98,8 @@ fn row(app: &App, c: &mut Canvas, line: &ModelLine, y: i32, selected: bool) {
             .map(|s| format!(" {}", s.get(..10).unwrap_or(s)))
             .unwrap_or_default();
         (format!("pinned{since}"), T.fg)
+    } else if line.adapter {
+        ("adapter".to_string(), T.dim)
     } else {
         ("default".to_string(), T.dim)
     };
@@ -113,11 +115,18 @@ fn row(app: &App, c: &mut Canvas, line: &ModelLine, y: i32, selected: bool) {
     c.right(c.w - 3, y, &measured, ink(T.faint));
     let reason = if changed {
         "The change is not pinned yet. Enter pins it, and Esc drops it.".to_string()
+    } else if line.pinned && line.adapter {
+        format!(
+            "The default of the adapter {} {} was: {}",
+            line.default_model, line.default_effort, line.reason
+        )
     } else if line.pinned {
         format!(
             "The default {} {} was: {}",
             line.default_model, line.default_effort, line.reason
         )
+    } else if line.adapter && line.reason.is_empty() {
+        "The adapter defines this agent and gives no reason.".to_string()
     } else {
         line.reason.clone()
     };

@@ -40,6 +40,7 @@ fn line(agent: &str, model: &str, effort: &str, reason: &str) -> ModelLine {
         default_model: model.into(),
         default_effort: effort.into(),
         reason: reason.into(),
+        adapter: false,
         evidence: Vec::new(),
         recommendation: "fewer than 20 measured turns for a second model, so the default stays"
             .into(),
@@ -230,6 +231,51 @@ fn the_screen_models() {
         Msg::Models(Box::new(Err("the configuration is not valid TOML".into()))),
     );
     assert_snapshot("models_error", &screen(&app));
+}
+
+#[test]
+fn models_and_stats_show_the_agents_of_the_adapter() {
+    // Two agents that the adapter defines: one with the values of the adapter, and one that
+    // the person pinned.
+    let mut lines = model_lines();
+    let mut codex = line(
+        "cr-codex",
+        "gpt-6.1-sol",
+        "high",
+        "A second model reads the diff on its own.",
+    );
+    codex.adapter = true;
+    let mut design = line(
+        "cr-design",
+        "claude-haiku-5-5",
+        "low",
+        "It reads the diff for names and structure.",
+    );
+    design.adapter = true;
+    design.pinned = true;
+    design.since = Some("2026-11-03T09:00:00Z".into());
+    design.default_model = "claude-sonnet-5-5".into();
+    design.default_effort = "high".into();
+    lines.push(codex);
+    lines.push(design);
+    let mut app = home(SIZE);
+    key(&mut app, 2.0, Key::Char('m'));
+    send(&mut app, 2.1, Msg::Models(Box::new(Ok(lines))));
+    assert_snapshot("models_adapter", &screen(&app));
+    let mut data = stats_data(true);
+    data.agents.push(("cr-codex".into(), 0.0));
+    data.agents.push(("cr-design".into(), 0.62));
+    let mut app = home(SIZE);
+    key(&mut app, 2.0, Key::Char('s'));
+    send(
+        &mut app,
+        2.1,
+        Msg::Stats {
+            week: true,
+            data: Box::new(Ok(data)),
+        },
+    );
+    assert_snapshot("stats_adapter", &screen(&app));
 }
 
 #[test]

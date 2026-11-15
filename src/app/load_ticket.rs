@@ -79,26 +79,35 @@ fn read_ticket(paths: &Paths, key: &str) -> anyhow::Result<TicketData> {
             .map(str::to_string)
             .collect()
     });
-    let team = crate::models::AGENTS
-        .iter()
-        .filter(|spec| {
-            spec.alone
+    // The agents of the adapter come after those of Vision.
+    let defined = adapter
+        .as_ref()
+        .map(|a| a.agents.clone())
+        .unwrap_or_default();
+    let team = crate::models::names_in(&defined)
+        .into_iter()
+        .filter(|name| {
+            crate::models::agent(name).is_some_and(|spec| spec.alone)
                 || named
                     .as_ref()
-                    .is_none_or(|names| names.iter().any(|n| n == spec.name))
+                    .is_none_or(|names| names.iter().any(|n| n == name))
         })
-        .map(|spec| match crate::models::choice(config, spec.name) {
-            Ok(choice) => Member {
-                agent: spec.name.to_string(),
-                model: choice.model,
-                effort: choice.effort.to_string(),
+        .filter_map(
+            |name| match crate::models::choice_in(config, &defined, &name) {
+                Ok(choice) => Some(Member {
+                    agent: name,
+                    model: choice.model,
+                    effort: choice.effort.to_string(),
+                }),
+                Err(_) => crate::models::defaults(&defined, &name)
+                    .ok()
+                    .map(|base| Member {
+                        agent: name,
+                        model: base.model,
+                        effort: base.effort.to_string(),
+                    }),
             },
-            Err(_) => Member {
-                agent: spec.name.to_string(),
-                model: spec.model.to_string(),
-                effort: spec.effort.to_string(),
-            },
-        })
+        )
         .collect();
     let timeline = pipeline::timeline(&ledger, &ticket_key)?;
     let unpushed = if view.clone.is_some() && !facts.finished {

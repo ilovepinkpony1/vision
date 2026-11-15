@@ -1222,6 +1222,16 @@ impl Measures {
     }
 }
 
+/// The turns and the cost of one agent in the tickets of the window.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentMeasure {
+    pub agent: String,
+    /// `vision` for an agent of Vision, `adapter` for an agent that an adapter defines.
+    pub source: String,
+    pub turns: i64,
+    pub cost_usd: f64,
+}
+
 /// What `vision report --json` prints.
 #[derive(Clone, Debug, Serialize)]
 pub struct Report {
@@ -1229,6 +1239,9 @@ pub struct Report {
     pub since: Option<String>,
     pub tickets: BTreeMap<String, Measures>,
     pub total: Measures,
+    /// Each agent with turns in the tickets of the window: the agents of Vision in the order
+    /// of section 10, then the agents of an adapter by name.
+    pub agents: Vec<AgentMeasure>,
     /// The steps of the measures in the order of the step list of the adapter, then each step
     /// that the adapter no longer has, by name.
     pub steps: Vec<String>,
@@ -1315,10 +1328,39 @@ pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
         &[],
         total.step_seconds.keys().chain(total.step_cost_usd.keys()),
     );
+    let mut by_agent: BTreeMap<String, (i64, f64)> = BTreeMap::new();
+    for cost in ledger.agent_costs(since)? {
+        if cost.agent.is_empty() || reserved(&cost.ticket) {
+            continue;
+        }
+        let entry = by_agent.entry(cost.agent).or_default();
+        entry.0 += cost.turns;
+        entry.1 += cost.cost_usd;
+    }
+    let mut agents = Vec::new();
+    for name in crate::models::agent_names() {
+        if let Some((turns, cost_usd)) = by_agent.remove(name) {
+            agents.push(AgentMeasure {
+                agent: name.to_string(),
+                source: crate::models::origin_of(name).to_string(),
+                turns,
+                cost_usd,
+            });
+        }
+    }
+    for (name, (turns, cost_usd)) in by_agent {
+        agents.push(AgentMeasure {
+            source: crate::models::origin_of(&name).to_string(),
+            agent: name,
+            turns,
+            cost_usd,
+        });
+    }
     Ok(Report {
         since: since.map(str::to_string),
         tickets,
         total,
+        agents,
         steps,
         escapes: crate::escapes::measures(ledger, None, since)?,
         counted: crate::config::Escapes::default().count,
@@ -1560,6 +1602,19 @@ pub fn render_report(report: &Report) -> String {
             ));
         }
     }
+    if !report.agents.is_empty() {
+        out.push_str("\nBy agent:\n");
+        for a in &report.agents {
+            out.push_str(&format!(
+                "  {:<16} {:<8} {:>4} {}  {}\n",
+                a.agent,
+                a.source,
+                a.turns,
+                if a.turns == 1 { "turn " } else { "turns" },
+                money(a.cost_usd)
+            ));
+        }
+    }
     out.push_str(&format!(
         "\nReview escapes: {}\n",
         crate::escapes::measures_line(&report.escapes, &report.counted)
@@ -1608,6 +1663,20 @@ mod report_tests {
             since: None,
             tickets: BTreeMap::from([("DEMO-12".to_string(), m.clone())]),
             total: m,
+            agents: vec![
+                AgentMeasure {
+                    agent: "builder".into(),
+                    source: "vision".into(),
+                    turns: 2,
+                    cost_usd: 1.25,
+                },
+                AgentMeasure {
+                    agent: "cr-codex".into(),
+                    source: "adapter".into(),
+                    turns: 1,
+                    cost_usd: 0.0,
+                },
+            ],
             steps: Vec::new(),
             escapes: Default::default(),
             counted: Vec::new(),
@@ -1628,5 +1697,19 @@ mod report_tests {
         assert!(lines[at + 2].ends_with("<$0.01"), "{text}");
         assert!(lines[at + 3].starts_with("  gone "), "{text}");
         assert!(lines[at + 3].ends_with("$0.00"), "{text}");
+        // Each agent shows where it comes from: Vision or the adapter.
+        let at = lines.iter().position(|l| *l == "By agent:").unwrap();
+        let builder: Vec<&str> = lines[at + 1].split_whitespace().collect();
+        assert_eq!(
+            builder,
+            ["builder", "vision", "2", "turns", "$1.25"],
+            "{text}"
+        );
+        let lane: Vec<&str> = lines[at + 2].split_whitespace().collect();
+        assert_eq!(
+            lane,
+            ["cr-codex", "adapter", "1", "turn", "$0.00"],
+            "{text}"
+        );
     }
 }

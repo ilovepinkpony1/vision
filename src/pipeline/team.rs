@@ -96,7 +96,7 @@ pub(crate) fn select(
             continue;
         }
         let view = step.member_view(member);
-        let facts = gather(ctx, ledger, ticket, &view, now, true)?;
+        let facts = gather(ctx, ledger, adapter, ticket, &view, now, true)?;
         match decide(&facts) {
             // The view moves when the end facts of the member hold: the member is done.
             Next::Move { .. } => done += 1,
@@ -181,7 +181,7 @@ pub(crate) fn select(
     }
     for (member, why) in fallbacks {
         let view = step.member_view(&member);
-        if let Some(action) = fall_back(ctx, ledger, ticket, &view, &why, true)? {
+        if let Some(action) = fall_back(ctx, ledger, adapter, ticket, &view, &why, true)? {
             actions.push(action);
         }
     }

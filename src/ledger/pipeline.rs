@@ -95,6 +95,8 @@ pub struct AgentCost {
     pub ticket: String,
     pub agent: String,
     pub cost_usd: f64,
+    /// The number of its turns.
+    pub turns: i64,
 }
 
 impl Ledger {
@@ -425,7 +427,7 @@ impl Ledger {
     /// The cost of the turns of each agent of each ticket that started at or after `since`.
     pub fn agent_costs(&self, since: Option<&str>) -> Result<Vec<AgentCost>> {
         let mut stmt = self.conn().prepare(
-            "SELECT coalesce(ticket, ''), coalesce(agent, ''), coalesce(sum(cost_usd), 0)
+            "SELECT coalesce(ticket, ''), coalesce(agent, ''), coalesce(sum(cost_usd), 0), count(*)
              FROM turns WHERE ?1 IS NULL OR started >= ?1
              GROUP BY ticket, agent ORDER BY ticket, min(rowid)",
         )?;
@@ -434,6 +436,7 @@ impl Ledger {
                 ticket: row.get(0)?,
                 agent: row.get(1)?,
                 cost_usd: row.get(2)?,
+                turns: row.get(3)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

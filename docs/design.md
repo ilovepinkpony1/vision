@@ -231,6 +231,8 @@ Rules:
 
 `[agents.NAME] runner` is `claude` or `codex`, and `fallback = { model, effort }` names the Claude model that runs the agent when Codex fails. Only a reader agent runs on Codex. The Judge and the Curator always run on Claude.
 
+`[agents.NAME]` can also name an agent that the adapter defines (section 11.2). The pin of the person wins over the values of the adapter, as it wins over the defaults of Vision.
+
 ## 5. The ledger
 
 SQLite in WAL mode, with a busy timeout of 5 seconds. `PRAGMA user_version` holds the schema version. Each migration is one numbered SQL file that the binary embeds.
@@ -409,6 +411,8 @@ A work turn of a ticket also gets the journal folder of the home as `--add-dir`,
 A reader turn of an agent whose runner is `codex` starts `codex exec --json --skip-git-repo-check --ignore-user-config -C <view> -c default_permissions="vision_reader" -c permissions.vision_reader.extends=":read-only" -c 'permissions.vision_reader.filesystem={...}' -m <model> -c model_reasoning_effort=<effort> --output-last-message <file> -`, with the prompt on standard input. The prompt holds the role file, the form of the result object, and the first line of a Claude turn. A resume uses `codex exec resume ... <thread> -` with the same keys. The effort `max` is `xhigh` for Codex. The configuration of the person for Codex stays out, and Codex uses its own login, whose folder Vision never reads.
 
 The permission profile `vision_reader` reads the view folder, the extra folders of the turn, and `sandbox.allow_read`. It hides `VISION_HOME`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude`, `~/.gnupg`, `~/Library/Keychains`, `~/.netrc`, `~/.docker`, `~/.kube`, and `~/.codex`. Its commands have no network and write nothing. Before each turn on Codex, the supervisor runs `codex sandbox` with the same profile, with no model call: a command must read `/etc/hosts` and must not read a canary file with a random token in the turn folder. Any other result fails the turn with `codex cannot hide private folders on this machine`, and the fallback runs.
+
+The profile `vision_reader` also reads each folder of `claude.plugins`, with its real path and the targets of its links. A more specific readable folder opens a plugin under a hidden folder such as `~/.claude`, and the rest of that folder stays hidden. A turn on Codex has no tool Skill, so its prompt has a section `# Skills` that names the file `SKILL.md` of each skill as `<plugin>:<skill>: <path>`, and the agent reads it.
 
 The supervisor keeps the events of Codex in `codex.jsonl` and writes the same lines as a Claude turn into `stream.jsonl`: the thread as the session, each message, each command as a Bash call, and the tokens. So the collector, the journal, and the live view read one form. When Codex is missing, fails, reports a usage limit, a login problem, or a refusal, or gives no valid result after one resume, the same step or member runs again with Claude on its `fallback` model, in a fresh session, with the event `fallback`. With no `fallback`, the ticket gets the flag `needs-you`. `vision open` does not work on a turn on Codex, and a message to a running turn on Codex waits for the next turn.
 
@@ -737,6 +741,8 @@ The defaults, with the reason for each one:
 | critic | `gpt-6.1-sol` on Codex | xhigh | A second model reads a wide plan. Its fallback is `claude-opus-5-5` high. |
 | critic-narrow | `gpt-6.1-sol` on Codex | high | A narrow plan needs a lighter read. Its fallback is `claude-opus-5-5` high. |
 
+An adapter can define more agents in `[agents.<name>]` of its `adapter.toml` (section 11.2). `vision model` lists them after the agents of Vision, in the order of their names, with the source `adapter`. Each JSON row has `defined_by` (`vision` or `adapter`), `default_model`, and `default_effort`. `set` pins an agent of the adapter as it pins an agent of Vision, and `reset` goes back to the values of the adapter. When the adapter does not load, `vision model` lists the agents of Vision and says why on standard error.
+
 `--runner codex` moves a reader agent to Codex. Without `--runner`, a model whose name starts with `claude-` runs on Claude, and another model keeps the runner of the agent.
 
 `recommend` reads the ledger. For each agent and each model with at least 10 turns, it prints these numbers:
@@ -930,6 +936,28 @@ A job can have `env = "session"`: the environment of a work session. It holds th
 
 A job that a built-in adapter knows by its name can have keys of its own, such as the commands of the precheck (section 11.5). The loader tests them. The call of `bin/job` gets them in `table`, with `timeout`.
 
+An adapter can define its own agents:
+
+```toml
+[agents.cr-codex]
+role = "roles/cr-codex.md"    # in the adapter folder; the default is roles/<name>.md
+model = "gpt-6.1-sol"         # required
+effort = "high"               # the default is high
+runner = "codex"              # the default is claude
+fallback = { model = "claude-opus-5-5", effort = "high" }
+reason = "A second model reads the diff on its own."
+```
+
+A step and a team member name an agent of Vision or an agent of `[agents]`. The role file of an agent of the adapter comes after `agents/common.md`, as the role file of each work agent does. The loader refuses these:
+
+- an agent that is neither an agent of Vision nor in `[agents]`
+- a name of `[agents]` that is an agent of Vision: its role file changes with `roles/<name>.md`, and its model with `vision model set`
+- a role path that is absolute or holds `..`, and a role file that exists neither in the adapter folder nor in the scripts folder
+- a `fallback` without `runner = "codex"`
+- an agent on Codex that a step makes a worker or a tester, or that no step makes a reader
+
+A turn step can have `on = { commits = "<step>", none = "<step>" }` in the place of `next`, with exactly these two keys. The loader refuses it together with `next`, together with the key `findings` in `on`, on a step with `team`, and with a target that is not a step.
+
 The adapter can name kinds and a width:
 
 ```toml
@@ -1033,6 +1061,7 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - After `rounds` failed turns, a step with `extra_rounds` gets one more turn at a time, up to `extra_rounds` more, while the loop converges. The loop converges when the gate of the failed end fact fails on fewer items in the last turn than in the turn before it, and no failing item is CRITICAL (cr) or critical (qa). A turn whose document the gate cannot read gives no number, so the loop does not converge. Otherwise the ticket gets the flag `needs-you`, and the reason says whether the extra rounds are used or the loop does not converge. The event `extra-round` of each extra turn says why it was granted.
 - When the end facts of a turn are tested, each gate of the step that has a document gets a row of `gate_rounds`. Each finding of a gate cr with a place gets a row of `findings` with the source `cr` and a fingerprint: its path and a hash of its title in lower case, with no digits and no punctuation. Two findings of two rounds are the same when their fingerprints are equal, or when their paths are equal and their lines are at most 3 apart. A finding that comes back two times after a round where it was gone becomes one notice for the person, `this finding keeps coming back after its fix`, with its first line, and a problem note in the journal entry of that turn.
 - The resume after a failed job names its documents, such as `.vision/precheck.md`.
+- A turn step with `on = { commits, none }` moves after its end facts hold and its `after` verbs are confirmed. It moves to `commits` when the head of the branch differs from the head at the entry into the step, else to `none`. A visit with no recorded head goes to `commits`. The move counts as an entry for the `cap` of the target. Its event `step` has `how` (`on commits` or `on none`), `way`, `entry_head`, and `head`. A step of this form that its `when` skips goes to `none`.
 - A turn step with `on` moves by its findings. If the documents of its last turn hold a kept finding, the ticket moves to the step of `findings`. If they hold none, it moves to the step of `none`.
 - A step with a `cap` counts each entry that comes from `next` or `on`. One entry above the cap sets the flag `needs-you` with the open items. An entry by `vision retry` or `vision take` does not count.
 - A wait step first runs its `start` verbs. After each one has the state `confirmed`, it runs `observe` each `every` seconds, and it moves on the value of `watch`.
@@ -1067,6 +1096,8 @@ The proof gets the approved plan in `args.plan`. A line `Proof: green` in the pl
 Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
 
 `adapters/demo-investigate` uses the scripts of `adapters/demo` and starts with the investigation: `refine`, `investigate` (a team by kind), `analyze`, `critic` (wide) or `critic-narrow` (narrow), `questions` (ask), `amend`, `reproduced` (check, bugs only), `plan-ready`, and then the rest of the demo path. The fake `codex` of the tests stands in for Codex.
+
+`adapters/demo-review-team` uses the scripts of `adapters/demo` and reviews with a team. `review-lanes` is a team of three readers that the adapter defines: `cr-correctness` and `cr-design` on Claude, and `cr-codex` on Codex with a fallback. Each writes `findings-<lane>.md` in the form of the gate cr. In `review-challenge`, each lane reads the findings of the two other lanes and writes `challenge-<lane>.md`, one line `<lane> F<n>: agree|disagree: <evidence>` for each finding. In `review`, the Reviewer with `roles/reviewer.md` judges each finding with its votes, fixes the kept ones, and writes `cr.md` for the gate cr and `cr-fixed.md`. A commit of the lead sends the ticket back to `review-lanes`, and no commit sends it to `ci`. The cap of `review-lanes` is 2, so its third entry needs the person.
 
 ### 11.5 The adapter for Jira and GitHub
 
@@ -1186,7 +1217,7 @@ vision memory ...                  section 9.2
 vision curate                      run the Curator now
 vision model ...                   section 10
 vision promote VERB | demote VERB  move a verb on the trust ladder
-vision report [KEY] [--week] [--json]   the measures; with KEY, the escape checks and escapes of one ticket
+vision report [KEY] [--week] [--json]   the measures, and the turns and cost of each agent under By agent; with KEY, the escape checks and escapes of one ticket
 vision install | uninstall         the timer of the system
 vision app-token ...               print an installation token of a GitHub App, for a secret command
 vision journal search "TEXT" [--json] [--limit N]   search the journal (section 16)
@@ -1286,7 +1317,7 @@ In the log, Enter on a turn shows the events of that turn. Esc closes a pager, a
 
 The key `n` opens the first thing that waits for the person as a card. On Home, this is the first thing of all tickets. If more than one thing waits, the title says which one this is, such as `2 of 3`. The left and right arrows go to the other ones. Esc closes the card, and the thing keeps waiting. After an answer, the next card shows, or the card closes with a notice.
 
-The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show `1 of N` as the other cards do.
+The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show `1 of N` as the other cards do. Models lists the agents that the adapter defines after those of Vision, with the source `adapter`. In the line BY AGENT of Stats, they come behind the label `adapter:`. The start card and the team list of the live view name an agent of the adapter with its model.
 
 Each kind of thing has its card:
 

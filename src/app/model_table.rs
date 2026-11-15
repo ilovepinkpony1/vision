@@ -27,6 +27,8 @@ pub struct ModelLine {
     pub default_effort: String,
     /// Why this is the default.
     pub reason: String,
+    /// True for an agent that the adapter defines: its default comes from the adapter.
+    pub adapter: bool,
     /// The measured turns of each model that the agent used.
     pub evidence: Vec<Evidence>,
     /// The recommendation of the model table, in words.

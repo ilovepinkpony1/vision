@@ -8,13 +8,15 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use toml::Table;
 
 use super::{table_to_json, toml_to_json, valid_document_name, Origin, FILE};
-use crate::config::{Caps, Mode};
-use crate::paths::{expand_tilde, Paths, TicketKey};
-use crate::turn::{agents_dir, TurnKind};
+use crate::config::{Caps, Effort, Mode, Runner};
+use crate::models::Fallback;
+use crate::paths::{expand_tilde, TicketKey};
+use crate::turn::TurnKind;
 
 /// The branch of a ticket when `branch` is missing.
 pub const DEFAULT_BRANCH: &str = "vision/{key}";
@@ -24,8 +26,14 @@ pub const DEFAULT_BASE: &str = "origin/main";
 pub const DEFAULT_EVERY: u64 = 60;
 /// The key of `on` of a turn step for a turn whose documents hold a kept finding.
 pub const FINDINGS: &str = "findings";
-/// The key of `on` of a turn step for a turn whose documents hold no kept finding.
+/// The key of `on` of a turn step for a turn whose documents hold no kept finding, or for a
+/// turn that made no commit.
 pub const NONE: &str = "none";
+/// The key of `on` of a turn step for a turn after which the branch head differs from the
+/// head at the entry into the step.
+pub const COMMITS: &str = "commits";
+/// The effort of an agent of `[agents.<name>]` when `effort` is missing.
+pub const DEFAULT_AGENT_EFFORT: Effort = Effort::High;
 /// The turns that one visit of a turn step gets for failed end facts when `rounds` is missing:
 /// the first turn and one resume.
 pub const DEFAULT_ROUNDS: u32 = 2;
@@ -63,8 +71,31 @@ pub struct Adapter {
     pub kinds: Option<Kinds>,
     /// `[width]`: wide or narrow from the files that a document lists. `None`: no width.
     pub width: Option<Width>,
+    /// `[agents.<name>]`: the agents that the adapter defines, by name. A step can name one of
+    /// them as it names an agent of Vision.
+    pub agents: BTreeMap<String, AdapterAgent>,
     /// Where [`super::load`] found the folder. `None` for a parsed text.
     pub origin: Option<Origin>,
+}
+
+/// One agent that the adapter defines in `[agents.<name>]`: its role file, its model, and the
+/// program of its turns. The configuration of the person (`[agents.<name>]` of config.toml)
+/// wins over these values, as it wins over the defaults of Vision.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AdapterAgent {
+    pub name: String,
+    /// The role file, relative to the adapter folder, such as `roles/cr-codex.md`. The default
+    /// is `roles/<name>.md`. The scripts folder is the second place to look, as for the role
+    /// files that replace those of Vision.
+    pub role: String,
+    pub model: String,
+    pub effort: Effort,
+    /// The program of its turns. Only a reader turn runs on Codex.
+    pub runner: Runner,
+    /// The model with Claude and its effort that take the work of a failed turn on Codex.
+    pub fallback: Option<Fallback>,
+    /// Why the adapter chose this model. Empty when the file gives no reason.
+    pub reason: String,
 }
 
 /// `[kinds]`: the kind of a ticket from the issue type that `observe` gives in `issue.type`.
@@ -731,36 +762,34 @@ impl Adapter {
         self.scripts.join("bin").join(name)
     }
 
-    /// The role file of the adapter that replaces `agents/<agent>.md`: `roles/<agent>.md` of the
-    /// adapter folder, else of the scripts folder.
+    /// The role file of an agent in the adapter: the file of `role` of an agent that the
+    /// adapter defines, else `roles/<agent>.md`, which replaces `agents/<agent>.md` of Vision.
+    /// The adapter folder comes first, then the scripts folder.
     pub fn role_file(&self, agent: &str) -> Option<PathBuf> {
         if !valid_name(agent, false) {
             return None;
         }
+        let relative = match self.agents.get(agent) {
+            Some(defined) => PathBuf::from(&defined.role),
+            None => Path::new("roles").join(format!("{agent}.md")),
+        };
         [&self.dir, &self.scripts]
             .iter()
-            .map(|dir| dir.join("roles").join(format!("{agent}.md")))
+            .map(|dir| dir.join(&relative))
             .find(|path| path.is_file())
     }
 
-    /// Each agent of a turn step must have a role file.
-    pub fn check_agents(&self, paths: &Paths) -> Result<()> {
-        for step in &self.steps {
-            let StepKind::Turn(turn) = &step.kind else {
-                continue;
-            };
-            for agent in turn.agents() {
-                let known = crate::models::agent(agent).is_some()
-                    || self.role_file(agent).is_some()
-                    || agents_dir(paths).join(format!("{agent}.md")).is_file();
-                if !known {
-                    bail!(
-                        "{}: step `{}`: the agent `{agent}` has no role file. Use one of {}, or write roles/{agent}.md in the adapter folder",
-                        self.dir.join(FILE).display(),
-                        step.id,
-                        crate::models::agent_names().join(", "),
-                    );
-                }
+    /// Each agent that the adapter defines must have its role file.
+    pub fn check_agents(&self) -> Result<()> {
+        for agent in self.agents.values() {
+            if self.role_file(&agent.name).is_none() {
+                bail!(
+                    "{}: [agents.{}]: the role file {} does not exist in {}. Write it, or fix role",
+                    self.dir.join(FILE).display(),
+                    agent.name,
+                    agent.role,
+                    self.dir.display()
+                );
             }
         }
         Ok(())
@@ -787,8 +816,9 @@ impl Problems {
     }
 }
 
-const TOP_KEYS: [&str; 10] = [
+const TOP_KEYS: [&str; 11] = [
     "name", "branch", "base", "scripts", "step", "verbs", "jobs", "envs", "kinds", "width",
+    "agents",
 ];
 
 fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapter {
@@ -835,6 +865,7 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
     let envs = parse_envs(table.remove("envs"), problems);
     let kinds = parse_kinds(table.remove("kinds"), problems);
     let width = parse_width(table.remove("width"), problems);
+    let agents = parse_agents(table.remove("agents"), problems);
     let steps = parse_steps(table.remove("step"), problems);
     for key in table.keys() {
         problems.add(
@@ -858,12 +889,240 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
         envs,
         kinds,
         width,
+        agents,
         origin: None,
     };
     check_links(&adapter, problems);
     check_when(&adapter, problems);
     check_teams(&adapter, problems);
+    check_agent_uses(&adapter, problems);
     adapter
+}
+
+/// The keys of `[agents.<name>]`.
+const AGENT_KEYS: [&str; 6] = ["role", "model", "effort", "runner", "fallback", "reason"];
+
+/// `[agents.<name>]`: the agents that the adapter defines. A name of an agent of Vision is
+/// refused: its role file changes with `roles/<name>.md`, and its model with `vision model set`.
+fn parse_agents(
+    value: Option<toml::Value>,
+    problems: &mut Problems,
+) -> BTreeMap<String, AdapterAgent> {
+    let mut agents = BTreeMap::new();
+    let Some(value) = value else {
+        return agents;
+    };
+    let toml::Value::Table(table) = value else {
+        problems.add(
+            "[agents]",
+            "it holds one table for each agent, such as [agents.cr-codex] with model = \"gpt-6.1-sol\"",
+        );
+        return agents;
+    };
+    for (name, item) in table {
+        let at = format!("[agents.{name}]");
+        if !valid_name(&name, false) {
+            problems.add(
+                &at,
+                "an agent name has letters, digits, '-', or '_', starts with a letter or a digit, and has up to 64 characters",
+            );
+            continue;
+        }
+        if crate::models::agent(&name).is_some() {
+            problems.add(
+                &at,
+                format!("`{name}` is an agent of Vision, so the adapter cannot define it. To give it another role file, write roles/{name}.md in the adapter folder. To give it another model, run vision model set {name} <model>"),
+            );
+            continue;
+        }
+        let toml::Value::Table(mut fields) = item else {
+            problems.add(
+                &at,
+                "it must be a table, such as [agents.cr-codex] with model = \"gpt-6.1-sol\"",
+            );
+            continue;
+        };
+        let role = string(fields.remove("role"), &at, problems)
+            .unwrap_or_else(|| format!("roles/{name}.md"));
+        let relative = Path::new(&role);
+        let inside = !role.trim().is_empty()
+            && relative.is_relative()
+            && relative
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !inside {
+            problems.add(
+                &at,
+                format!("role names `{role}`. It is a path in the adapter folder, such as role = \"roles/{name}.md\", with no `..`"),
+            );
+        }
+        let model = match string(fields.remove("model"), &at, problems) {
+            Some(text) => match crate::models::full_model_id(&text) {
+                Ok(model) => model,
+                Err(e) => {
+                    problems.add(&at, format!("model: {e}"));
+                    text
+                }
+            },
+            None => {
+                problems.add(&at, "it needs model, such as model = \"claude-opus-5-5\"");
+                String::new()
+            }
+        };
+        let effort =
+            agent_effort(fields.remove("effort"), &at, problems).unwrap_or(DEFAULT_AGENT_EFFORT);
+        let runner = match fields.remove("runner") {
+            None => Runner::Claude,
+            Some(value) => match value.clone().try_into::<Runner>() {
+                Ok(runner) => runner,
+                Err(_) => {
+                    problems.add(&at, format!("runner is claude or codex, not `{value}`"));
+                    Runner::Claude
+                }
+            },
+        };
+        let fallback = match fields.remove("fallback") {
+            None => None,
+            Some(toml::Value::Table(mut given)) => {
+                let here = format!("{at} fallback");
+                let model = match string(given.remove("model"), &here, problems) {
+                    Some(text) => match crate::models::full_model_id(&text) {
+                        Ok(model) => Some(model),
+                        Err(e) => {
+                            problems.add(&here, format!("model: {e}"));
+                            None
+                        }
+                    },
+                    None => {
+                        problems.add(
+                            &here,
+                            "it names the model with Claude, such as fallback = { model = \"claude-opus-5-5\", effort = \"high\" }",
+                        );
+                        None
+                    }
+                };
+                let effort = agent_effort(given.remove("effort"), &here, problems)
+                    .unwrap_or(DEFAULT_AGENT_EFFORT);
+                for key in given.keys() {
+                    problems.add(
+                        &here,
+                        format!("`{key}` is not a key of fallback. The keys: model, effort"),
+                    );
+                }
+                model.map(|model| Fallback { model, effort })
+            }
+            Some(other) => {
+                problems.add(
+                    &at,
+                    format!("fallback is a table, such as fallback = {{ model = \"claude-opus-5-5\", effort = \"high\" }}, not `{other}`"),
+                );
+                None
+            }
+        };
+        if fallback.is_some() && runner == Runner::Claude {
+            problems.add(
+                &at,
+                "fallback names the model with Claude that takes the work of a failed turn on Codex, so it needs runner = \"codex\"",
+            );
+        }
+        let reason = string(fields.remove("reason"), &at, problems)
+            .map(|r| r.trim().to_string())
+            .unwrap_or_default();
+        for key in fields.keys() {
+            problems.add(
+                &at,
+                format!(
+                    "`{key}` is not a key of an agent. The keys: {}",
+                    AGENT_KEYS.join(", ")
+                ),
+            );
+        }
+        agents.insert(
+            name.clone(),
+            AdapterAgent {
+                name,
+                role,
+                model,
+                effort,
+                runner,
+                fallback,
+                reason,
+            },
+        );
+    }
+    agents
+}
+
+/// The effort of `[agents.<name>]` or of its fallback: low, medium, high, xhigh, or max.
+fn agent_effort(value: Option<toml::Value>, at: &str, problems: &mut Problems) -> Option<Effort> {
+    let value = value?;
+    match value.clone().try_into::<Effort>() {
+        Ok(effort) => Some(effort),
+        Err(_) => {
+            problems.add(
+                at,
+                format!("effort is low, medium, high, xhigh, or max, not `{value}`"),
+            );
+            None
+        }
+    }
+}
+
+/// Each turn step and each team member names an agent of Vision or an agent of `[agents]`.
+/// An agent of `[agents]` on Codex runs only reader turns, and at least one step uses it so.
+fn check_agent_uses(adapter: &Adapter, problems: &mut Problems) {
+    let mut uses: BTreeMap<&str, Vec<(&str, TurnKind)>> = BTreeMap::new();
+    for step in &adapter.steps {
+        let StepKind::Turn(turn) = &step.kind else {
+            continue;
+        };
+        let agents: Vec<(&str, TurnKind)> = if turn.team.is_empty() {
+            vec![(turn.agent.as_str(), turn.turn)]
+        } else {
+            turn.team
+                .iter()
+                .map(|m| (m.agent.as_str(), m.turn))
+                .collect()
+        };
+        for (agent, kind) in agents {
+            if agent.is_empty() {
+                continue;
+            }
+            if crate::models::agent(agent).is_none() && !adapter.agents.contains_key(agent) {
+                problems.add(
+                    &format!("step `{}`", step.id),
+                    format!(
+                        "the agent `{agent}` is no agent of Vision and no agent of [agents] of this file. Define it with [agents.{agent}] and its role file, or use one of {}",
+                        crate::models::agent_names().join(", ")
+                    ),
+                );
+            }
+            uses.entry(agent)
+                .or_default()
+                .push((step.id.as_str(), kind));
+        }
+    }
+    for agent in adapter.agents.values() {
+        if agent.runner != Runner::Codex {
+            continue;
+        }
+        let at = format!("[agents.{}]", agent.name);
+        let found = uses.get(agent.name.as_str()).cloned().unwrap_or_default();
+        for (step, kind) in &found {
+            if *kind != TurnKind::Reader {
+                problems.add(
+                    &at,
+                    format!("it runs on Codex, but the step `{step}` makes it a {kind}. Only a reader turn runs on Codex: make it a reader there, or set runner = \"claude\""),
+                );
+            }
+        }
+        if !found.iter().any(|(_, kind)| *kind == TurnKind::Reader) {
+            problems.add(
+                &at,
+                "it runs on Codex, but no step makes it a reader. Only a reader turn runs on Codex: name it in a step with turn = \"reader\", or remove it",
+            );
+        }
+    }
 }
 
 /// `[kinds]`: `map` from issue types to kinds, and `default`.
@@ -1503,6 +1762,9 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         let why = match (kind.as_str(), key.as_str()) {
             ("end", "when") => "the end step has no when: a ticket always ends there".to_string(),
             ("wait", "when") => "a wait step has no when: it has no next to skip to".to_string(),
+            ("job" | "human" | "check" | "end", "on") => format!(
+                "a {kind} step has no on: only a turn step moves by on (its findings, or its commits), and a wait step and an ask step by their values"
+            ),
             _ => format!("the key `{key}` does not belong to a {kind} step"),
         };
         problems.add(&at, why);
@@ -1676,21 +1938,45 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
             }
         }
         StepKind::Turn(turn) if !on.is_empty() => {
-            if turn.findings.is_none() {
-                problems.add(
-                    &at,
-                    "a turn step moves on its findings, so on needs the key findings, such as findings = \"qa\"",
-                );
-            }
             let keys: Vec<&str> = on.keys().map(String::as_str).collect();
-            if keys != [FINDINGS, NONE] {
-                problems.add(
-                    &at,
-                    format!(
-                        "on of a turn step has exactly the keys findings and none, such as on = {{ findings = \"fix\", none = \"ready\" }}, not {}",
-                        keys.join(", ")
-                    ),
-                );
+            if on.contains_key(COMMITS) {
+                // The route by commits: the head after the turn against the head at the entry.
+                if on.contains_key(FINDINGS) {
+                    problems.add(
+                        &at,
+                        "on moves a turn step by its commits or by its findings, never by both",
+                    );
+                } else if keys != [COMMITS, NONE] {
+                    problems.add(
+                        &at,
+                        format!(
+                            "on of a turn step that moves by its commits has exactly the keys commits and none, such as on = {{ commits = \"review-lanes\", none = \"ci\" }}, not {}",
+                            keys.join(", ")
+                        ),
+                    );
+                }
+                if !turn.team.is_empty() {
+                    problems.add(
+                        &at,
+                        "a step with team moves by next when each member is done, so it has no on",
+                    );
+                }
+            } else {
+                if turn.findings.is_none() {
+                    problems.add(
+                        &at,
+                        "a turn step moves on its findings, so on needs the key findings, such as findings = \"qa\"",
+                    );
+                }
+                if keys != [FINDINGS, NONE] {
+                    problems.add(
+                        &at,
+                        format!(
+                            "on of a turn step has exactly the keys findings and none, such as on = {{ findings = \"fix\", none = \"ready\" }}, or commits and none, such as on = {{ commits = \"review-lanes\", none = \"ci\" }}, not {}",
+                            keys.join(", ")
+                        ),
+                    );
+                }
             }
             if next.is_some() {
                 problems.add(
@@ -3212,7 +3498,80 @@ url = "http://localhost:3000"
             "on = { findings = \"done\", none = \"done\" }",
         ));
         assert!(
-            err.contains("the key `on` does not belong to a job step"),
+            err.contains("step `proof`: a job step has no on: only a turn step moves by on"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_turn_step_can_move_by_its_commits() {
+        let build = "cap = \"review_rounds\"\nnext = \"ci\"";
+        let good = with(
+            build,
+            "cap = \"review_rounds\"\non = { commits = \"refine\", none = \"ci\" }",
+        );
+        let adapter = parse(&good).unwrap();
+        let step = adapter.step("build").unwrap();
+        assert_eq!(step.next, None);
+        assert_eq!(step.on[COMMITS], "refine");
+        assert_eq!(step.on[NONE], "ci");
+        // The findings key of a step only stores its findings, so it goes with commits too.
+        let with_findings = with(
+            build,
+            "findings = \"review\"\non = { commits = \"refine\", none = \"ci\" }",
+        );
+        parse(&with_findings).unwrap();
+        for (new, expected) in [
+            (
+                "on = { commits = \"refine\" }",
+                "exactly the keys commits and none",
+            ),
+            (
+                "on = { commits = \"refine\", none = \"ci\", red = \"ci\" }",
+                "exactly the keys commits and none",
+            ),
+            (
+                "findings = \"qa\"\non = { commits = \"refine\", findings = \"ci\", none = \"ci\" }",
+                "on moves a turn step by its commits or by its findings, never by both",
+            ),
+            (
+                "on = { commits = \"refine\", none = \"ci\" }\nnext = \"ci\"",
+                "a turn step with on moves by on, so it has no next",
+            ),
+            (
+                "on = { commits = \"lanes\", none = \"ci\" }",
+                "on.commits names the step `lanes`, which does not exist",
+            ),
+            (
+                "on = { commits = \"refine\", none = \"gone\" }",
+                "on.none names the step `gone`, which does not exist",
+            ),
+        ] {
+            let err = error(&with(build, &format!("cap = \"review_rounds\"\n{new}")));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        // Only a turn step moves by its commits.
+        let err = error(&with(
+            "action = \"approve-merge\"\nnext = \"proof\"",
+            "action = \"approve-merge\"\non = { commits = \"proof\", none = \"proof\" }",
+        ));
+        assert!(
+            err.contains("step `approve`: a human step has no on"),
+            "{err}"
+        );
+        let err = error(&with(
+            "next = \"done\"",
+            "on = { commits = \"done\", none = \"done\" }",
+        ));
+        assert!(err.contains("step `proof`: a job step has no on"), "{err}");
+        // A team moves by next when each member is done.
+        let team = investigate_with(
+            "]\nnext = \"analyze\"",
+            "]\non = { commits = \"analyze\", none = \"analyze\" }",
+        );
+        let err = error(&team);
+        assert!(
+            err.contains("step `investigate`: a step with team moves by next when each member is done, so it has no on"),
             "{err}"
         );
     }
@@ -3473,25 +3832,172 @@ url = "http://localhost:3000"
         assert!(Expect::parse("human:a b").is_err());
     }
 
+    /// The good file with three agents of its own: two readers on Claude and one on Codex.
+    fn with_agents() -> String {
+        let text = with(
+            "[[step]]\nid = \"approve\"",
+            "[[step]]\nid = \"lanes\"\nkind = \"turn\"\nteam = [\n  { agent = \"cr-a\", turn = \"reader\", expects = [\"doc:findings-cr-a.md\"] },\n  { agent = \"cr-codex\", turn = \"reader\", expects = [\"doc:findings-cr-codex.md\"] },\n]\nnext = \"approve\"\n\n[[step]]\nid = \"approve\"",
+        );
+        format!(
+            "{text}\n[agents.cr-a]\nmodel = \"opus\"\nreason = \"It reads for faults.\"\n\n[agents.cr-codex]\nrole = \"roles/lane.md\"\nmodel = \"gpt-6.1-sol\"\neffort = \"xhigh\"\nrunner = \"codex\"\nfallback = {{ model = \"claude-opus-5-5\" }}\n\n[agents.cr-b]\nmodel = \"claude-sonnet-5-5\"\neffort = \"medium\"\n"
+        )
+    }
+
     #[test]
-    fn an_unknown_agent_needs_a_role_file() {
+    fn an_adapter_defines_agents_with_a_role_file_a_model_and_a_runner() {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::new(dir.path().join("home"));
         let adapter_dir = dir.path().join("toy");
-        let text = GOOD.replacen("agent = \"scout\"", "agent = \"planner\"", 1);
-        let adapter = Adapter::parse(&text, &adapter_dir).unwrap();
-        let err = adapter.check_agents(&paths).unwrap_err().to_string();
+        let adapter = Adapter::parse(&with_agents(), &adapter_dir).unwrap();
+        let names: Vec<&str> = adapter.agents.keys().map(String::as_str).collect();
+        assert_eq!(names, ["cr-a", "cr-b", "cr-codex"]);
+        let a = &adapter.agents["cr-a"];
+        assert_eq!(a.role, "roles/cr-a.md", "the default role file");
+        assert_eq!(
+            a.model, "claude-opus-5-5",
+            "a short name becomes the full id"
+        );
+        assert_eq!(
+            (a.effort, a.runner, &a.fallback),
+            (Effort::High, Runner::Claude, &None)
+        );
+        assert_eq!(a.reason, "It reads for faults.");
+        let codex = &adapter.agents["cr-codex"];
+        assert_eq!(codex.role, "roles/lane.md");
+        assert_eq!((codex.effort, codex.runner), (Effort::Xhigh, Runner::Codex));
+        assert_eq!(
+            codex.fallback,
+            Some(Fallback {
+                model: "claude-opus-5-5".into(),
+                effort: Effort::High
+            })
+        );
+        // The role files must exist, in the adapter folder or in the scripts folder.
+        let err = adapter.check_agents().unwrap_err().to_string();
         assert!(
-            err.contains("step `refine`: the agent `planner` has no role file"),
+            err.contains("[agents.cr-a]: the role file roles/cr-a.md does not exist"),
             "{err}"
         );
         std::fs::create_dir_all(adapter_dir.join("roles")).unwrap();
-        std::fs::write(adapter_dir.join("roles/planner.md"), "# Planner\n").unwrap();
-        adapter.check_agents(&paths).unwrap();
+        for name in ["cr-a.md", "cr-b.md", "lane.md"] {
+            std::fs::write(adapter_dir.join("roles").join(name), "# Lane\n").unwrap();
+        }
+        adapter.check_agents().unwrap();
         assert_eq!(
-            adapter.role_file("planner"),
-            Some(adapter_dir.join("roles/planner.md"))
+            adapter.role_file("cr-codex"),
+            Some(adapter_dir.join("roles/lane.md"))
         );
+        // A role file of an agent of Vision still replaces its role file.
+        assert_eq!(adapter.role_file("reviewer"), None);
+        std::fs::write(adapter_dir.join("roles/reviewer.md"), "# Lead\n").unwrap();
+        assert_eq!(
+            adapter.role_file("reviewer"),
+            Some(adapter_dir.join("roles/reviewer.md"))
+        );
+    }
+
+    #[test]
+    fn the_loader_refuses_a_wrong_agent_of_the_adapter() {
+        let good = with_agents();
+        let cases: Vec<(String, &str)> = vec![
+            (
+                GOOD.replacen("agent = \"scout\"", "agent = \"planner\"", 1),
+                "step `refine`: the agent `planner` is no agent of Vision and no agent of [agents] of this file",
+            ),
+            (
+                good.replacen("{ agent = \"cr-a\"", "{ agent = \"cr-x\"", 1),
+                "step `lanes`: the agent `cr-x` is no agent of Vision and no agent of [agents]",
+            ),
+            (
+                format!("{good}\n[agents.reviewer]\nmodel = \"opus\"\n"),
+                "[agents.reviewer]: `reviewer` is an agent of Vision, so the adapter cannot define it. To give it another role file, write roles/reviewer.md",
+            ),
+            (
+                good.replacen(
+                    "{ agent = \"cr-codex\", turn = \"reader\"",
+                    "{ agent = \"cr-codex\", turn = \"worker\"",
+                    1,
+                ),
+                "[agents.cr-codex]: it runs on Codex, but the step `lanes` makes it a worker",
+            ),
+            (
+                good.replacen("  { agent = \"cr-codex\", turn = \"reader\", expects = [\"doc:findings-cr-codex.md\"] },\n", "", 1),
+                "[agents.cr-codex]: it runs on Codex, but no step makes it a reader",
+            ),
+            (
+                good.replacen("model = \"claude-sonnet-5-5\"\n", "", 1),
+                "[agents.cr-b]: it needs model",
+            ),
+            (
+                good.replacen("effort = \"medium\"", "effort = \"huge\"", 1),
+                "[agents.cr-b]: effort is low, medium, high, xhigh, or max, not `\"huge\"`",
+            ),
+            (
+                good.replacen("runner = \"codex\"", "runner = \"gpt\"", 1),
+                "[agents.cr-codex]: runner is claude or codex",
+            ),
+            (
+                good.replacen("effort = \"medium\"", "effort = \"medium\"\nfallback = { model = \"opus\" }", 1),
+                "[agents.cr-b]: fallback names the model with Claude that takes the work of a failed turn on Codex, so it needs runner = \"codex\"",
+            ),
+            (
+                good.replacen("role = \"roles/lane.md\"", "role = \"../other/lane.md\"", 1),
+                "[agents.cr-codex]: role names `../other/lane.md`",
+            ),
+            (
+                good.replacen("role = \"roles/lane.md\"", "role = \"/etc/lane.md\"", 1),
+                "[agents.cr-codex]: role names `/etc/lane.md`",
+            ),
+            (
+                good.replacen("reason = \"It reads for faults.\"", "colour = \"red\"", 1),
+                "[agents.cr-a]: `colour` is not a key of an agent. The keys: role, model, effort, runner, fallback, reason",
+            ),
+            (
+                good.replacen("fallback = { model = \"claude-opus-5-5\" }", "fallback = { effort = \"high\" }", 1),
+                "[agents.cr-codex] fallback: it names the model with Claude",
+            ),
+        ];
+        for (text, expected) in cases {
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+    }
+
+    #[test]
+    fn the_review_team_demo_has_its_agents_two_teams_and_a_route_by_commits() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("adapters/demo-review-team");
+        let adapter = Adapter::read(&dir).unwrap();
+        adapter.check_agents().unwrap();
+        let names: Vec<&str> = adapter.agents.keys().map(String::as_str).collect();
+        assert_eq!(names, ["cr-codex", "cr-correctness", "cr-design"]);
+        assert_eq!(adapter.agents["cr-codex"].runner, Runner::Codex);
+        assert!(adapter.agents["cr-codex"].fallback.is_some());
+        assert_eq!(adapter.agents["cr-design"].runner, Runner::Claude);
+        // The lead keeps the Reviewer of Vision, with the role file of the adapter.
+        assert_eq!(
+            adapter.role_file("reviewer"),
+            Some(dir.join("roles/reviewer.md"))
+        );
+        let lanes = adapter.step("review-lanes").unwrap();
+        assert_eq!(lanes.cap.as_deref(), Some("2"));
+        assert_eq!(lanes.team().len(), 3);
+        let challenge = adapter.step("review-challenge").unwrap();
+        for member in challenge.team() {
+            assert!(
+                !member
+                    .reads
+                    .contains(&format!("findings-{}.md", member.agent)),
+                "{member:?}"
+            );
+            assert_eq!(member.reads.len(), 2, "{member:?}");
+        }
+        let lead = adapter.step("review").unwrap();
+        assert_eq!(lead.next, None);
+        assert_eq!(lead.on[COMMITS], "review-lanes");
+        assert_eq!(lead.on[NONE], "ci");
+        assert!(lead
+            .expects
+            .iter()
+            .any(|e| matches!(e, Expect::Gate(g) if g.doc == "cr.md")));
     }
 
     /// The adapter of the demo with the investigation before the plan.

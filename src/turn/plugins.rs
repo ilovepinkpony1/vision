@@ -43,6 +43,9 @@ pub struct Plugins {
     /// The folders that the turn reads and never writes: each folder of `dirs`, its real path,
     /// and the real path of each link in the skill folders that leaves the plugin folder.
     pub read: Vec<PathBuf>,
+    /// The file `SKILL.md` of each skill, with the name `<plugin>:<skill>`. A turn on Codex has
+    /// no tool Skill, so its prompt names these files, and the turn reads them.
+    pub skills: Vec<(String, PathBuf)>,
 }
 
 impl Plugins {
@@ -138,6 +141,15 @@ pub fn resolve(entries: &[String]) -> Result<Plugins> {
         }
         for plugin in &found {
             for skill in skill_dirs(&plugin.dir) {
+                let file = skill.join("SKILL.md");
+                let name = skill
+                    .file_name()
+                    .map(|n| format!("{}:{}", plugin.name, n.to_string_lossy()));
+                if let (true, Some(name)) = (file.is_file(), name) {
+                    if !plugins.skills.iter().any(|(_, known)| *known == file) {
+                        plugins.skills.push((name, file));
+                    }
+                }
                 for target in link_targets(&skill) {
                     if !roots.iter().any(|r| target.starts_with(r)) {
                         add(&mut plugins.read, target);

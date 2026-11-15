@@ -129,10 +129,21 @@ pub fn draw(app: &App, c: &mut Canvas) {
     if data.agents.is_empty() {
         c.put(2, ya + 1, "No turn cost anything yet.", ink(T.dim));
     }
+    // The agents that the adapter defines come after those of Vision, behind one label.
+    let mut labeled = false;
     for (agent, cost) in &data.agents {
-        let part = format!("{agent} {}", money(*cost));
+        let label = if crate::models::origin_of(agent) == "adapter" && !labeled {
+            "adapter: "
+        } else {
+            ""
+        };
+        let part = format!("{label}{agent} {}", money(*cost));
         if x + 2 + part.chars().count() as i32 > c.w - 2 {
             break;
+        }
+        if !label.is_empty() {
+            x = c.put(x, ya + 1, label, ink(T.dim));
+            labeled = true;
         }
         x = c.put(x, ya + 1, "● ", ink(agent_color(agent)));
         x = c.put(x, ya + 1, &format!("{agent} "), ink(T.fg));

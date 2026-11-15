@@ -96,10 +96,14 @@ pub(crate) fn words_hold(
     Ok(holds(words, ticket.counts.kind.as_deref(), &read, &doc))
 }
 
-/// Where a skipped step sends the ticket: its `next`, or `on.same` of an ask step.
+/// Where a skipped step sends the ticket: its `next`, `on.same` of an ask step, or `on.none`
+/// of a turn step that moves by its commits, because a step that did not run made no commit.
 pub(crate) fn skip_target(step: &Step) -> Option<String> {
     match &step.kind {
         StepKind::Ask(_) => step.on.get(SAME).cloned(),
+        StepKind::Turn(_) if step.on.contains_key(crate::adapter::COMMITS) => {
+            step.on.get(crate::adapter::NONE).cloned()
+        }
         _ => step.next.clone(),
     }
 }

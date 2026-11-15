@@ -1101,7 +1101,7 @@ fn select_one(
     }
     let one = |action: Option<Action>| Ok(action.into_iter().collect());
     for _ in 0..2 {
-        let facts = gather(ctx, ledger, ticket, &step, now, false)?;
+        let facts = gather(ctx, ledger, adapter, ticket, &step, now, false)?;
         let next = decide(&facts);
         match next {
             Next::Nothing(_) => return Ok(Vec::new()),
@@ -1133,7 +1133,7 @@ fn select_one(
                     .and_then(one)
             }
             Next::Fallback { why } => {
-                return fall_back(ctx, ledger, ticket, &step, &why, false).and_then(one)
+                return fall_back(ctx, ledger, adapter, ticket, &step, &why, false).and_then(one)
             }
             Next::Request { list, index } => {
                 let entries = match list {
@@ -1161,7 +1161,23 @@ fn select_one(
                 })));
             }
             Next::Move { to, how } => {
-                move_to(ctx, ledger, adapter, ticket, &step, &to, &how)?;
+                // A move by `on` adds its detail to the event, such as the two heads of a
+                // move by commits.
+                let detail = facts
+                    .branch
+                    .as_ref()
+                    .filter(|b| b.to == to && b.how == how)
+                    .and_then(|b| b.detail.clone());
+                move_to_with(
+                    ctx,
+                    ledger,
+                    adapter,
+                    ticket,
+                    &step,
+                    &to,
+                    &how,
+                    detail.as_ref(),
+                )?;
                 return Ok(Vec::new());
             }
             Next::Finish => {
@@ -1203,6 +1219,7 @@ fn extra_round_event(
 pub(crate) fn fall_back(
     ctx: &Ctx,
     ledger: &Ledger,
+    adapter: &Adapter,
     ticket: &mut Ticket,
     step: &Step,
     why: &str,
@@ -1220,7 +1237,7 @@ pub(crate) fn fall_back(
     if let Some(visit) = ticket.counts.visit.as_mut() {
         visit.fallback.insert(agent.clone(), before);
     }
-    let fallback = crate::models::choice(ctx.config()?, &agent)?
+    let fallback = crate::models::choice_in(ctx.config()?, &adapter.agents, &agent)?
         .fallback
         .map(|f| format!("{} {}", f.model, f.effort))
         .unwrap_or_default();
@@ -1443,6 +1460,7 @@ pub(crate) fn open_items(
 pub(crate) fn gather(
     ctx: &Ctx,
     ledger: &Ledger,
+    adapter: &Adapter,
     ticket: &Ticket,
     step: &Step,
     now: OffsetDateTime,
@@ -1492,7 +1510,7 @@ pub(crate) fn gather(
                     && !visit.fallback.contains_key(&turn.agent)
                 {
                     codex_fallback = Some(
-                        crate::models::choice(ctx.config()?, &turn.agent)
+                        crate::models::choice_in(ctx.config()?, &adapter.agents, &turn.agent)
                             .map(|c| c.fallback.is_some())
                             .unwrap_or(false),
                     );
@@ -1538,7 +1556,9 @@ pub(crate) fn gather(
                 .as_ref()
                 .filter(|t| t.end_fact.as_deref() == Some("held"))
             {
-                if !step.on.is_empty() {
+                if step.on.contains_key(crate::adapter::COMMITS) {
+                    branch = Some(commits_branch(ticket, step)?);
+                } else if !step.on.is_empty() {
                     branch = Some(turn_branch(ctx, ledger, step, &t.id)?);
                 }
             }
@@ -1694,6 +1714,31 @@ fn turn_branch(ctx: &Ctx, ledger: &Ledger, step: &Step, turn_id: &str) -> Result
             "the step {} has on with no target for its findings. Fix adapter.toml",
             step.id
         )
+    })
+}
+
+/// Where a turn step with `on = { commits, none }` moves after its held turn: `commits` when
+/// the head of the branch now differs from the head at the entry into the step, else `none`.
+/// A visit with no head at its entry goes by `commits`, so the branch gets a fresh look. The
+/// detail names the way and the two heads, for the event of the move.
+fn commits_branch(ticket: &Ticket, step: &Step) -> Result<Branch> {
+    let head = head_of(&ticket.clone_dir()?)?;
+    let entry = ticket.visit().base;
+    let way = if entry.as_deref() == Some(head.as_str()) {
+        crate::adapter::NONE
+    } else {
+        crate::adapter::COMMITS
+    };
+    let to = step.on.get(way).cloned().with_context(|| {
+        format!(
+            "the step {} has on with no target for {way}. Fix adapter.toml",
+            step.id
+        )
+    })?;
+    Ok(Branch {
+        to,
+        how: format!("on {way}"),
+        detail: Some(json!({"way": way, "entry_head": entry, "head": head})),
     })
 }
 
@@ -2002,6 +2047,21 @@ pub(crate) fn move_to(
     to: &str,
     how: &str,
 ) -> Result<()> {
+    move_to_with(ctx, ledger, adapter, ticket, from, to, how, None)
+}
+
+/// [`move_to`] with more fields for the event `step`, such as the heads of a move by commits.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn move_to_with(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    ticket: &mut Ticket,
+    from: &Step,
+    to: &str,
+    how: &str,
+    extra: Option<&Value>,
+) -> Result<()> {
     let Some(step) = adapter.step(to).cloned() else {
         bail!("the step {to} is not in the adapter");
     };
@@ -2020,10 +2080,17 @@ pub(crate) fn move_to(
             &ticket.counts.text(),
             &now,
         )?;
+        let mut detail =
+            json!({"from": from.id, "to": step.id, "how": how, "n": visit.n, "seq": visit.seq});
+        if let (Some(Value::Object(more)), Value::Object(fields)) = (extra, &mut detail) {
+            for (key, value) in more {
+                fields.insert(key.clone(), value.clone());
+            }
+        }
         ledger.add_event(
             &Event::now("tick", "step")
                 .ticket(ticket.key.as_str())
-                .detail(json!({"from": from.id, "to": step.id, "how": how, "n": visit.n, "seq": visit.seq})),
+                .detail(detail),
         )?;
         Ok(())
     })?;

@@ -75,8 +75,9 @@ pub fn build(ctx: &Ctx, ledger: &Ledger, start: &TurnStart) -> Result<LaunchRequ
             .flatten()
     });
     request.member = member.is_some();
+    request.defined = adapter.agents.get(&start.agent).cloned();
     if start.fallback {
-        let fallback = crate::models::choice(config, &start.agent)?
+        let fallback = crate::models::choice_in(config, &adapter.agents, &start.agent)?
             .fallback
             .with_context(|| format!("the agent {} has no fallback", start.agent))?;
         request.runner = Some(crate::config::Runner::Claude);

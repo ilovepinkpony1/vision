@@ -16,6 +16,9 @@ list, the second run the second list, and so on; the last list repeats. Each ste
   command   a command and its output: "command", "output", "exit_code" (default 0).
   result    the last message: "result", a JSON value that the fake prints as the message.
   text      the last message as plain text: "text".
+  read      read the file "path" as the command `cat <path>`, under the profile of the -c keys:
+            a path that the profile hides gives a denial and the exit code 1. A later result
+            gets the text of the first read in place of {read0}, of the second in {read1}.
   fail      an error event and a failed turn with "message", then exit code 1.
   exit      exit with "code", after "stderr" text.
   sleep     sleep "seconds".
@@ -121,6 +124,19 @@ def sandbox(args):
     return subprocess.call(out)
 
 
+def fill(value, reads):
+    """The value with each {readN} in a string replaced by the text of the read N."""
+    if isinstance(value, str):
+        for i, text in enumerate(reads):
+            value = value.replace("{read%d}" % i, text)
+        return value
+    if isinstance(value, list):
+        return [fill(v, reads) for v in value]
+    if isinstance(value, dict):
+        return {k: fill(v, reads) for k, v in value.items()}
+    return value
+
+
 def main():
     args = sys.argv[1:]
     if args[:1] == ["--version"]:
@@ -149,6 +165,7 @@ def main():
     emit({"type": "thread.started", "thread_id": thread})
     emit({"type": "turn.started"})
     n = 0
+    reads = []
     for step in scenario_steps(facts):
         do = step.get("do")
         n += 1
@@ -159,8 +176,22 @@ def main():
             emit({"type": "item.started", "item": dict(item, aggregated_output="", exit_code=None, status="in_progress")})
             code = step.get("exit_code", 0)
             emit({"type": "item.completed", "item": dict(item, aggregated_output=step.get("output", ""), exit_code=code, status="completed" if code == 0 else "failed")})
+        elif do == "read":
+            path = step.get("path", "")
+            item = {"id": f"item_{n}", "type": "command_execution", "command": f"cat {path}"}
+            emit({"type": "item.started", "item": dict(item, aggregated_output="", exit_code=None, status="in_progress")})
+            if hidden_by(args, path):
+                text, code = f"cat: {path}: Operation not permitted", 1
+            else:
+                try:
+                    with open(path) as f:
+                        text, code = f.read(), 0
+                except OSError as e:
+                    text, code = f"cat: {path}: {e.strerror}", 1
+            reads.append(text)
+            emit({"type": "item.completed", "item": dict(item, aggregated_output=text, exit_code=code, status="completed" if code == 0 else "failed")})
         elif do in ("result", "text"):
-            text = step["text"] if do == "text" else json.dumps(step.get("result"))
+            text = fill(step["text"], reads) if do == "text" else json.dumps(fill(step.get("result"), reads))
             emit({"type": "item.completed", "item": {"id": f"item_{n}", "type": "agent_message", "text": text}})
             if last:
                 with open(last, "w") as f:

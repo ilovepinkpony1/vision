@@ -489,8 +489,14 @@ fn check_codex(ctx: &Ctx) -> Check {
         Ok(config) => config,
         Err(e) => return Check::new("codex", Level::Fail, format!("{e:#}")),
     };
-    // The agents of the steps of the adapter, or each agent when the adapter does not load.
-    let named: Option<Vec<String>> = crate::adapter::load(ctx).ok().map(|a| {
+    // The agents of the steps of the adapter, or each agent of Vision when the adapter does not
+    // load. An agent that the adapter defines counts too.
+    let adapter = crate::adapter::load(ctx).ok();
+    let defined = adapter
+        .as_ref()
+        .map(|a| a.agents.clone())
+        .unwrap_or_default();
+    let named: Option<Vec<String>> = adapter.as_ref().map(|a| {
         a.steps
             .iter()
             .filter_map(|s| match &s.kind {
@@ -501,18 +507,13 @@ fn check_codex(ctx: &Ctx) -> Check {
             .map(str::to_string)
             .collect()
     });
-    let users: Vec<&str> = crate::models::AGENTS
-        .iter()
-        .filter(|spec| {
-            named
-                .as_ref()
-                .is_none_or(|n| n.iter().any(|a| a == spec.name))
-        })
-        .filter(|spec| {
-            crate::models::choice(config, spec.name)
+    let users: Vec<String> = crate::models::names_in(&defined)
+        .into_iter()
+        .filter(|name| named.as_ref().is_none_or(|n| n.iter().any(|a| a == name)))
+        .filter(|name| {
+            crate::models::choice_in(config, &defined, name)
                 .is_ok_and(|c| c.runner == crate::config::Runner::Codex)
         })
-        .map(|spec| spec.name)
         .collect();
     if users.is_empty() {
         return Check::new("codex", Level::Ok, "not used: no agent runs on Codex");

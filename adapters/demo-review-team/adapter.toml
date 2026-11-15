@@ -1,0 +1,222 @@
+# The demo adapter with a review team (design section 11.4). It uses the scripts of
+# adapters/demo: the same world, tracker, forge, and CI. Only the review differs from the demo:
+#
+#   refine -> plan -> plan-ready -> build -> review-lanes -> review-challenge -> review
+#   review:    a commit of the lead -> review-lanes (a fresh look at the new head)
+#              no commit            -> ci
+#   ci and the rest: as in the demo
+#
+# The adapter defines its own agents in [agents]: three review lanes, each with its role file
+# in roles/. Two lanes run on Claude, and one runs on Codex, so a second model reads the diff
+# on its own. Each lane only reads: it writes findings in the form of the gate cr.
+#
+# review-lanes: the three lanes start in one tick, each in its own session, and none reads the
+#   findings of another lane. Each one writes findings-<lane>.md.
+# review-challenge: each lane reads the findings of the two other lanes and marks each finding
+#   agree or disagree, with evidence from the code. Each one writes challenge-<lane>.md.
+# review: the lead (the Reviewer of Vision, with the role file roles/reviewer.md of this
+#   adapter) judges each finding with its votes, opens each file, fixes the findings that it
+#   keeps, and commits. cr.md holds only the findings that are still open, and the gate cr reads
+#   it. cr-fixed.md names each fix. When the lead made a commit, the ticket goes back to
+#   review-lanes for a fresh look; when it made none, the ticket goes on to ci.
+#
+# The cap of review-lanes bounds the rounds: its third entry needs the person.
+
+name = "demo-review-team"
+branch = "vision/{key}"
+base = "origin/main"
+scripts = "../demo"
+
+[agents.cr-correctness]
+model = "claude-opus-5-5"
+effort = "high"
+reason = "It reads the diff for wrong results, broken edge cases, and missing tests."
+
+[agents.cr-design]
+model = "claude-sonnet-5-5"
+effort = "high"
+reason = "It reads the diff for names, structure, and the reuse of code that exists."
+
+[agents.cr-codex]
+model = "gpt-6.1-sol"
+effort = "high"
+runner = "codex"
+fallback = { model = "claude-opus-5-5", effort = "high" }
+reason = "A second model reads the diff on its own, so its findings do not follow the other lanes."
+
+[[step]]
+id = "refine"
+kind = "turn"
+agent = "scout"
+turn = "reader"
+reads = ["issue.json"]
+expects = ["doc:refine.md", "doc:description.md"]
+after = [{ verb = "tracker.describe", args = { text = "{doc:description.md}" } }]
+next = "plan"
+
+[[step]]
+id = "plan"
+kind = "turn"
+agent = "builder"
+turn = "reader"
+reads = ["issue.json", "refine.md", "answers.md"]
+expects = ["doc:plan.md"]
+next = "plan-ready"
+
+[[step]]
+id = "plan-ready"
+kind = "human"
+action = "approve-plan"
+next = "build"
+
+[[step]]
+id = "build"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+reads = ["approved-plan.md", "refine.md", "answers.md"]
+expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
+next = "review-lanes"
+
+[[step]]
+id = "review-lanes"
+kind = "turn"
+before = ["job:second-review"]          # the changed files of the branch, for each lane
+reads = ["approved-plan.md", "second-review.md"]
+team = [
+  { agent = "cr-correctness", turn = "reader", expects = ["doc:findings-cr-correctness.md"] },
+  { agent = "cr-design", turn = "reader", expects = ["doc:findings-cr-design.md"] },
+  { agent = "cr-codex", turn = "reader", expects = ["doc:findings-cr-codex.md"] },
+]
+cap = 2                       # the entries of this step: the third one needs the person
+next = "review-challenge"
+
+[[step]]
+id = "review-challenge"
+kind = "turn"
+reads = ["approved-plan.md", "second-review.md"]
+team = [
+  { agent = "cr-correctness", turn = "reader", reads = ["findings-cr-design.md", "findings-cr-codex.md"], expects = ["doc:challenge-cr-correctness.md"] },
+  { agent = "cr-design", turn = "reader", reads = ["findings-cr-correctness.md", "findings-cr-codex.md"], expects = ["doc:challenge-cr-design.md"] },
+  { agent = "cr-codex", turn = "reader", reads = ["findings-cr-correctness.md", "findings-cr-design.md"], expects = ["doc:challenge-cr-codex.md"] },
+]
+next = "review"
+
+[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "worker"
+reads = ["approved-plan.md", "second-review.md",
+         "findings-cr-correctness.md", "findings-cr-design.md", "findings-cr-codex.md",
+         "challenge-cr-correctness.md", "challenge-cr-design.md", "challenge-cr-codex.md"]
+expects = ["clean", { gate = "cr", doc = "cr.md" }, "doc:cr-fixed.md"]
+after = ["git.push"]
+on = { commits = "review-lanes", none = "ci" }
+
+[[step]]
+id = "ci"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "ready", red = "fix-ci" }
+wait = ["none"]               # the values that mean "not yet". Any other value needs the person.
+limit = 3600                  # seconds that one visit can watch before it needs the person
+every = 60
+
+[[step]]
+id = "fix-ci"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+before = ["job:ci-log"]
+reads = ["ci-log.txt", "approved-plan.md"]
+expects = ["commits", "clean", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push"]
+cap = "ci_fix"
+next = "ci"
+
+[[step]]
+id = "ready"
+kind = "wait"
+watch = "pr.draft"
+on = { "false" = "comments" }
+wait = ["true"]
+limit = 604800
+every = 60
+
+[[step]]
+id = "comments"
+kind = "turn"
+agent = "shepherd"
+turn = "worker"
+before = ["job:comments"]
+reads = ["comments.json", "approved-plan.md"]
+expects = ["clean", "doc:verdicts.json"]
+after = ["git.push", { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } }]
+cap = "comments"
+next = "ci-review"
+
+[[step]]
+id = "ci-review"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "ready-to-merge", red = "fix-ci" }
+wait = ["none"]
+limit = 3600
+every = 60
+
+[[step]]
+id = "ready-to-merge"
+kind = "wait"
+watch = "pr.merged"
+on = { "true" = "done" }
+wait = ["false"]
+limit = 1209600
+every = 60
+
+[[step]]
+id = "done"
+kind = "end"
+
+[verbs."tracker.describe"]
+mode = "auto"
+leaves = true
+
+[verbs."git.push"]
+mode = "auto"
+leaves = true
+
+[verbs."pr.open"]
+mode = "auto"
+leaves = true
+
+[verbs."ci.run"]
+mode = "auto"
+
+[verbs."review.reply"]
+mode = "ask"
+leaves = true
+
+[verbs."tracker.issue"]
+read = true
+about = "One ticket of the tracker as issue-<KEY>.json: title, description, status, assignee. args: key (default: the ticket)"
+
+# A job gets no secret, because a job can run code that an agent wrote. A job that only reads
+# the tracker or the forge sets `secrets = true`. Never set it for a job that runs code of the
+# project, such as the proof.
+[jobs.proof]
+timeout = 900
+
+[jobs.second-review]
+timeout = 120
+
+[jobs.comments]
+timeout = 60
+secrets = true
+
+[jobs.ci-log]
+timeout = 60
+secrets = true

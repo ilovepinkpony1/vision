@@ -154,6 +154,7 @@ fn evidence(turns: &ModelTurns, extra: Vec<(String, f64)>) -> ModelEvidence {
 fn pick(models: &[ModelEvidence], choice: &ModelChoice) -> (Option<String>, String) {
     let stays = match choice.source {
         super::Source::Default => "the default stays",
+        super::Source::Adapter => "the model of the adapter stays",
         super::Source::Yours { .. } => "your model stays",
     };
     let counted: Vec<&ModelEvidence> = models

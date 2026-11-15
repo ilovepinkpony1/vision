@@ -153,7 +153,7 @@ fn read_start_info(paths: &Paths, key: &str) -> anyhow::Result<StartInfo> {
     };
     if let StepKind::Turn(turn) = &entry.kind {
         first.agent = Some(turn.agent.clone());
-        if let Ok(choice) = crate::models::choice(config, &turn.agent) {
+        if let Ok(choice) = crate::models::choice_in(config, &adapter.agents, &turn.agent) {
             first.model = Some(choice.model);
             first.effort = Some(choice.effort.to_string());
         }

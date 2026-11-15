@@ -18,6 +18,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use crate::adapter::AdapterAgent;
 use crate::config::{CodexPrice, Effort, Runner};
 use crate::ctx::Ctx;
 use crate::ledger::turns::{NewTurn, Window};
@@ -109,6 +110,10 @@ pub struct LaunchRequest {
     /// True for a member of a team step: its result can never be `questions`.
     #[serde(default)]
     pub member: bool,
+    /// The values of an agent that the adapter defines, for an agent that Vision does not
+    /// know. The request keeps them, so that a resume of the turn needs no adapter.
+    #[serde(default)]
+    pub defined: Option<AdapterAgent>,
 }
 
 impl LaunchRequest {
@@ -140,6 +145,7 @@ impl LaunchRequest {
             no_retry: false,
             runner: None,
             member: false,
+            defined: None,
         }
     }
 }
@@ -418,7 +424,12 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     let skills = !plugins.is_empty();
     let role = roles::compose_role(paths, &request.agent, request.role_file.as_deref())?;
     let schema = roles::schema(paths, &request.agent)?;
-    let mut choice = models::choice(config, &request.agent)?;
+    let defined: models::Defined = request
+        .defined
+        .iter()
+        .map(|agent| (agent.name.clone(), agent.clone()))
+        .collect();
+    let mut choice = models::choice_in(config, &defined, &request.agent)?;
     if let Some(model) = &request.model {
         choice.model = models::full_model_id(model)?;
     }
@@ -559,7 +570,8 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             let file = turn.dir.join(super::codex::PROMPT_FILE);
             atomic_write(
                 &file,
-                super::codex::prompt(&role, &first_message(&id), &schema).as_bytes(),
+                super::codex::prompt(&role, &first_message(&id), &schema, &plugins.skills)
+                    .as_bytes(),
             )?;
             prompt_file = Some(file);
             last_message = Some(last);

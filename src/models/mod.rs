@@ -3,15 +3,21 @@
 //!
 //! The person sets a model with `vision model set`, which writes `[agents.<agent>]` with
 //! [`crate::config::ConfigEditor::set_agent`]. Vision never changes a model by itself.
+//!
+//! An adapter can define more agents in `[agents.<name>]` of its `adapter.toml`
+//! ([`crate::adapter::AdapterAgent`]). Their values take the place of the defaults of Vision,
+//! and the configuration of the person wins over them in the same way.
 
 pub mod recommend;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use anyhow::{bail, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::adapter::AdapterAgent;
 use crate::cli::{ModelArgs, ModelCommand};
 use crate::config::{AgentPin, Config, ConfigEditor, Effort, Runner};
 use crate::ctx::Ctx;
@@ -241,6 +247,89 @@ pub fn agent_names() -> Vec<&'static str> {
     AGENTS.iter().map(|a| a.name).collect()
 }
 
+/// The agents that an adapter defines, by name.
+pub type Defined = BTreeMap<String, AdapterAgent>;
+
+/// The defaults of one agent: those of Vision, or those that the adapter defines.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Defaults {
+    pub name: String,
+    pub model: String,
+    pub effort: Effort,
+    pub runner: Runner,
+    /// The fallback on Claude of an agent on Codex.
+    pub fallback: Option<Fallback>,
+    pub reason: String,
+    /// True for an agent that the adapter defines.
+    pub adapter: bool,
+    /// True for the Judge and the Curator.
+    pub alone: bool,
+}
+
+/// The defaults of an agent of Vision or of `defined`, or an error that lists the agents.
+pub fn defaults(defined: &Defined, name: &str) -> Result<Defaults> {
+    if let Some(spec) = agent(name) {
+        return Ok(Defaults {
+            name: spec.name.to_string(),
+            model: spec.model.to_string(),
+            effort: spec.effort,
+            runner: spec.runner,
+            fallback: spec.fallback.map(|(model, effort)| Fallback {
+                model: model.to_string(),
+                effort,
+            }),
+            reason: spec.reason.to_string(),
+            adapter: false,
+            alone: spec.alone,
+        });
+    }
+    if let Some(given) = defined.get(name) {
+        return Ok(Defaults {
+            name: given.name.clone(),
+            model: given.model.clone(),
+            effort: given.effort,
+            runner: given.runner,
+            fallback: given.fallback.clone(),
+            reason: given.reason.clone(),
+            adapter: true,
+            alone: false,
+        });
+    }
+    bail!(
+        "`{name}` is not an agent of Vision or of the adapter. The agents are {}",
+        names_in(defined).join(", ")
+    )
+}
+
+/// The names of the agents: those of Vision in the order of section 10, then those of the
+/// adapter by name.
+pub fn names_in(defined: &Defined) -> Vec<String> {
+    AGENTS
+        .iter()
+        .map(|a| a.name.to_string())
+        .chain(defined.keys().cloned())
+        .collect()
+}
+
+/// The agents that the adapter of the configuration defines. A broken adapter gives none, with
+/// its error, so that the agents of Vision still show.
+pub fn defined_agents(ctx: &Ctx) -> (Defined, Option<String>) {
+    match crate::adapter::load(ctx) {
+        Ok(adapter) => (adapter.agents, None),
+        Err(e) => (Defined::new(), Some(format!("{e:#}"))),
+    }
+}
+
+/// `vision` for an agent of Vision, `adapter` for any other one: only an adapter defines an
+/// agent that Vision does not know.
+pub fn origin_of(name: &str) -> &'static str {
+    if agent(name).is_some() {
+        "vision"
+    } else {
+        "adapter"
+    }
+}
+
 /// A full model id for a short name, or the id itself after a test of its form.
 pub fn full_model_id(model: &str) -> Result<String> {
     let model = model.trim();
@@ -271,15 +360,18 @@ pub fn full_model_id(model: &str) -> Result<String> {
 pub enum Source {
     /// The default of Vision.
     Default,
+    /// The values of `[agents.<agent>]` of the adapter.
+    Adapter,
     /// `[agents.<agent>]` of the configuration, pinned at this RFC 3339 time when it is known.
     Yours { since: Option<String> },
 }
 
 impl Source {
-    /// `default`, or `yours since 2026-11-16`.
+    /// `default`, `adapter`, or `yours since 2026-11-16`.
     pub fn text(&self) -> String {
         match self {
             Source::Default => "default".to_string(),
+            Source::Adapter => "adapter".to_string(),
             Source::Yours { since: Some(at) } => {
                 format!("yours since {}", at.get(..10).unwrap_or(at))
             }
@@ -302,7 +394,7 @@ pub struct ModelChoice {
 }
 
 /// The model with Claude and the effort that take the work of a failed turn on Codex.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fallback {
     pub model: String,
     pub effort: Effort,
@@ -314,49 +406,54 @@ impl std::fmt::Display for Fallback {
     }
 }
 
-/// The model and the effort of an agent: the pin of the person, else the default. A pin may
-/// name only the model or only the effort; the other value is the default.
+/// The model and the effort of an agent of Vision: the pin of the person, else the default. A
+/// pin can name only the model or only the effort; the other value is the default.
 pub fn choice(config: &Config, name: &str) -> Result<ModelChoice> {
-    let spec = require_agent(name)?;
-    let default_fallback = || {
-        spec.fallback.map(|(model, effort)| Fallback {
-            model: model.to_string(),
-            effort,
-        })
+    choice_in(config, &Defined::new(), name)
+}
+
+/// The model and the effort of an agent of Vision or of `defined`: the pin of the person, else
+/// the default of Vision or the values of the adapter.
+pub fn choice_in(config: &Config, defined: &Defined, name: &str) -> Result<ModelChoice> {
+    let base = defaults(defined, name)?;
+    let default_source = if base.adapter {
+        Source::Adapter
+    } else {
+        Source::Default
     };
     let Some(pin) = config.agents.get(name) else {
         return Ok(ModelChoice {
             agent: name.to_string(),
-            model: spec.model.to_string(),
-            effort: spec.effort,
-            source: Source::Default,
-            runner: spec.runner,
-            fallback: match spec.runner {
-                Runner::Codex => default_fallback(),
+            model: base.model,
+            effort: base.effort,
+            source: default_source,
+            runner: base.runner,
+            fallback: match base.runner {
+                Runner::Codex => base.fallback,
                 Runner::Claude => None,
             },
         });
     };
     let model = match pin.model.as_deref() {
         Some(model) => full_model_id(model)?,
-        None => spec.model.to_string(),
+        None => base.model.clone(),
     };
-    let runner = pin.runner.unwrap_or(spec.runner);
+    let runner = pin.runner.unwrap_or(base.runner);
     let fallback = match (runner, &pin.fallback) {
         (Runner::Claude, _) => None,
         (Runner::Codex, Some(given)) => Some(Fallback {
             model: full_model_id(&given.model)?,
             effort: given
                 .effort
-                .or(spec.fallback.map(|(_, e)| e))
+                .or(base.fallback.as_ref().map(|f| f.effort))
                 .unwrap_or(Effort::High),
         }),
-        (Runner::Codex, None) => default_fallback(),
+        (Runner::Codex, None) => base.fallback.clone(),
     };
     Ok(ModelChoice {
         agent: name.to_string(),
         model,
-        effort: pin.effort.unwrap_or(spec.effort),
+        effort: pin.effort.unwrap_or(base.effort),
         source: if pin.model.is_some()
             || pin.effort.is_some()
             || pin.runner.is_some()
@@ -366,7 +463,7 @@ pub fn choice(config: &Config, name: &str) -> Result<ModelChoice> {
                 since: pin.pinned_at.clone(),
             }
         } else {
-            Source::Default
+            default_source
         },
         runner,
         fallback,
@@ -419,37 +516,52 @@ pub struct ModelRow {
     pub runner: Runner,
     /// The model with Claude of a failed turn on Codex, such as `claude-opus-5-5 high`.
     pub fallback: Option<String>,
+    /// The default model and effort: those of Vision, or those of the adapter.
+    pub default_model: String,
+    pub default_effort: Effort,
+    /// `vision` for an agent of Vision, `adapter` for an agent that the adapter defines.
+    pub defined_by: String,
 }
 
-/// The rows of `vision model`, in the order of section 10.
-pub fn rows(config: &Config, ledger: &Ledger) -> Result<Vec<ModelRow>> {
+/// The rows of `vision model`: the agents of Vision in the order of section 10, then the
+/// agents of the adapter by name.
+pub fn rows_in(config: &Config, defined: &Defined, ledger: &Ledger) -> Result<Vec<ModelRow>> {
     let mut rows = Vec::new();
-    for spec in &AGENTS {
-        let choice = choice(config, spec.name)?;
+    for name in names_in(defined) {
+        let base = defaults(defined, &name)?;
+        let choice = choice_in(config, defined, &name)?;
         let advice = recommend(ledger, &choice)?;
         rows.push(ModelRow {
-            agent: spec.name.to_string(),
+            agent: name,
             model: choice.model.clone(),
             effort: choice.effort,
             source: choice.source.text(),
             pinned_at: match &choice.source {
                 Source::Yours { since } => since.clone(),
-                Source::Default => None,
+                Source::Default | Source::Adapter => None,
             },
             recommendation: advice.text,
             recommended_model: advice.recommended,
-            reason: spec.reason.to_string(),
+            reason: base.reason,
             runner: choice.runner,
             fallback: choice.fallback.as_ref().map(ToString::to_string),
+            default_model: base.model,
+            default_effort: base.effort,
+            defined_by: if base.adapter { "adapter" } else { "vision" }.to_string(),
         });
     }
     Ok(rows)
 }
 
-/// `vision model [--json]`.
+/// `vision model [--json]`. A broken adapter does not hide the agents of Vision: a line on
+/// standard error says why the agents of the adapter are missing.
 fn show(ctx: &Ctx, json: bool) -> Result<()> {
     ctx.require_setup()?;
-    let rows = rows(ctx.config()?, &ctx.ledger()?)?;
+    let (defined, problem) = defined_agents(ctx);
+    if let Some(problem) = problem {
+        eprintln!("The agents of the adapter are not listed, because the adapter does not load: {problem}");
+    }
+    let rows = rows_in(ctx.config()?, &defined, &ctx.ledger()?)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
@@ -487,12 +599,24 @@ pub fn render_model_rows(rows: &[ModelRow]) -> String {
     for (row, line) in rows.iter().zip(&lines[1..]) {
         let _ = writeln!(out, "{line}");
         // A pinned agent shows the default that it left, so that the reason reads right.
-        let reason = match agent(&row.agent) {
-            Some(spec) if row.source != Source::Default.text() => format!(
-                "reason of the default {} {}: {}",
-                spec.model, spec.effort, row.reason
+        let adapter = row.defined_by == "adapter";
+        let pinned = row.source != Source::Default.text() && row.source != Source::Adapter.text();
+        let why = if row.reason.is_empty() {
+            "the adapter gives no reason"
+        } else {
+            row.reason.as_str()
+        };
+        let reason = match (adapter, pinned) {
+            (false, true) => format!(
+                "reason of the default {} {}: {why}",
+                row.default_model, row.default_effort
             ),
-            _ => format!("reason of the default: {}", row.reason),
+            (false, false) => format!("reason of the default: {why}"),
+            (true, true) => format!(
+                "reason of the default of the adapter {} {}: {why}",
+                row.default_model, row.default_effort
+            ),
+            (true, false) => format!("reason of the adapter: {why}"),
         };
         let mut texts = vec![reason];
         if let Some(fallback) = &row.fallback {
@@ -534,7 +658,8 @@ fn wrap(text: &str, first: &str, rest: &str, width: usize) -> Vec<String> {
 /// `[agents.<agent>]` with `pinned_at`, and records the change in `model_changes`. Without
 /// `--effort`, a pinned effort stays, else the effort follows the default. Without `--runner`,
 /// a Claude model (a short name or an id that starts with `claude-`) runs on Claude, and any
-/// other model keeps the runner of the agent.
+/// other model keeps the runner of the agent. An agent of the adapter takes a pin as an agent
+/// of Vision does.
 fn set(
     ctx: &Ctx,
     agent: &str,
@@ -543,17 +668,18 @@ fn set(
     runner: Option<Runner>,
 ) -> Result<()> {
     ctx.require_setup()?;
-    let spec = require_agent(agent)?;
+    let defined = known_agents(ctx, agent)?;
+    let base = defaults(&defined, agent)?;
     let model = full_model_id(model)?;
     let config = ctx.config()?;
-    let old = choice(config, agent)?;
+    let old = choice_in(config, &defined, agent)?;
     let effort = effort.or_else(|| config.agents.get(agent).and_then(|p| p.effort));
     let runner = runner.unwrap_or(if model.starts_with("claude-") {
         Runner::Claude
     } else {
         old.runner
     });
-    if runner == Runner::Codex && spec.alone {
+    if runner == Runner::Codex && base.alone {
         bail!("{agent} cannot run on Codex: only a reader turn of a work agent runs on Codex");
     }
     let at = time::now_rfc3339();
@@ -561,7 +687,7 @@ fn set(
     let pin = AgentPin {
         model: Some(model.clone()),
         effort,
-        runner: (runner != spec.runner || pinned.and_then(|p| p.runner).is_some())
+        runner: (runner != base.runner || pinned.and_then(|p| p.runner).is_some())
             .then_some(runner),
         fallback: pinned.and_then(|p| p.fallback.clone()),
         pinned_at: Some(at.clone()),
@@ -569,7 +695,7 @@ fn set(
     let mut editor = ConfigEditor::open(&ctx.paths.config())?;
     editor.set_agent(agent, &pin)?;
     editor.save()?;
-    let effort = effort.unwrap_or(spec.effort);
+    let effort = effort.unwrap_or(base.effort);
     record(ctx, agent, &model, effort, &old, "set", &at)?;
     let on = |r: Runner| match r {
         Runner::Claude => String::new(),
@@ -585,25 +711,42 @@ fn set(
     Ok(())
 }
 
-/// `vision model reset AGENT`: removes `[agents.<agent>]`, so that the default applies again.
+/// The agents of the adapter, for a command that names `agent`. An agent of Vision needs no
+/// adapter, so a broken adapter stops only a command for an agent that Vision does not know.
+fn known_agents(ctx: &Ctx, agent: &str) -> Result<Defined> {
+    let (defined, problem) = defined_agents(ctx);
+    if let (None, Some(problem)) = (crate::models::agent(agent), problem) {
+        bail!("`{agent}` is not an agent of Vision, and the adapter does not load, so its agents are unknown: {problem}");
+    }
+    Ok(defined)
+}
+
+/// `vision model reset AGENT`: removes `[agents.<agent>]`, so that the default applies again:
+/// the default of Vision, or the values of the adapter for an agent of the adapter.
 fn reset(ctx: &Ctx, agent: &str) -> Result<()> {
     ctx.require_setup()?;
-    let spec = require_agent(agent)?;
-    let old = choice(ctx.config()?, agent)?;
+    let defined = known_agents(ctx, agent)?;
+    let base = defaults(&defined, agent)?;
+    let of = if base.adapter {
+        "the adapter"
+    } else {
+        "Vision"
+    };
+    let old = choice_in(ctx.config()?, &defined, agent)?;
     let mut editor = ConfigEditor::open(&ctx.paths.config())?;
     if !editor.remove_agent(agent)? {
         println!(
-            "{agent} already uses the default: {} {}.",
-            spec.model, spec.effort
+            "{agent} already uses the default of {of}: {} {}.",
+            base.model, base.effort
         );
         return Ok(());
     }
     editor.save()?;
     let at = time::now_rfc3339();
-    record(ctx, agent, spec.model, spec.effort, &old, "reset", &at)?;
+    record(ctx, agent, &base.model, base.effort, &old, "reset", &at)?;
     println!(
-        "{agent} uses the default of Vision again: {} {} (it used {} {}).",
-        spec.model, spec.effort, old.model, old.effort
+        "{agent} uses the default of {of} again: {} {} (it used {} {}).",
+        base.model, base.effort, old.model, old.effort
     );
     Ok(())
 }
@@ -645,13 +788,17 @@ fn recommend_command(ctx: &Ctx, agent: Option<&str>, json: bool) -> Result<()> {
     ctx.require_setup()?;
     let config = ctx.config()?;
     let ledger = ctx.ledger()?;
-    let names: Vec<&str> = match agent {
-        Some(name) => vec![require_agent(name)?.name],
-        None => agent_names(),
+    let defined = match agent {
+        Some(name) => known_agents(ctx, name)?,
+        None => defined_agents(ctx).0,
+    };
+    let names: Vec<String> = match agent {
+        Some(name) => vec![defaults(&defined, name)?.name],
+        None => names_in(&defined),
     };
     let mut all = Vec::new();
     for name in names {
-        all.push(recommend(&ledger, &choice(config, name)?)?);
+        all.push(recommend(&ledger, &choice_in(config, &defined, &name)?)?);
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&all)?);
@@ -749,6 +896,76 @@ mod tests {
         assert!(choice(&config, "nobody").is_err());
     }
 
+    fn lane() -> AdapterAgent {
+        AdapterAgent {
+            name: "cr-codex".into(),
+            role: "roles/cr-codex.md".into(),
+            model: "gpt-6.1-sol".into(),
+            effort: Effort::High,
+            runner: Runner::Codex,
+            fallback: Some(Fallback {
+                model: "claude-opus-5-5".into(),
+                effort: Effort::High,
+            }),
+            reason: "A second model reads the diff.".into(),
+        }
+    }
+
+    #[test]
+    fn an_agent_of_the_adapter_takes_its_values_and_a_pin_wins_over_them() {
+        let defined = Defined::from([("cr-codex".to_string(), lane())]);
+        let mut config = Config::default();
+        let codex = choice_in(&config, &defined, "cr-codex").unwrap();
+        assert_eq!(
+            (codex.model.as_str(), codex.effort, codex.runner),
+            ("gpt-6.1-sol", Effort::High, Runner::Codex)
+        );
+        assert_eq!(codex.source, Source::Adapter);
+        assert_eq!(codex.source.text(), "adapter");
+        assert_eq!(codex.fallback.unwrap().model, "claude-opus-5-5");
+        assert!(
+            choice(&config, "cr-codex").is_err(),
+            "Vision alone does not know it"
+        );
+        let err = choice_in(&config, &defined, "cr-nobody")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not an agent of Vision or of the adapter"),
+            "{err}"
+        );
+        assert!(err.ends_with("critic-narrow, cr-codex"), "{err}");
+        // A pin of only the effort keeps the model and the runner of the adapter.
+        config.agents.insert(
+            "cr-codex".into(),
+            AgentPin {
+                effort: Some(Effort::Xhigh),
+                pinned_at: Some("2026-11-16T14:30:00Z".into()),
+                ..AgentPin::default()
+            },
+        );
+        let pinned = choice_in(&config, &defined, "cr-codex").unwrap();
+        assert_eq!(
+            (pinned.model.as_str(), pinned.effort, pinned.runner),
+            ("gpt-6.1-sol", Effort::Xhigh, Runner::Codex)
+        );
+        assert_eq!(pinned.source.text(), "yours since 2026-11-16");
+        // A pin of the runner claude drops the fallback.
+        config.agents.get_mut("cr-codex").unwrap().runner = Some(Runner::Claude);
+        assert_eq!(
+            choice_in(&config, &defined, "cr-codex").unwrap().fallback,
+            None
+        );
+        assert_eq!(
+            names_in(&defined).last().map(String::as_str),
+            Some("cr-codex")
+        );
+        assert_eq!(origin_of("cr-codex"), "adapter");
+        assert_eq!(origin_of("builder"), "vision");
+        let base = defaults(&defined, "cr-codex").unwrap();
+        assert!(base.adapter && !base.alone);
+    }
+
     #[test]
     fn a_pin_wins_and_a_missing_value_keeps_its_default() {
         let mut config = Config::default();
@@ -796,6 +1013,9 @@ mod tests {
                     reason: spec.reason.to_string(),
                     runner: choice.runner,
                     fallback: choice.fallback.as_ref().map(ToString::to_string),
+                    default_model: spec.model.to_string(),
+                    default_effort: spec.effort,
+                    defined_by: "vision".into(),
                 }
             })
             .collect();

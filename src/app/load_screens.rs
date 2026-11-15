@@ -17,7 +17,8 @@ use crate::pipeline::state::Counts;
 use crate::pipeline::{report_of, step_order};
 use crate::util::time;
 
-/// One row for each agent of Vision, in the order of the model table.
+/// One row for each agent of Vision, in the order of the model table, then one row for each
+/// agent that the adapter defines. A broken adapter leaves out only its own agents.
 pub fn models(paths: &Paths) -> Result<Vec<ModelLine>, String> {
     read_models(paths).map_err(|e| format!("{e:#}"))
 }
@@ -27,22 +28,25 @@ fn read_models(paths: &Paths) -> anyhow::Result<Vec<ModelLine>> {
     ctx.require_setup()?;
     let config = ctx.config()?;
     let ledger = ctx.ledger()?;
+    let (defined, _) = models::defined_agents(&ctx);
     let mut out = Vec::new();
-    for spec in &AGENTS {
-        let choice = models::choice(config, spec.name)?;
+    for name in models::names_in(&defined) {
+        let base = models::defaults(&defined, &name)?;
+        let choice = models::choice_in(config, &defined, &name)?;
         let advice = models::recommend(&ledger, &choice)?;
         out.push(ModelLine {
-            agent: spec.name.to_string(),
+            agent: name,
             model: choice.model.clone(),
             effort: choice.effort.to_string(),
             pinned: matches!(choice.source, Source::Yours { .. }),
             since: match &choice.source {
                 Source::Yours { since } => since.clone(),
-                Source::Default => None,
+                Source::Default | Source::Adapter => None,
             },
-            default_model: spec.model.to_string(),
-            default_effort: spec.effort.to_string(),
-            reason: spec.reason.to_string(),
+            default_model: base.model,
+            default_effort: base.effort.to_string(),
+            reason: base.reason,
+            adapter: base.adapter,
             evidence: advice
                 .models
                 .iter()
