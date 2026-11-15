@@ -218,11 +218,22 @@ fn start(
         workdir,
         staging,
         cards: rows.iter().map(card_for_judge).collect(),
-        asking: json!({
-            "turn": asking,
-            "agent": asking_row.as_ref().and_then(|r| r.agent.clone()),
-            "step": asking_row.as_ref().and_then(|r| r.step.clone()),
-        }),
+        asking: match super::batch::parse(asking) {
+            // The batch of an ask step: each card names the agent that wrote it.
+            Some(found) => {
+                let mut agents: Vec<String> = rows
+                    .iter()
+                    .filter_map(|r| super::batch::asker(&r.card))
+                    .collect();
+                agents.dedup();
+                json!({"turn": asking, "agent": agents.join(", "), "step": found.step})
+            }
+            None => json!({
+                "turn": asking,
+                "agent": asking_row.as_ref().and_then(|r| r.agent.clone()),
+                "step": asking_row.as_ref().and_then(|r| r.step.clone()),
+            }),
+        },
         documents: ticket_documents(ctx, &key),
         memory: memory_dir.to_path_buf(),
     };

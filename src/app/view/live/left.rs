@@ -59,6 +59,26 @@ pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData, now: &Now)
         if line.entries > 1 {
             c.put(x, y, &format!(" ×{}", line.entries), ink(T.faint));
         }
+        // The members of a team step, on one line under the step.
+        if is_current && !data.facts.team.is_empty() {
+            let list: Vec<String> = data
+                .facts
+                .team
+                .iter()
+                .map(|(agent, state)| {
+                    let mark = match state.as_str() {
+                        "done" => "✓",
+                        "runs" => "●",
+                        "failed" => "✗",
+                        _ => "·",
+                    };
+                    format!("{mark}{agent}")
+                })
+                .collect();
+            y += 1;
+            let width = (l.left_line() - 4).max(4) as usize;
+            c.put(3, y, &cut(&list.join(" "), width), ink(T.dim));
+        }
         if is_current {
             let (text, color) = match now.kind {
                 Kind::Agent | Kind::Judge | Kind::Runs => {

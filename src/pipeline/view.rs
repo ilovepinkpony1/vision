@@ -34,8 +34,10 @@ pub struct TicketView {
     /// taken before the ledger kept titles.
     pub title: Option<String>,
     pub step: Option<String>,
-    /// The kind of the step: turn, job, human, wait, or end.
+    /// The kind of the step: turn, job, human, wait, ask, check, or end.
     pub kind: Option<String>,
+    /// The kind of the ticket, a kind of `[kinds]` of the adapter, such as `bug`.
+    pub ticket_kind: Option<String>,
     /// One line: what works now, or what the ticket waits for.
     pub now: String,
     /// The running work turn: its agent and its minutes.
@@ -227,6 +229,7 @@ pub fn rows(ctx: &Ctx, ledger: &Ledger, all_needs: &[Need]) -> Result<Vec<Ticket
             title: row.title.clone(),
             step: row.state.clone(),
             kind: (!visit.kind.is_empty()).then(|| visit.kind.clone()),
+            ticket_kind: ticket.counts.kind.clone(),
             now: now_text,
             works,
             flags,
@@ -325,6 +328,12 @@ fn now_line(
         return Ok(format!("done{}", merged.unwrap_or_default()));
     }
     if let Some(works) = works {
+        let visit = ticket.visit();
+        if visit.kind == "turn" && visit.agent.is_none() {
+            if let Some(text) = team_text(ctx, ledger, ticket, &visit) {
+                return Ok(text);
+            }
+        }
         return Ok(format!("{} works ({} min)", works.agent, works.minutes));
     }
     if let Some(flag) = flags.first() {
@@ -344,6 +353,11 @@ fn now_line(
         return Ok(format!("{word}: {reason}{more}"));
     }
     let visit = ticket.visit();
+    if visit.kind == "turn" && visit.agent.is_none() {
+        if let Some(text) = team_text(ctx, ledger, ticket, &visit) {
+            return Ok(text);
+        }
+    }
     if visit.kind == "turn" && !judging {
         if let Some(text) = turn_after_text(ctx, ledger, ticket, &visit)
             .or_else(|| turn_before_text(ctx, ledger, ticket, &visit))
@@ -391,6 +405,56 @@ fn now_line(
         _ => "the next tick moves it".into(),
     };
     Ok(text)
+}
+
+/// The members of a team step and the state of each one, such as `team: repro done, cause
+/// runs, history runs`. `None` for a step with no team, or when the adapter cannot be read.
+fn team_text(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    visit: &super::state::Visit,
+) -> Option<String> {
+    let states = team_states(ctx, ledger, ticket, visit)?;
+    if states.is_empty() {
+        return None;
+    }
+    let list: Vec<String> = states.iter().map(|(a, s)| format!("{a} {s}")).collect();
+    Some(format!("team: {}", list.join(", ")))
+}
+
+/// The state of each member of the team step of the visit whose `when` holds, in the order of
+/// the team. `None` for a step with no team, or when the adapter cannot be read.
+pub(crate) fn team_states(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    visit: &super::state::Visit,
+) -> Option<Vec<(String, &'static str)>> {
+    let adapter = crate::adapter::load(ctx).ok()?;
+    let step = adapter.step(&visit.step)?;
+    if step.team().is_empty() {
+        return None;
+    }
+    let width = adapter.width.clone();
+    let key = ticket.key.clone();
+    let read = || {
+        let width = width.as_ref()?;
+        let text = read_optional(&ctx.paths.ticket_doc(&key, &width.doc)).ok()??;
+        Some(width.judge(&text))
+    };
+    let doc = adapter
+        .width
+        .as_ref()
+        .map(|w| w.doc.clone())
+        .unwrap_or_default();
+    let kind = ticket.counts.kind.clone();
+    Some(super::team::member_states(ledger, ticket, step, |words| {
+        matches!(
+            crate::adapter::when::holds(words, kind.as_deref(), &read, &doc),
+            crate::adapter::when::Holds::Yes
+        )
+    }))
 }
 
 /// The line of a turn step whose last turn ended well and held its end facts: the first

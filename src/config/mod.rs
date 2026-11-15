@@ -31,6 +31,8 @@ pub struct Config {
     /// Absolute paths of the clones that Vision owns. `~` is allowed.
     pub clones: Vec<String>,
     pub claude: Claude,
+    /// The Codex CLI of the agents whose runner is `codex` (section 7.3).
+    pub codex: Codex,
     pub budget: Budget,
     pub time: TimeLimits,
     pub limits: Limits,
@@ -65,6 +67,7 @@ impl Default for Config {
             user: "user".into(),
             clones: Vec::new(),
             claude: Claude::default(),
+            codex: Codex::default(),
             budget: Budget::default(),
             time: TimeLimits::default(),
             limits: Limits::default(),
@@ -120,6 +123,69 @@ impl Default for Claude {
             attribution: true,
             plugins: Vec::new(),
         }
+    }
+}
+
+/// `[codex]`: the Codex CLI for the reader turns of the agents whose runner is `codex`. Codex
+/// uses its own login; Vision never reads the folder of that login.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Codex {
+    /// The Codex binary. `VISION_CODEX_BIN` wins over it.
+    pub bin: String,
+    /// Dollars for one million tokens, to give a turn on Codex a cost. `None`: the cost is 0,
+    /// and only the tokens are recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price: Option<CodexPrice>,
+}
+
+impl Default for Codex {
+    fn default() -> Codex {
+        Codex {
+            bin: "codex".into(),
+            price: None,
+        }
+    }
+}
+
+/// The price of Codex tokens: dollars for one million input tokens and for one million output
+/// tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexPrice {
+    pub input: f64,
+    pub output: f64,
+}
+
+impl CodexPrice {
+    /// The cost in dollars of these tokens.
+    pub fn cost(&self, input: i64, output: i64) -> f64 {
+        (input.max(0) as f64 * self.input + output.max(0) as f64 * self.output) / 1_000_000.0
+    }
+}
+
+/// The program that runs the turns of an agent (section 10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Runner {
+    /// Claude Code: each kind of turn.
+    Claude,
+    /// The Codex CLI: only reader turns.
+    Codex,
+}
+
+impl Runner {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Runner::Claude => "claude",
+            Runner::Codex => "codex",
+        }
+    }
+}
+
+impl fmt::Display for Runner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -563,9 +629,24 @@ pub struct AgentPin {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
+    /// The program of the turns: `claude` or `codex`. Only a reader can run on Codex.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner: Option<Runner>,
+    /// The model with Claude that takes the work of a turn on Codex that fails.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<FallbackPin>,
     /// RFC 3339 UTC time of the pin.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned_at: Option<String>,
+}
+
+/// `fallback` of `[agents.<name>]`: a model with Claude and its effort.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FallbackPin {
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
 }
 
 impl Config {
@@ -667,6 +748,21 @@ impl Config {
         self.check_archive()?;
         self.check_sessions()?;
         self.check_escapes()?;
+        if self.codex.bin.trim().is_empty() || self.codex.bin.contains(['\0', '\n', '\r']) {
+            bail!("codex.bin is the Codex binary, such as \"codex\"");
+        }
+        if let Some(price) = &self.codex.price {
+            if !(price.input.is_finite() && price.input >= 0.0)
+                || !(price.output.is_finite() && price.output >= 0.0)
+            {
+                bail!("codex.price gives dollars for one million tokens, such as {{ input = 1.25, output = 10.0 }}, each 0 or more");
+            }
+        }
+        for name in ["judge", "curator"] {
+            if self.agents.get(name).and_then(|p| p.runner) == Some(Runner::Codex) {
+                bail!("agents.{name}.runner is codex, but only a reader turn of a work agent runs on Codex. Remove the key");
+            }
+        }
         let (name, email) = (self.git.name.trim(), self.git.email.trim());
         if name.is_empty() != email.is_empty() {
             bail!("git.name and git.email go together: set both, or leave both empty");

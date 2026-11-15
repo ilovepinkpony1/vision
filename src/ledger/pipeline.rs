@@ -164,6 +164,15 @@ impl Ledger {
         )?)
     }
 
+    /// Sets `waits_on` and `reason` of the open span of a ticket, such as a step that a `when`
+    /// skips. Gives the number of spans that it changed.
+    pub fn mark_open_span(&self, ticket: &str, waits_on: &str, reason: &str) -> Result<usize> {
+        Ok(self.conn().execute(
+            "UPDATE spans SET waits_on = ?2, reason = ?3 WHERE ticket = ?1 AND ended IS NULL",
+            params![ticket, waits_on, reason],
+        )?)
+    }
+
     /// The spans of one ticket, or of each ticket, oldest first.
     pub fn spans_of(&self, ticket: Option<&str>) -> Result<Vec<SpanRow>> {
         let mut stmt = self.conn().prepare(

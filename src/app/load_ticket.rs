@@ -66,8 +66,27 @@ fn read_ticket(paths: &Paths, key: &str) -> anyhow::Result<TicketData> {
         step.seconds = measures.step_seconds.get(&step.id).copied().unwrap_or(0);
         step.cost_usd = measures.step_cost_usd.get(&step.id).copied().unwrap_or(0.0);
     }
+    // The agents that the adapter names, and the Judge and the Curator. With no adapter, each
+    // agent of Vision.
+    let named: Option<Vec<String>> = adapter.as_ref().map(|a| {
+        a.steps
+            .iter()
+            .filter_map(|s| match &s.kind {
+                crate::adapter::StepKind::Turn(turn) => Some(turn.agents()),
+                _ => None,
+            })
+            .flatten()
+            .map(str::to_string)
+            .collect()
+    });
     let team = crate::models::AGENTS
         .iter()
+        .filter(|spec| {
+            spec.alone
+                || named
+                    .as_ref()
+                    .is_none_or(|names| names.iter().any(|n| n == spec.name))
+        })
         .map(|spec| match crate::models::choice(config, spec.name) {
             Ok(choice) => Member {
                 agent: spec.name.to_string(),

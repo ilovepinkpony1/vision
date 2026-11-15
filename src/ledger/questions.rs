@@ -128,6 +128,47 @@ fn question_row(row: &Row<'_>) -> rusqlite::Result<QuestionRow> {
 /// The SQL that orders the rows of one batch in the order of the cards.
 const BY_ID: &str = "ORDER BY length(id), id";
 
+/// Inserts the rows of the cards of one asking turn or batch, each with the next free id
+/// `Q-0001`, and the event of the intake. An asking id that already has rows gets none.
+fn insert_questions(
+    conn: &rusqlite::Connection,
+    rows: &[NewQuestion<'_>],
+    event: &super::Event,
+) -> Result<Vec<String>> {
+    let mut ids = Vec::new();
+    if let Some(first) = rows.first() {
+        let had: i64 = conn.query_row(
+            "SELECT count(*) FROM questions WHERE turn = ?1",
+            [first.turn],
+            |r| r.get(0),
+        )?;
+        if had > 0 {
+            return Ok(ids);
+        }
+    }
+    let mut next: i64 = conn.query_row(
+        "SELECT coalesce(max(CAST(substr(id, 3) AS INTEGER)), 0) FROM questions WHERE id LIKE 'Q-%'",
+        [],
+        |r| r.get(0),
+    )?;
+    for row in rows {
+        next += 1;
+        let id = format!("Q-{next:04}");
+        conn.execute(
+            "INSERT INTO questions (id, ticket, turn, card, state, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, row.ticket, row.turn, row.card, STATE_NEW, row.created],
+        )?;
+        ids.push(id);
+    }
+    let detail = (!event.detail.is_null()).then(|| event.detail.to_string());
+    conn.execute(
+        "INSERT INTO events (at, actor, ticket, kind, detail, external_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (external_id) DO NOTHING",
+        params![event.at, event.actor, event.ticket, event.kind, detail, event.external_id],
+    )?;
+    Ok(ids)
+}
+
 impl Ledger {
     /// Adds the rows of the cards of one turn, each with the next free id `Q-0001`, in one
     /// transaction with the event `intake`. Gives the ids. A turn that already has rows gets
@@ -140,39 +181,19 @@ impl Ledger {
         let tx = self
             .conn_mut()
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let mut ids = Vec::new();
-        if let Some(first) = rows.first() {
-            let had: i64 = tx.query_row(
-                "SELECT count(*) FROM questions WHERE turn = ?1",
-                [first.turn],
-                |r| r.get(0),
-            )?;
-            if had > 0 {
-                return Ok(ids);
-            }
-        }
-        let mut next: i64 = tx.query_row(
-            "SELECT coalesce(max(CAST(substr(id, 3) AS INTEGER)), 0) FROM questions WHERE id LIKE 'Q-%'",
-            [],
-            |r| r.get(0),
-        )?;
-        for row in rows {
-            next += 1;
-            let id = format!("Q-{next:04}");
-            tx.execute(
-                "INSERT INTO questions (id, ticket, turn, card, state, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, row.ticket, row.turn, row.card, STATE_NEW, row.created],
-            )?;
-            ids.push(id);
-        }
-        let detail = (!event.detail.is_null()).then(|| event.detail.to_string());
-        tx.execute(
-            "INSERT INTO events (at, actor, ticket, kind, detail, external_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-             ON CONFLICT (external_id) DO NOTHING",
-            params![event.at, event.actor, event.ticket, event.kind, detail, event.external_id],
-        )?;
+        let ids = insert_questions(&tx, rows, event)?;
         tx.commit()?;
         Ok(ids)
+    }
+
+    /// [`Ledger::add_questions`] through a shared connection, such as for the batch of an ask
+    /// step that no turn asked.
+    pub fn add_question_batch(
+        &self,
+        rows: &[NewQuestion<'_>],
+        event: &super::Event,
+    ) -> Result<Vec<String>> {
+        self.in_transaction(|ledger| insert_questions(ledger.conn(), rows, event))
     }
 
     /// One row, or `None`.
@@ -223,6 +244,8 @@ impl Ledger {
              WHERE t.status = 'done' AND coalesce(t.agent, '') NOT IN ('judge', 'curator')
                AND json_valid(e.detail) AND json_extract(e.detail, '$.result_kind') = 'questions'
                AND NOT EXISTS (SELECT 1 FROM questions q WHERE q.turn = t.id)
+               AND NOT EXISTS (SELECT 1 FROM events s WHERE s.external_id = 'turn-started:' || t.id
+                               AND json_valid(s.detail) AND json_extract(s.detail, '$.member') = 1)
              ORDER BY t.started, t.id",
         )?;
         let rows = stmt.query_map([], |row| row.get(0))?;
@@ -230,11 +253,12 @@ impl Ledger {
     }
 
     /// The asking turns whose cards each have a final answer, and that were not resumed yet,
-    /// oldest first.
+    /// oldest first. The batch of an ask step has no session: the pipeline owns it.
     pub fn turns_ready_to_resume(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn().prepare(
             "SELECT q.turn FROM questions q
              WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.external_id = 'questions-resumed:' || q.turn)
+               AND q.turn NOT LIKE 'ask:%'
              GROUP BY q.turn
              HAVING sum(CASE WHEN q.state IN ('answered', 'needless') THEN 0 ELSE 1 END) = 0
              ORDER BY min(q.created), q.turn",

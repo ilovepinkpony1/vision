@@ -110,7 +110,23 @@ fn the_model_table_shows_a_pin_and_a_reset_of_the_commands() {
     let agents: Vec<&str> = lines.iter().map(|l| l.agent.as_str()).collect();
     assert_eq!(
         agents,
-        ["scout", "builder", "reviewer", "tester", "shepherd", "judge", "curator"]
+        [
+            "scout",
+            "builder",
+            "reviewer",
+            "tester",
+            "shepherd",
+            "judge",
+            "curator",
+            "repro",
+            "cause",
+            "history",
+            "points",
+            "scope",
+            "analyst",
+            "critic",
+            "critic-narrow"
+        ]
     );
     let scout = &lines[0];
     assert!(!scout.pinned);

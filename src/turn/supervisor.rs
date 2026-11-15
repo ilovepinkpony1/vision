@@ -108,7 +108,221 @@ pub fn run(ctx: &Ctx, id: &TurnId) -> Result<()> {
     }
     install_signal_handlers();
     status.write(&turn.status)?;
+    if plan.runner == crate::config::Runner::Codex {
+        return supervise_codex(ctx, &turn, &plan, status);
+    }
     supervise(ctx, &ledger, &turn, &plan, status)
+}
+
+/// The supervisor of a turn on Codex. It has no inbox: a message of the person waits for the
+/// next turn of the ticket. The time limit, the signals, and the end of the group are the ones
+/// of a Claude turn.
+fn supervise_codex(ctx: &Ctx, turn: &TurnPaths, plan: &Plan, mut status: TurnState) -> Result<()> {
+    use super::codex::{classify, Translator, CODEX_STREAM};
+    let stderr_path = turn.dir.join(STDERR_LOG);
+    let stderr = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&stderr_path)
+        .with_context(|| format!("could not open {}", stderr_path.display()))?;
+    // Without a sandbox that hides the home of Vision, no turn starts on Codex: the turn
+    // fails with the reason, and the agent falls back to Claude.
+    let keys = super::codex::permission_keys(&plan.args);
+    if let Some(problem) = super::codex::sandbox_problem(
+        &plan.program,
+        &turn.dir.join(super::codex::SANDBOX_TEST),
+        &keys,
+    ) {
+        return finish(ctx, turn, status.ended(Reason::Error, Some(problem)), None);
+    }
+    let prompt = match &plan.prompt_file {
+        Some(file) => std::fs::read_to_string(file)
+            .with_context(|| format!("could not read {}", file.display()))?,
+        None => plan.first_message.clone(),
+    };
+    // The session gets the allow list of a Claude session, with no Claude folder and no git
+    // configuration of a worker: a reader on Codex writes nothing.
+    let env: Vec<(std::ffi::OsString, std::ffi::OsString)> =
+        settings::session_env_of_process(&plan.env_pass)
+            .into_iter()
+            .filter(|(name, _)| name != "CLAUDE_CONFIG_DIR" && name != "GIT_CONFIG_GLOBAL")
+            .collect();
+    let mut command = Command::new(&plan.program);
+    command
+        .args(&plan.args)
+        .current_dir(&plan.workdir)
+        .env_clear()
+        .envs(env)
+        .envs(&plan.env_set)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(stderr)
+        .process_group(0);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            let detail = format!(
+                "could not start `{}`: {e}. Install the Codex CLI, or set codex.bin in config.toml or VISION_CODEX_BIN",
+                plan.program
+            );
+            return finish(ctx, turn, status.ended(Reason::Error, Some(detail)), None);
+        }
+    };
+    let pgid = child.id();
+    status.state = Phase::Running;
+    status.child_pid = Some(pgid);
+    status.at = time::now_rfc3339();
+    status.write(&turn.status)?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        stop_group(&mut child, pgid, true);
+        let _ = child.wait();
+        let detail = "codex started without its pipes".to_string();
+        return finish(ctx, turn, status.ended(Reason::Error, Some(detail)), None);
+    };
+    // The prompt goes in whole, and then the input closes: `codex exec -` reads it to the end.
+    thread::spawn(move || {
+        let _ = stdin.write_all(prompt.as_bytes());
+        let _ = stdin.flush();
+    });
+    let raw_path = turn.dir.join(CODEX_STREAM);
+    let (tx, rx) = mpsc::channel::<Option<Value>>();
+    thread::spawn(move || {
+        let mut raw = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&raw_path)
+            .ok();
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if !line.ends_with(b"\n") {
+                        line.push(b'\n');
+                    }
+                    if let Some(file) = raw.as_mut() {
+                        if file.write_all(&line).and_then(|()| file.flush()).is_err() {
+                            raw = None;
+                        }
+                    }
+                    if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                        let _ = tx.send(Some(value));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        let _ = tx.send(None);
+    });
+    let mut stream = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&turn.stream)
+        .with_context(|| format!("could not open {}", turn.stream.display()))?;
+    let mut write = |value: &Value| {
+        let _ = writeln!(stream, "{value}").and_then(|()| stream.flush());
+    };
+    let mut translator = Translator::new(&plan.model);
+    let deadline = Instant::now() + Duration::from_secs(plan.time_limit_secs);
+    let mut forced: Option<(Reason, String)> = None;
+    let mut eof = false;
+    let mut exit = None;
+    loop {
+        let signal = SIGNAL.load(Ordering::SeqCst);
+        if signal != 0 {
+            forced = Some((
+                Reason::Killed,
+                format!("the supervisor got the signal {signal}"),
+            ));
+            stop_group(&mut child, pgid, false);
+            break;
+        }
+        if Instant::now() >= deadline {
+            forced = Some((
+                Reason::Timeout,
+                format!("the time limit of {} seconds passed", plan.time_limit_secs),
+            ));
+            stop_group(&mut child, pgid, false);
+            break;
+        }
+        if eof {
+            thread::sleep(POLL);
+        } else {
+            match rx.recv_timeout(POLL) {
+                Ok(Some(event)) => {
+                    for line in translator.lines(&event) {
+                        write(&line);
+                    }
+                }
+                Ok(None) | Err(RecvTimeoutError::Disconnected) => eof = true,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(code)) => {
+                exit = Some(code);
+                break;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("could not wait for codex: {e}");
+                stop_group(&mut child, pgid, true);
+                break;
+            }
+        }
+    }
+    let exit = exit.or_else(|| child.wait().ok());
+    state::signal_group(pgid, libc::SIGKILL);
+    // The events that are left after the exit.
+    let until = Instant::now() + Duration::from_secs(2);
+    while !eof && Instant::now() < until {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Some(event)) => {
+                for line in translator.lines(&event) {
+                    write(&line);
+                }
+            }
+            Ok(None) | Err(RecvTimeoutError::Disconnected) => eof = true,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+    }
+    let last = plan
+        .last_message
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .filter(|t| !t.trim().is_empty());
+    let succeeded = exit.is_some_and(|e| e.success()) && translator.error.is_none();
+    let (line, object) = translator.result(last.as_deref(), succeeded, plan.price);
+    write(&line);
+    status.exit_code = exit.and_then(|e| e.code());
+    if let Some(thread) = &translator.thread {
+        status.session = Some(thread.clone());
+    }
+    let (reason, detail) = match forced {
+        Some((reason, detail)) => (reason, Some(detail)),
+        None if succeeded => (Reason::Result, None),
+        None => {
+            let text = translator.error.clone().unwrap_or_else(|| {
+                format!(
+                    "codex {} and gave no result{}",
+                    exit_text(exit),
+                    tail_text(&stderr_path)
+                )
+            });
+            (
+                Reason::Error,
+                Some(format!(
+                    "codex reported {}: {}",
+                    classify(&text),
+                    short(&text, 300)
+                )),
+            )
+        }
+    };
+    finish(ctx, turn, status.ended(reason, detail), object)
 }
 
 fn supervise(

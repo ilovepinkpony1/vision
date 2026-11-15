@@ -33,6 +33,21 @@ pub fn build(ctx: &Ctx, ledger: &Ledger, start: &TurnStart) -> Result<LaunchRequ
     let StepKind::Turn(turn) = &step.kind else {
         bail!("the step {} is not a turn step", step.id);
     };
+    // A member of a team: its own view of the step, with its reads and its end facts.
+    let member = step.member(&start.agent).cloned();
+    let view = match &member {
+        Some(member) => step.member_view(member),
+        None if !turn.team.is_empty() => bail!(
+            "the step {} has no member {} in its team",
+            step.id,
+            start.agent
+        ),
+        None => step.clone(),
+    };
+    let step = &view;
+    let StepKind::Turn(turn) = &step.kind else {
+        bail!("the step {} is not a turn step", step.id);
+    };
     let Some(row) = ledger.ticket(start.ticket.as_str())? else {
         bail!(
             "{} has no row in the ledger. Run `vision take {}`",
@@ -51,7 +66,23 @@ pub fn build(ctx: &Ctx, ledger: &Ledger, start: &TurnStart) -> Result<LaunchRequ
     request.resumes = start.resumes.clone();
     request.message = start.message.clone();
     request.expects = step.expects.iter().map(ToString::to_string).collect();
-    request.role_file = adapter.role_file(&start.agent);
+    // An agent that shares the role of another, such as `critic-narrow`, can take the role
+    // file of that agent in the adapter.
+    request.role_file = adapter.role_file(&start.agent).or_else(|| {
+        let role = crate::models::role_name(&start.agent);
+        (role != start.agent)
+            .then(|| adapter.role_file(role))
+            .flatten()
+    });
+    request.member = member.is_some();
+    if start.fallback {
+        let fallback = crate::models::choice(config, &start.agent)?
+            .fallback
+            .with_context(|| format!("the agent {} has no fallback", start.agent))?;
+        request.runner = Some(crate::config::Runner::Claude);
+        request.model = Some(fallback.model);
+        request.effort = Some(fallback.effort);
+    }
 
     let mut view = Vec::new();
     let issue_path = ctx.paths.ticket_doc(key, "issue.json");
@@ -85,7 +116,20 @@ pub fn build(ctx: &Ctx, ledger: &Ledger, start: &TurnStart) -> Result<LaunchRequ
             documents.insert(name.clone(), Value::Null);
         }
     }
-    for name in &visit.extra {
+    // A member gets the answers of its own read verbs, never those of another member. A new
+    // entry of a team step gives each member the answers of the person, such as a hint.
+    let mut extra: Vec<String> = match &member {
+        Some(member) => visit
+            .member_extra
+            .get(&member.agent)
+            .cloned()
+            .unwrap_or_default(),
+        None => visit.extra.clone(),
+    };
+    if member.is_some() && visit.n > 1 {
+        extra.push("answers.md".into());
+    }
+    for name in &extra {
         if documents.contains_key(name) {
             continue;
         }
@@ -177,15 +221,23 @@ pub fn build(ctx: &Ctx, ledger: &Ledger, start: &TurnStart) -> Result<LaunchRequ
     if !turn.with.is_empty() {
         facts["with"] = Value::Object(turn.with.clone());
     }
-    // The read verbs that the session can ask for with a result of the kind `requests`.
-    facts["requests"] = Value::Array(
-        adapter
-            .verbs
-            .values()
-            .filter(|v| v.read)
-            .map(|v| json!({"verb": v.name, "about": v.about}))
-            .collect(),
-    );
+    // The read verbs that the session can ask for with a result of the kind `requests`: the
+    // read verbs of the adapter, and the read verbs of git that the core serves.
+    let mut requests: Vec<Value> = adapter
+        .verbs
+        .values()
+        .filter(|v| v.read)
+        .map(|v| json!({"verb": v.name, "about": v.about}))
+        .collect();
+    for verb in super::git_verbs::NAMES {
+        if !adapter.verbs.contains_key(verb) {
+            requests.push(json!({"verb": verb, "about": super::git_verbs::about(verb)}));
+        }
+    }
+    facts["requests"] = Value::Array(requests);
+    if let Some(kind) = &ticket.counts.kind {
+        facts["ticket"]["kind"] = json!(kind);
+    }
     request.facts = facts;
     request.view = view;
     Ok(request)

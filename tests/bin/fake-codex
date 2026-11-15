@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""A stand-in for the Codex CLI in the tests of Vision. Standard library only.
+
+`fake-codex --version` prints a version. `fake-codex sandbox ... -- COMMAND` runs the command,
+and each path argument that the -c keys of the profile hide becomes a path that does not exist.
+`fake-codex exec [resume] ... -` reads the prompt
+from standard input, finds the facts file of the turn in it ("Read .vision/turns/<id>/facts.json"
+in the working folder), and plays a scenario: `claude/fake-scenarios/codex-<agent>-<step>.json`
+of the home of Vision, else `codex-<agent>.json`. The home is the parent folder of `journal` of
+the facts file, so no variable of the environment is needed.
+
+A scenario file is JSON: {"turns": [[step, ...], [step, ...]]}. The first run takes the first
+list, the second run the second list, and so on; the last list repeats. Each step has "do":
+
+  message   an agent message: "text".
+  command   a command and its output: "command", "output", "exit_code" (default 0).
+  result    the last message: "result", a JSON value that the fake prints as the message.
+  text      the last message as plain text: "text".
+  fail      an error event and a failed turn with "message", then exit code 1.
+  exit      exit with "code", after "stderr" text.
+  sleep     sleep "seconds".
+
+With no scenario it gives a result that does nothing. Each run writes `codex-args.json` next to
+the file of --output-last-message: its arguments, its working folder, and the names of its
+environment, so that a test can read the start line.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+import uuid
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def option(args, name):
+    if name in args:
+        i = args.index(name)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def scenario_steps(facts):
+    default = [{"do": "result", "result": {"kind": "result", "summary": "The fake codex did nothing."}}]
+    if not facts:
+        return default
+    journal = facts.get("journal") or ""
+    home = os.path.dirname(journal.rstrip("/"))
+    folder = os.path.join(home, "claude", "fake-scenarios")
+    agent = facts.get("agent") or ""
+    step = facts.get("step") or ""
+    names = [f"codex-{agent}-{step}.json", f"codex-{agent}.json"]
+    found = [os.path.join(folder, n) for n in names if os.path.isfile(os.path.join(folder, n))]
+    if not found:
+        return default
+    path = found[0]
+    with open(path) as f:
+        turns = json.load(f)["turns"]
+    n = 0
+    while True:
+        try:
+            fd = os.open(f"{path}.run{n}", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            n += 1
+    return turns[min(n, len(turns) - 1)]
+
+
+def hidden_by(args, path):
+    """True when the profile of the -c keys hides the path: the longest entry that holds it
+    is "none"."""
+    entries = {}
+    for i, arg in enumerate(args[:-1]):
+        if arg == "-c" and args[i + 1].startswith("permissions.") and ".filesystem=" in args[i + 1]:
+            table = args[i + 1].split("=", 1)[1]
+            for key, access in re.findall(r'"((?:[^"\\]|\\.)*)"\s*=\s*"(none|read|write)"', table):
+                entries[json.loads('"' + key + '"')] = access
+    best = None
+    for entry, access in entries.items():
+        if path == entry or path.startswith(entry.rstrip("/") + "/"):
+            if best is None or len(entry) > len(best[0]):
+                best = (entry, access)
+    return best is not None and best[1] == "none"
+
+
+def open_sandbox(path):
+    """True when a test asks for a sandbox that hides nothing: the file
+    claude/fake-scenarios/codex-open-sandbox of the home of Vision above the path."""
+    folder = os.path.dirname(path)
+    while folder and folder != os.path.dirname(folder):
+        if os.path.isfile(os.path.join(folder, "claude", "fake-scenarios", "codex-open-sandbox")):
+            return True
+        folder = os.path.dirname(folder)
+    return False
+
+
+def sandbox(args):
+    """`sandbox ... -- COMMAND...`: runs the command, and a path argument that the profile
+    hides becomes a path that does not exist, as a read that the sandbox denies."""
+    if "--" not in args:
+        print("fake-codex: sandbox needs -- and a command", file=sys.stderr)
+        return 2
+    at = args.index("--")
+    options, command = args[:at], args[at + 1:]
+    if "-P" not in options:
+        print("error: the following required arguments were not provided: --permission-profile <NAME>", file=sys.stderr)
+        return 2
+    out = []
+    for arg in command:
+        if os.path.isabs(arg) and hidden_by(options, arg) and not open_sandbox(arg):
+            arg = arg + ".hidden-by-the-fake-sandbox"
+        out.append(arg)
+    import subprocess
+    return subprocess.call(out)
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--version"]:
+        print("codex-cli 0.0.0-fake")
+        return 0
+    if args[:1] == ["sandbox"]:
+        return sandbox(args[1:])
+    if args[:1] != ["exec"]:
+        print("fake-codex: only exec and --version", file=sys.stderr)
+        return 2
+    resume = len(args) > 1 and args[1] == "resume"
+    last = option(args, "--output-last-message")
+    if last:
+        with open(os.path.join(os.path.dirname(last), "codex-args.json"), "w") as f:
+            json.dump({"args": args, "cwd": os.getcwd(), "env": sorted(os.environ)}, f)
+    prompt = sys.stdin.read()
+    match = re.search(r"Read (\S+facts\.json)", prompt)
+    facts = None
+    if match:
+        try:
+            with open(match.group(1)) as f:
+                facts = json.load(f)
+        except (OSError, ValueError):
+            facts = None
+    thread = args[-2] if resume and len(args) >= 2 else str(uuid.uuid4())
+    emit({"type": "thread.started", "thread_id": thread})
+    emit({"type": "turn.started"})
+    n = 0
+    for step in scenario_steps(facts):
+        do = step.get("do")
+        n += 1
+        if do == "message":
+            emit({"type": "item.completed", "item": {"id": f"item_{n}", "type": "agent_message", "text": step.get("text", "")}})
+        elif do == "command":
+            item = {"id": f"item_{n}", "type": "command_execution", "command": step.get("command", "ls")}
+            emit({"type": "item.started", "item": dict(item, aggregated_output="", exit_code=None, status="in_progress")})
+            code = step.get("exit_code", 0)
+            emit({"type": "item.completed", "item": dict(item, aggregated_output=step.get("output", ""), exit_code=code, status="completed" if code == 0 else "failed")})
+        elif do in ("result", "text"):
+            text = step["text"] if do == "text" else json.dumps(step.get("result"))
+            emit({"type": "item.completed", "item": {"id": f"item_{n}", "type": "agent_message", "text": text}})
+            if last:
+                with open(last, "w") as f:
+                    f.write(text)
+        elif do == "fail":
+            message = step.get("message", "the fake failed")
+            emit({"type": "error", "message": message})
+            emit({"type": "turn.failed", "error": {"message": message}})
+            return 1
+        elif do == "exit":
+            sys.stderr.write(step.get("stderr", ""))
+            return step.get("code", 1)
+        elif do == "sleep":
+            time.sleep(step.get("seconds", 1))
+    emit({"type": "turn.completed", "usage": {"input_tokens": 1000, "cached_input_tokens": 400, "cache_write_input_tokens": 0, "output_tokens": 100, "reasoning_output_tokens": 0}})
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

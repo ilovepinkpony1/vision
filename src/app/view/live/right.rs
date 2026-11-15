@@ -69,6 +69,9 @@ fn rows(app: &App, data: &TicketData) -> Vec<Row> {
     let view = &data.view;
     let m = &data.measures;
     let mut out = vec![Row::Title("TICKET")];
+    if let Some(kind) = &data.facts.ticket_kind {
+        out.push(Row::Pair("kind".into(), kind.clone(), T.fg));
+    }
     out.push(Row::Pair("cost".into(), money(view.cost_usd), T.fg));
     out.push(Row::Pair(
         "time".into(),

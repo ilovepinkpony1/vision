@@ -1,0 +1,251 @@
+# The demo adapter with the investigation before the plan (design section 11.4). It uses the
+# scripts of adapters/demo: the same world, tracker, forge, and CI. Only the start of the path
+# differs from that of the demo:
+#
+#   refine -> investigate -> analyze -> critic (a wide plan) or critic-narrow (a narrow plan)
+#          -> questions -> amend (when an answer changed the plan) -> reproduced (a bug)
+#          -> plan-ready -> build -> ...
+#
+# The kind of a ticket comes from its issue type: `bin/world type ROOT KEY Bug` makes a bug.
+# The team of `investigate` depends on the kind: for a bug, repro reproduces it with a failing
+# spec, cause finds the cause on its own (on Codex), and history reads why each guard of the code
+# was added. For a feature, points tests each point of the ticket against the code. For a
+# chore, scope finds each place that it touches. Each member works in its own session and never
+# reads the findings of another member.
+#
+# The analyst merges the findings into plan.md, acceptance.json, and questions-analyst.json. A
+# critic on Codex reads the plan: at effort xhigh for a wide plan (3 files or more, or a file of
+# db/), at effort high for a narrow one. The ask step sends the questions of the analyst and of
+# the critic to the Judge and the person in one batch. For a bug, plan.md must say
+# `Reproduced: yes` before the plan approval; else the team investigates again, twice at most.
+
+name = "demo-investigate"
+branch = "vision/{key}"
+base = "origin/main"
+scripts = "../demo"
+
+[kinds]
+map = { Bug = "bug", Story = "feature", Task = "chore" }   # the issue type -> the kind of a ticket
+default = "feature"
+
+[width]
+doc = "plan.md"               # the document whose section `## Files` lists the changed files
+files = 3                     # this many files or more is wide
+paths = ["db/**"]             # a listed file that matches is wide
+
+[[step]]
+id = "refine"
+kind = "turn"
+agent = "scout"
+turn = "reader"
+reads = ["issue.json"]
+expects = ["doc:refine.md", "doc:description.md"]
+after = [{ verb = "tracker.describe", args = { text = "{doc:description.md}" } }]
+next = "investigate"
+
+[[step]]
+id = "investigate"
+kind = "turn"
+reads = ["issue.json", "refine.md"]
+team = [
+  { agent = "repro", turn = "worker", expects = ["doc:findings-repro.md", "clean"], when = ["bug"] },
+  { agent = "cause", turn = "reader", expects = ["doc:findings-cause.md"], when = ["bug"] },
+  { agent = "history", turn = "reader", expects = ["doc:findings-history.md"], when = ["bug"] },
+  { agent = "points", turn = "reader", expects = ["doc:findings-points.md"], when = ["feature"] },
+  { agent = "scope", turn = "reader", expects = ["doc:findings-scope.md"], when = ["chore"] },
+]
+next = "analyze"
+
+[[step]]
+id = "analyze"
+kind = "turn"
+agent = "analyst"
+turn = "reader"
+reads = ["issue.json", "refine.md", "findings-repro.md", "findings-cause.md", "findings-history.md",
+         "findings-points.md", "findings-scope.md", "answers.md"]
+expects = ["doc:plan.md", "doc:acceptance.json", "doc:questions-analyst.json"]
+next = "critic"
+
+[[step]]
+id = "critic"
+kind = "turn"
+agent = "critic"
+turn = "reader"
+when = ["wide"]
+reads = ["plan.md", "questions-analyst.json", "findings-repro.md", "findings-cause.md",
+         "findings-history.md", "findings-points.md", "findings-scope.md"]
+expects = ["doc:critic.md", "doc:questions-critic.json"]
+next = "critic-narrow"
+
+[[step]]
+id = "critic-narrow"
+kind = "turn"
+agent = "critic-narrow"
+turn = "reader"
+when = ["narrow"]
+reads = ["plan.md", "questions-analyst.json", "findings-repro.md", "findings-cause.md",
+         "findings-history.md", "findings-points.md", "findings-scope.md"]
+expects = ["doc:critic.md", "doc:questions-critic.json"]
+next = "questions"
+
+[[step]]
+id = "questions"
+kind = "ask"
+docs = ["questions-analyst.json", "questions-critic.json"]
+on = { changed = "amend", same = "reproduced" }
+
+[[step]]
+id = "amend"
+kind = "turn"
+agent = "analyst"
+turn = "reader"
+reads = ["plan.md", "acceptance.json", "answers.md", "questions-analyst.json",
+         "questions-critic.json", "critic.md"]
+expects = ["doc:plan.md", "doc:acceptance.json"]
+next = "reproduced"
+
+[[step]]
+id = "reproduced"
+kind = "check"
+doc = "plan.md"
+line = "Reproduced: yes"
+stop_line = "Decision: drop"
+when = ["bug"]
+next = "plan-ready"
+fail = "investigate"
+cap = 2                       # the entries of this step: the third one needs the person
+
+[[step]]
+id = "plan-ready"
+kind = "human"
+action = "approve-plan"
+next = "build"
+
+[[step]]
+id = "build"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+reads = ["approved-plan.md", "acceptance.json", "refine.md", "answers.md"]
+expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
+next = "review"
+
+[[step]]
+id = "review"
+kind = "turn"
+agent = "reviewer"
+turn = "worker"
+before = ["job:second-review"]
+reads = ["approved-plan.md", "second-review.md"]
+expects = ["clean", "doc:review.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push"]
+findings = "review"
+cap = "review_rounds"
+next = "ci"
+
+[[step]]
+id = "ci"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "ready", red = "fix-ci" }
+wait = ["none"]               # the values that mean "not yet". Any other value needs the person.
+limit = 3600                  # seconds that one visit may watch before it needs the person
+every = 60
+
+[[step]]
+id = "fix-ci"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+before = ["job:ci-log"]
+reads = ["ci-log.txt", "approved-plan.md"]
+expects = ["commits", "clean", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push"]
+cap = "ci_fix"
+next = "ci"
+
+[[step]]
+id = "ready"
+kind = "wait"
+watch = "pr.draft"
+on = { "false" = "comments" }
+wait = ["true"]
+limit = 604800
+every = 60
+
+[[step]]
+id = "comments"
+kind = "turn"
+agent = "shepherd"
+turn = "worker"
+before = ["job:comments"]
+reads = ["comments.json", "approved-plan.md"]
+expects = ["clean", "doc:verdicts.json"]
+after = ["git.push", { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } }]
+cap = "comments"
+next = "ci-review"
+
+[[step]]
+id = "ci-review"
+kind = "wait"
+start = ["ci.run"]
+watch = "ci.state"
+on = { green = "ready-to-merge", red = "fix-ci" }
+wait = ["none"]
+limit = 3600
+every = 60
+
+[[step]]
+id = "ready-to-merge"
+kind = "wait"
+watch = "pr.merged"
+on = { "true" = "done" }
+wait = ["false"]
+limit = 1209600
+every = 60
+
+[[step]]
+id = "done"
+kind = "end"
+
+[verbs."tracker.describe"]
+mode = "auto"
+leaves = true
+
+[verbs."git.push"]
+mode = "auto"
+leaves = true
+
+[verbs."pr.open"]
+mode = "auto"
+leaves = true
+
+[verbs."ci.run"]
+mode = "auto"
+
+[verbs."review.reply"]
+mode = "ask"
+leaves = true
+
+[verbs."tracker.issue"]
+read = true
+about = "One ticket of the tracker as issue-<KEY>.json: title, description, status, assignee. args: key (default: the ticket)"
+
+# A job gets no secret, because a job can run code that an agent wrote. A job that only reads
+# the tracker or the forge sets `secrets = true`. Never set it for a job that runs code of the
+# project, such as the proof.
+[jobs.proof]
+timeout = 900
+
+[jobs.second-review]
+timeout = 120
+
+[jobs.comments]
+timeout = 60
+secrets = true
+
+[jobs.ci-log]
+timeout = 60
+secrets = true

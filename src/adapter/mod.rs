@@ -14,6 +14,7 @@
 
 mod find;
 mod model;
+pub mod when;
 
 use std::path::Path;
 
@@ -26,9 +27,11 @@ use crate::paths::Paths;
 
 pub use find::{locate, Located, Origin};
 pub use model::{
-    cap_names, Adapter, Entry, EntryKind, Expect, Gate, GateRule, HumanStep, Job, JobEnv, JobStep,
-    LocalTime, Severity, Step, StepKind, TurnStep, Verb, WaitStep, CR_NET_MAX, DEFAULT_BASE,
-    DEFAULT_BRANCH, DEFAULT_EVERY, DEFAULT_ROUNDS, FINDINGS, MAX_ROUNDS, NONE, QA_BLOCK,
+    cap_names, Adapter, AskStep, CheckStep, Entry, EntryKind, Expect, Gate, GateRule, HumanStep,
+    Job, JobEnv, JobStep, Kinds, LocalTime, Member, Severity, Step, StepKind, TurnStep, Verb,
+    WaitStep, Width, CHANGED, CR_NET_MAX, DEFAULT_BASE, DEFAULT_BRANCH, DEFAULT_EVERY,
+    DEFAULT_ROUNDS, DEFAULT_WIDTH_DOC, DEFAULT_WIDTH_FILES, FINDINGS, MAX_ROUNDS, NARROW, NONE,
+    QA_BLOCK, SAME, WIDE,
 };
 
 /// The name of the step list in an adapter folder.

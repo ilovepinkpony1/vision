@@ -32,7 +32,7 @@ const LOCK_WAIT: Duration = Duration::from_secs(30);
 /// The message of the first turn after the person worked in the session with `vision open`.
 pub const BY_HAND: &str = "The person worked in this session by hand with `vision open`. Read the state of the clone first (git status, git log, and the files that changed), then continue the step from there.";
 
-fn wait_for_lock(ctx: &Ctx) -> Result<TickLock> {
+pub(crate) fn wait_for_lock(ctx: &Ctx) -> Result<TickLock> {
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
         if let Some(lock) = TickLock::try_acquire(&ctx.paths.lock())? {
@@ -719,12 +719,34 @@ pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
     // A step whose turn result held and that stopped at an operation goes on with its `after`
     // verbs: a new turn would redo work that is done.
     let visit = ticket.visit();
-    let held = matches!(step.kind, StepKind::Turn(_))
-        && !paused
-        && visit.step == step.id
-        && visit_turns(&ledger, key, &step.id, visit.turns)?
-            .last()
-            .is_some_and(|t| t.end_fact.as_deref() == Some("held"));
+    // A team step keeps the members whose end facts held: only the others start again.
+    let mut team_held: Vec<String> = Vec::new();
+    if visit.step == step.id && !paused {
+        for member in step.team() {
+            let turns =
+                super::machine::agent_turns(&ledger, &ticket, &step.id, &member.agent, true)?;
+            if visit.team_held.contains(&member.agent)
+                || turns
+                    .last()
+                    .is_some_and(|t| t.end_fact.as_deref() == Some("held"))
+            {
+                team_held.push(member.agent.clone());
+            }
+        }
+    }
+    let held = match &step.kind {
+        StepKind::Turn(turn) if !turn.team.is_empty() => {
+            !paused && turn.team.iter().all(|m| team_held.contains(&m.agent))
+        }
+        StepKind::Turn(_) => {
+            !paused
+                && visit.step == step.id
+                && visit_turns(&ledger, key, &step.id, visit.turns)?
+                    .last()
+                    .is_some_and(|t| t.end_fact.as_deref() == Some("held"))
+        }
+        _ => false,
+    };
     let now = time::now_rfc3339();
     let mut new_visit = None;
     if !held {
@@ -734,6 +756,7 @@ pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
         let mut next = ticket
             .counts
             .enter(&step, "retry", &now, turns, head, false);
+        next.team_held = team_held.clone();
         if matches!(step.kind, StepKind::Turn(_)) {
             if paused {
                 let mut session = None;
@@ -846,18 +869,17 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
         if matches!(e.kind.as_str(), "turn-started" | "turn-ended") {
             continue;
         }
-        out.push(LogEntry {
-            who: e.actor.clone(),
-            detail: e
-                .detail
-                .as_deref()
-                .and_then(|d| serde_json::from_str(d).ok())
-                .unwrap_or(Value::Null),
-            at: e.at.clone(),
-            source: "event".into(),
-            kind: e.kind.clone(),
-            id: e.external_id.clone(),
-            text: format!(
+        let detail: Value = e
+            .detail
+            .as_deref()
+            .and_then(|d| serde_json::from_str(d).ok())
+            .unwrap_or(Value::Null);
+        let field = |name: &str| detail.get(name).and_then(Value::as_str).unwrap_or("-");
+        let text = match e.kind.as_str() {
+            "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
+            "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
+            "kind" => format!("{} kind {}", e.actor, field("kind")),
+            _ => format!(
                 "{} {}{}",
                 e.actor,
                 e.kind,
@@ -866,6 +888,15 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
                     .map(|d| format!(" {}", cut(d, 240)))
                     .unwrap_or_default()
             ),
+        };
+        out.push(LogEntry {
+            who: e.actor.clone(),
+            detail,
+            at: e.at.clone(),
+            source: "event".into(),
+            kind: e.kind.clone(),
+            id: e.external_id.clone(),
+            text,
         });
     }
     for t in ledger.turns_of_ticket(key.as_str())? {
@@ -923,6 +954,11 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
             Some(q) => ledger.turn(&q.turn)?.and_then(|t| t.agent),
             None => None,
         }
+        .or_else(|| {
+            card.get("asked_by")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
         .unwrap_or_default();
         if let Some(created) = &c.created {
             out.push(LogEntry {
@@ -1165,6 +1201,9 @@ pub struct Measures {
     /// The cost of the turns of each step.
     pub step_cost_usd: BTreeMap<String, f64>,
     pub cost_usd: f64,
+    /// The kind of the ticket, such as `bug`. `None` in total, and for a ticket with no kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl Measures {
@@ -1262,6 +1301,11 @@ pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
         let m = tickets.entry(c.ticket.clone()).or_default();
         *m.step_cost_usd.entry(c.step.clone()).or_default() += c.cost_usd;
         m.cost_usd += c.cost_usd;
+    }
+    for row in ledger.tickets()? {
+        if let Some(m) = tickets.get_mut(&row.key) {
+            m.kind = super::state::Counts::of(&row).kind;
+        }
     }
     let mut total = Measures::default();
     for m in tickets.values() {
@@ -1483,7 +1527,11 @@ pub fn render_report(report: &Report) -> String {
         ]
     };
     for (key, m) in &report.tickets {
-        table.push(line(key, m));
+        let name = match &m.kind {
+            Some(kind) => format!("{key} ({kind})"),
+            None => key.clone(),
+        };
+        table.push(line(&name, m));
     }
     table.push(line("total", &report.total));
     out.push_str(&render_table(&table));

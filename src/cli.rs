@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
-use crate::config::Effort;
+use crate::config::{Effort, Runner};
 use crate::paths::{TicketKey, TurnId};
 
 const AFTER_HELP: &str = "\
@@ -253,6 +253,15 @@ pub enum PipelineCommand {
         key: TicketKey,
     },
 
+    /// Set the kind of a ticket, a kind of [kinds] of the adapter, such as bug
+    #[command(display_order = 22)]
+    Kind {
+        /// The ticket key, such as DEMO-12
+        key: TicketKey,
+        /// The kind, such as bug, feature, or chore
+        name: String,
+    },
+
     /// Show the measures, or the measures and the escapes of one ticket
     #[command(display_order = 31)]
     Report {
@@ -280,6 +289,7 @@ impl PipelineCommand {
             PipelineCommand::Stop { .. } => "stop",
             PipelineCommand::Retry { .. } => "retry",
             PipelineCommand::Report { .. } => "report",
+            PipelineCommand::Kind { .. } => "kind",
         }
     }
 }
@@ -626,6 +636,9 @@ pub enum ModelCommand {
         /// The effort level
         #[arg(long, value_enum, value_name = "E")]
         effort: Option<Effort>,
+        /// The program of the turns: claude, or codex for a reader
+        #[arg(long, value_enum, value_name = "R")]
+        runner: Option<Runner>,
     },
 
     /// Go back to the default model of Vision

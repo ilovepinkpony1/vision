@@ -12,7 +12,7 @@ use crate::paths::Paths;
 use crate::util::fs::read_optional;
 
 /// The files of `agents/`, as the binary embeds them.
-const EMBEDDED: [(&str, &str); 11] = [
+const EMBEDDED: [(&str, &str); 18] = [
     ("common.md", include_str!("../../agents/common.md")),
     ("scout.md", include_str!("../../agents/scout.md")),
     ("builder.md", include_str!("../../agents/builder.md")),
@@ -21,6 +21,13 @@ const EMBEDDED: [(&str, &str); 11] = [
     ("shepherd.md", include_str!("../../agents/shepherd.md")),
     ("judge.md", include_str!("../../agents/judge.md")),
     ("curator.md", include_str!("../../agents/curator.md")),
+    ("repro.md", include_str!("../../agents/repro.md")),
+    ("cause.md", include_str!("../../agents/cause.md")),
+    ("history.md", include_str!("../../agents/history.md")),
+    ("points.md", include_str!("../../agents/points.md")),
+    ("scope.md", include_str!("../../agents/scope.md")),
+    ("analyst.md", include_str!("../../agents/analyst.md")),
+    ("critic.md", include_str!("../../agents/critic.md")),
     (
         "turn.schema.json",
         include_str!("../../agents/turn.schema.json"),
@@ -82,7 +89,7 @@ pub fn compose_role(paths: &Paths, agent: &str, role_file: Option<&Path>) -> Res
     let own = match role_file {
         Some(path) => std::fs::read_to_string(path)
             .with_context(|| format!("could not read the role file {}", path.display()))?,
-        None => agents_file(paths, &format!("{agent}.md"))?,
+        None => agents_file(paths, &format!("{}.md", models::role_name(agent)))?,
     };
     let alone = models::agent(agent).is_some_and(|spec| spec.alone);
     if alone {

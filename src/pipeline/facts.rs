@@ -65,6 +65,11 @@ pub struct StateFacts {
     /// The verb of an entry of the step that the mode shadow or hold kept from running: its
     /// first write waits for the decision of the person.
     pub first_write: Option<String>,
+    /// The kind of the ticket, a kind of `[kinds]` of the adapter, such as `bug`.
+    pub ticket_kind: Option<String>,
+    /// A team step: each member whose `when` holds, with its state: `done`, `runs`, `waits`,
+    /// `failed`, or `not started`.
+    pub team: Vec<(String, String)>,
 }
 
 /// A turn that runs now.
@@ -282,8 +287,16 @@ fn facts_of(
         entries: ticket.counts.entries.clone(),
         turns: work_ids.len(),
         agents,
+        ticket_kind: ticket.counts.kind.clone(),
         ..StateFacts::default()
     };
+    if visit.kind == "turn" && visit.agent.is_none() {
+        facts.team = super::view::team_states(ctx, ledger, ticket, &visit)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(agent, state)| (agent, state.to_string()))
+            .collect();
+    }
     for op in executor::operations_of(ledger, &ticket.key)?
         .into_iter()
         .rev()

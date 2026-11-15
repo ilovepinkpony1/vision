@@ -51,6 +51,7 @@ impl ConfigEditor {
         let table = child_table(agents, agent, false)?;
         set_or_remove(table, "model", pin.model.as_deref());
         set_or_remove(table, "effort", pin.effort.map(|e| e.as_str()));
+        set_or_remove(table, "runner", pin.runner.map(|r| r.as_str()));
         set_or_remove(table, "pinned_at", pin.pinned_at.as_deref());
         if first {
             if let Some(comment) = comment {
@@ -205,6 +206,7 @@ mod tests {
             model: Some(model.into()),
             effort: Some(Effort::Xhigh),
             pinned_at: Some("2026-11-16T14:30:00Z".into()),
+            ..AgentPin::default()
         }
     }
 
@@ -254,6 +256,7 @@ mod tests {
             model: Some("b".into()),
             effort: None,
             pinned_at: Some("2026-11-17T09:00:00Z".into()),
+            ..AgentPin::default()
         };
         editor.set_agent("judge", &new).unwrap();
         assert_eq!(

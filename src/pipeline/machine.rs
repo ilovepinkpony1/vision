@@ -18,6 +18,7 @@ use super::decide::{
 use super::docs::{self, result_documents};
 use super::gates;
 use super::state::{flags_of, flags_text, waits_on, Counts, FlagReason, Seen, WAITS_FOR_LIMIT};
+use crate::adapter::when::Holds;
 use crate::adapter::{self, Adapter, Entry, EntryKind, Expect, GateRule, Step, StepKind};
 use crate::ctx::Ctx;
 use crate::executor::{self, Outcome, Secrets};
@@ -149,7 +150,12 @@ pub(crate) fn dirty_lines(clone: &std::path::Path) -> Result<Vec<String>> {
 }
 
 /// Writes the row of a ticket and its event in one transaction.
-fn save(ledger: &Ledger, ticket: &Ticket, now: &str, event: Option<Event>) -> Result<()> {
+pub(crate) fn save(
+    ledger: &Ledger,
+    ticket: &Ticket,
+    now: &str,
+    event: Option<Event>,
+) -> Result<()> {
     in_tx(ledger, |ledger| {
         ledger.set_ticket_state(
             ticket.key.as_str(),
@@ -167,7 +173,12 @@ fn save(ledger: &Ledger, ticket: &Ticket, now: &str, event: Option<Event>) -> Re
 
 /// The visit of the current step. A row with no visit, or a visit of a different step, gets a
 /// new one: the repair of a row that an older writer or a crash left.
-fn ensure_visit(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Result<()> {
+pub(crate) fn ensure_visit(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &mut Ticket,
+    step: &Step,
+) -> Result<()> {
     if ticket
         .counts
         .visit
@@ -244,6 +255,35 @@ pub(crate) fn visit_turns(
     Ok(out)
 }
 
+/// The turns of one agent in the visit: the turns of the visit (only those of `agent` for a
+/// member of a team), after the turns that a fallback from Codex left behind.
+pub(crate) fn agent_turns(
+    ledger: &Ledger,
+    ticket: &Ticket,
+    step: &str,
+    agent: &str,
+    member: bool,
+) -> Result<Vec<TurnRow>> {
+    let visit = ticket.visit();
+    let skip = visit.fallback.get(agent).copied().unwrap_or(0) as usize;
+    Ok(visit_turns(ledger, &ticket.key, step, visit.turns)?
+        .into_iter()
+        .filter(|t| !member || t.agent.as_deref() == Some(agent))
+        .skip(skip)
+        .collect())
+}
+
+/// The step of a team member as a step of its own, or the step itself.
+pub(crate) fn turn_agent(step: &Step) -> Option<(String, crate::turn::TurnKind)> {
+    match &step.kind {
+        StepKind::Turn(turn) if turn.team.is_empty() => Some((turn.agent.clone(), turn.turn)),
+        _ => None,
+    }
+}
+
+/// The message of a refused result of a team member that ended with questions.
+pub const MEMBER_QUESTIONS: &str = "a member of a team cannot end its turn with questions. Write each open question into your findings under `## Open questions`: the analyst reads the findings and asks them";
+
 // ----- Tick step 5 -----------------------------------------------------------------------
 
 /// Tick step 5: for each ticket, read the facts of its step and test its end facts. A turn
@@ -258,12 +298,19 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
     let adapter = adapter::load(ctx)?;
     let mut failed = Vec::new();
     for mut ticket in tickets {
-        if !ticket.flags.is_empty() {
-            continue;
-        }
         let Some(step) = adapter.step(ticket.state()).cloned() else {
             continue;
         };
+        // The members of a team that still run when a rule stopped the ticket keep their
+        // results: their end facts are tested also under the flag needs-you.
+        let keeps = !step.team().is_empty()
+            && ticket
+                .flags
+                .iter()
+                .all(|f| f == super::state::NEEDS_YOU || f == WAITS_FOR_LIMIT);
+        if !ticket.flags.is_empty() && !keeps {
+            continue;
+        }
         let result =
             ensure_visit(ctx, &pass.ledger, &mut ticket, &step).and_then(|()| match &step.kind {
                 StepKind::Turn(_) => test_turn(ctx, &pass.ledger, &mut ticket, &step),
@@ -316,8 +363,29 @@ fn fact_mark(turn: &str) -> String {
 }
 
 fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Result<()> {
+    if let Some((agent, _)) = turn_agent(step) {
+        return test_turn_of(ctx, ledger, ticket, step, &agent, false);
+    }
+    for member in step.team() {
+        let view = step.member_view(member);
+        test_turn_of(ctx, ledger, ticket, &view, &member.agent, true)?;
+    }
+    Ok(())
+}
+
+/// The end facts of the last turn of one agent: the agent of the step, or one member of a team
+/// with `member` true. A member that ended with questions gets the failed end fact
+/// `questions`, so that it resumes with the rule to write them into its findings.
+fn test_turn_of(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &mut Ticket,
+    step: &Step,
+    agent: &str,
+    member: bool,
+) -> Result<()> {
     let visit = ticket.visit();
-    let turns = visit_turns(ledger, &ticket.key, &step.id, visit.turns)?;
+    let turns = agent_turns(ledger, ticket, &step.id, agent, member)?;
     let Some(last) = turns.last() else {
         return Ok(());
     };
@@ -328,7 +396,29 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
     let Some(result) = outcome.result else {
         return Ok(());
     };
-    if result.get("kind").and_then(Value::as_str) != Some("result") {
+    let kind = result.get("kind").and_then(Value::as_str);
+    if member && kind == Some("questions") {
+        let detail = json!({
+            "turn": last.id, "fact": "questions", "found": MEMBER_QUESTIONS, "blocks": false,
+            "documents": [],
+        });
+        in_tx(ledger, |ledger| {
+            ledger.set_end_fact(&last.id, "failed:questions")?;
+            ledger.add_event(
+                &Event::now("tick", "end-fact")
+                    .ticket(ticket.key.as_str())
+                    .external_id(&fact_mark(&last.id))
+                    .detail(detail.clone()),
+            )?;
+            Ok(())
+        })?;
+        ctx.log(&format!(
+            "pipeline: the member {agent} of {} ended {} with questions, so the result is refused",
+            ticket.key, last.id
+        ));
+        return Ok(());
+    }
+    if kind != Some("result") {
         return Ok(());
     }
     let expected = expected_docs(step);
@@ -418,9 +508,14 @@ fn test_turn(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, step: &Step) -> Re
     };
     if let Check::Failed { .. } = &check {
         if let Some(visit) = ticket.counts.visit.as_mut() {
+            let extra = if member {
+                visit.member_extra.entry(agent.to_string()).or_default()
+            } else {
+                &mut visit.extra
+            };
             for doc in &job_docs {
-                if !visit.extra.contains(doc) {
-                    visit.extra.push(doc.clone());
+                if !extra.contains(doc) {
+                    extra.push(doc.clone());
                 }
             }
         }
@@ -916,8 +1011,7 @@ pub fn select_actions(pass: &mut Pass) -> Result<Vec<Action>> {
     let mut failed = Vec::new();
     for mut ticket in tickets {
         match select_one(ctx, &pass.ledger, &adapter, &mut ticket, pass.now) {
-            Ok(Some(action)) => actions.push(action),
-            Ok(None) => {}
+            Ok(list) => actions.extend(list),
             Err(e) => {
                 ctx.log(&format!(
                     "pipeline: could not select the next action of {}: {e:#}",
@@ -937,16 +1031,20 @@ pub fn select_actions(pass: &mut Pass) -> Result<Vec<Action>> {
     Ok(actions)
 }
 
+/// The most steps that one tick skips for one ticket, so that a loop of skipped steps in a
+/// broken adapter never spins.
+const MAX_SKIPS: usize = 32;
+
 fn select_one(
     ctx: &Ctx,
     ledger: &Ledger,
     adapter: &Adapter,
     ticket: &mut Ticket,
     now: OffsetDateTime,
-) -> Result<Option<Action>> {
-    let Some(step) = adapter.step(ticket.state()).cloned() else {
+) -> Result<Vec<Action>> {
+    let Some(mut step) = adapter.step(ticket.state()).cloned() else {
         if ticket.flags.is_empty() {
-            return Ok(Some(flag_action(
+            return Ok(vec![flag_action(
                 ticket,
                 super::state::NEEDS_YOU,
                 &format!(
@@ -955,28 +1053,65 @@ fn select_one(
                     adapter.name,
                     ticket.key
                 ),
-            )));
+            )]);
         }
-        return Ok(None);
+        return Ok(Vec::new());
     };
     // A flag other than the limit stops each action, and `decide` gives nothing for it, so its
     // facts are not gathered: a stopped ticket may have lost its clone.
     if ticket.flags.iter().any(|f| f != WAITS_FOR_LIMIT) {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     ensure_visit(ctx, ledger, ticket, &step)?;
+    // A step whose `when` does not hold is skipped: the ticket moves through its next in the
+    // same tick.
+    let mut skipped = 0;
+    loop {
+        match super::kind::step_holds(ctx, ledger, adapter, ticket, &step)? {
+            Holds::Yes => break,
+            Holds::NoDoc(why) => {
+                return Ok(vec![flag_action(
+                    ticket,
+                    super::state::NEEDS_YOU,
+                    &format!("the step {}: {why}", step.id),
+                )])
+            }
+            Holds::No(why) => {
+                if skipped >= MAX_SKIPS {
+                    return Ok(Vec::new());
+                }
+                skipped += 1;
+                let to = super::kind::skip_target(&step)
+                    .with_context(|| format!("the step {} has no next step to skip to", step.id))?;
+                super::kind::skip(ctx, ledger, adapter, ticket, &step, &to, &why)?;
+                step = adapter
+                    .step(&to)
+                    .cloned()
+                    .with_context(|| format!("the step {to} is not in the adapter"))?;
+            }
+        }
+    }
+    match &step.kind {
+        StepKind::Turn(turn) if !turn.team.is_empty() => {
+            return super::team::select(ctx, ledger, adapter, ticket, &step, now)
+        }
+        StepKind::Ask(_) => return super::ask::select_ask(ctx, ledger, adapter, ticket, &step),
+        StepKind::Check(_) => return super::ask::select_check(ctx, ledger, adapter, ticket, &step),
+        _ => {}
+    }
+    let one = |action: Option<Action>| Ok(action.into_iter().collect());
     for _ in 0..2 {
-        let facts = gather(ctx, ledger, ticket, &step, now)?;
+        let facts = gather(ctx, ledger, ticket, &step, now, false)?;
         let next = decide(&facts);
         match next {
-            Next::Nothing(_) => return Ok(None),
+            Next::Nothing(_) => return Ok(Vec::new()),
             Next::ClearLimit => {
                 clear_limit(ctx, ledger, ticket)?;
                 continue;
             }
-            Next::Flag { flag, reason } => return Ok(Some(flag_action(ticket, flag, &reason))),
+            Next::Flag { flag, reason } => return one(Some(flag_action(ticket, flag, &reason))),
             Next::Start { resume, message } => {
-                return enter_turn(ctx, ledger, ticket, &step, resume, message)
+                return enter_turn(ctx, ledger, ticket, &step, resume, message).and_then(one)
             }
             Next::Resume {
                 session,
@@ -986,7 +1121,7 @@ fn select_one(
                 if let Some(why) = extra {
                     extra_round_event(ctx, ledger, ticket, &step, &why)?;
                 }
-                return Ok(Some(start_action(
+                return one(Some(start_action(
                     ticket,
                     &step,
                     Some(session),
@@ -994,7 +1129,11 @@ fn select_one(
                 )));
             }
             Next::Serve { turn, session } => {
-                return serve(ctx, ledger, adapter, ticket, &step, &turn, &session)
+                return serve(ctx, ledger, adapter, ticket, &step, &turn, &session, false)
+                    .and_then(one)
+            }
+            Next::Fallback { why } => {
+                return fall_back(ctx, ledger, ticket, &step, &why, false).and_then(one)
             }
             Next::Request { list, index } => {
                 let entries = match list {
@@ -1002,19 +1141,19 @@ fn select_one(
                     List::Start => &step.start,
                 };
                 let Some(entry) = entries.get(index) else {
-                    return Ok(None);
+                    return Ok(Vec::new());
                 };
                 let turn = match list {
                     List::After => last_turn_id(ledger, ticket, &step)?,
                     List::Start => None,
                 };
-                return request_action(ctx, ticket, entry, turn).map(Some);
+                return request_action(ctx, ticket, entry, turn).map(|a| vec![a]);
             }
             Next::RunJob => {
                 let StepKind::Job(job) = &step.kind else {
-                    return Ok(None);
+                    return Ok(Vec::new());
                 };
-                return Ok(Some(Action::RunJob(JobRun {
+                return one(Some(Action::RunJob(JobRun {
                     ticket: ticket.key.clone(),
                     step: step.id.clone(),
                     job: job.job.clone(),
@@ -1023,15 +1162,15 @@ fn select_one(
             }
             Next::Move { to, how } => {
                 move_to(ctx, ledger, adapter, ticket, &step, &to, &how)?;
-                return Ok(None);
+                return Ok(Vec::new());
             }
             Next::Finish => {
                 finish(ctx, ledger, ticket, now)?;
-                return Ok(None);
+                return Ok(Vec::new());
             }
         }
     }
-    Ok(None)
+    Ok(Vec::new())
 }
 
 /// The event of an extra round of `extra_rounds`, with why it was granted. One event for each
@@ -1058,7 +1197,52 @@ fn extra_round_event(
     Ok(())
 }
 
-fn flag_action(ticket: &Ticket, flag: &str, reason: &str) -> Action {
+/// The fallback of an agent on Codex: the visit leaves its turns on Codex behind, records the
+/// event `fallback`, and starts a fresh turn of the same agent on its fallback model with
+/// Claude.
+pub(crate) fn fall_back(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &mut Ticket,
+    step: &Step,
+    why: &str,
+    member: bool,
+) -> Result<Option<Action>> {
+    let Some((agent, _)) = turn_agent(step) else {
+        return Ok(None);
+    };
+    let before = u32::try_from(
+        visit_turns(ledger, &ticket.key, &step.id, ticket.visit().turns)?
+            .iter()
+            .filter(|t| !member || t.agent.as_deref() == Some(agent.as_str()))
+            .count(),
+    )?;
+    if let Some(visit) = ticket.counts.visit.as_mut() {
+        visit.fallback.insert(agent.clone(), before);
+    }
+    let fallback = crate::models::choice(ctx.config()?, &agent)?
+        .fallback
+        .map(|f| format!("{} {}", f.model, f.effort))
+        .unwrap_or_default();
+    save(
+        ledger,
+        ticket,
+        &time::now_rfc3339(),
+        Some(
+            Event::now("tick", "fallback")
+                .ticket(ticket.key.as_str())
+                .detail(json!({"agent": agent, "step": step.id, "why": why, "to": fallback})),
+        ),
+    )?;
+    ctx.log(&format!(
+        "pipeline: fallback {agent} of {} to {fallback}: {why}",
+        ticket.key
+    ));
+    let message = ticket.visit().message.clone();
+    Ok(Some(start_action(ticket, step, None, message)))
+}
+
+pub(crate) fn flag_action(ticket: &Ticket, flag: &str, reason: &str) -> Action {
     Action::SetFlag(FlagSet {
         ticket: ticket.key.clone(),
         flag: flag.to_string(),
@@ -1066,7 +1250,7 @@ fn flag_action(ticket: &Ticket, flag: &str, reason: &str) -> Action {
     })
 }
 
-fn start_action(
+pub(crate) fn start_action(
     ticket: &Ticket,
     step: &Step,
     resumes: Option<String>,
@@ -1076,6 +1260,9 @@ fn start_action(
         StepKind::Turn(turn) => (turn.agent.clone(), turn.turn),
         _ => (String::new(), turn::TurnKind::Reader),
     };
+    // An agent that fell back from Codex in this visit keeps its fallback for each later turn
+    // of the visit.
+    let fallback = ticket.visit().fallback.contains_key(&agent);
     Action::StartTurn(TurnStart {
         ticket: ticket.key.clone(),
         step: step.id.clone(),
@@ -1083,10 +1270,15 @@ fn start_action(
         kind,
         resumes,
         message,
+        fallback,
     })
 }
 
-fn last_turn_id(ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<Option<String>> {
+pub(crate) fn last_turn_id(
+    ledger: &Ledger,
+    ticket: &Ticket,
+    step: &Step,
+) -> Result<Option<String>> {
     Ok(
         visit_turns(ledger, &ticket.key, &step.id, ticket.visit().turns)?
             .last()
@@ -1122,7 +1314,7 @@ pub(crate) fn entry_args(ctx: &Ctx, key: &TicketKey, entry: &Entry) -> Result<Va
     docs::expand_args(&entry.args, &read).map_err(|e| format!("{}: {e}", entry.label()))
 }
 
-fn request_action(
+pub(crate) fn request_action(
     ctx: &Ctx,
     ticket: &Ticket,
     entry: &Entry,
@@ -1205,8 +1397,11 @@ pub(crate) fn op_facts(
     Ok(out)
 }
 
-/// The value of a cap of the configuration by its name.
-fn cap_value(ctx: &Ctx, name: &str) -> Result<Option<u32>> {
+/// The value of a cap of the configuration by its name, or a number of entries of the step.
+pub(crate) fn cap_value(ctx: &Ctx, name: &str) -> Result<Option<u32>> {
+    if let Ok(n) = name.parse::<u32>() {
+        return Ok(Some(n));
+    }
     let caps = serde_json::to_value(&ctx.config()?.caps)?;
     Ok(caps
         .get(name)
@@ -1242,18 +1437,22 @@ pub(crate) fn open_items(
     Ok(open)
 }
 
-/// The facts of the step of one ticket, for [`decide`].
-fn gather(
+/// The facts of the step of one ticket, for [`decide`]. With `member`, `step` is the view of one
+/// member of a team: only the turns of its agent count, and the turns of the other members
+/// that run do not stop it.
+pub(crate) fn gather(
     ctx: &Ctx,
     ledger: &Ledger,
     ticket: &Ticket,
     step: &Step,
     now: OffsetDateTime,
+    member: bool,
 ) -> Result<Facts> {
     let visit = ticket.visit();
     let key = &ticket.key;
     let mut refusal = None;
     let mut branch = None;
+    let mut codex_fallback = None;
     let kind = match &step.kind {
         StepKind::Turn(turn) => {
             refusal = turn::refusal(ctx, ledger, key, turn.turn)?.map(|r| {
@@ -1263,7 +1462,7 @@ fn gather(
                     Refused::Other(r.to_string())
                 }
             });
-            let turns = visit_turns(ledger, key, &step.id, visit.turns)?;
+            let turns = agent_turns(ledger, ticket, &step.id, &turn.agent, member)?;
             let failures = u32::try_from(
                 turns
                     .iter()
@@ -1274,10 +1473,31 @@ fn gather(
                     })
                     .count(),
             )?;
-            let last = match turns.last() {
+            let mut last = match turns.last() {
                 None => None,
                 Some(row) => Some(last_turn(ctx, ledger, row)?),
             };
+            // A member that ended with questions got the failed end fact `questions`: its
+            // turn goes the way of a result whose end fact failed.
+            if let Some(t) = last.as_mut() {
+                if member
+                    && t.kind.as_deref() == Some("questions")
+                    && t.end_fact.as_deref() == Some("failed:questions")
+                {
+                    t.kind = Some("result".into());
+                }
+            }
+            if let Some(row) = turns.last() {
+                if turn::ran_on_codex(ctx, ledger, &row.id)
+                    && !visit.fallback.contains_key(&turn.agent)
+                {
+                    codex_fallback = Some(
+                        crate::models::choice(ctx.config()?, &turn.agent)
+                            .map(|c| c.fallback.is_some())
+                            .unwrap_or(false),
+                    );
+                }
+            }
             let failed = match &last {
                 Some(t)
                     if t.end_fact
@@ -1373,6 +1593,12 @@ fn gather(
         StepKind::End => KindFacts::End {
             finished: ticket.counts.finished.is_some(),
         },
+        StepKind::Ask(_) | StepKind::Check(_) => {
+            bail!(
+                "the step {} has no facts of a turn, a job, a human action, or a wait",
+                step.id
+            )
+        }
     };
     let cap = match &step.cap {
         Some(name) => cap_value(ctx, name)?.map(|v| (name.clone(), v)),
@@ -1385,8 +1611,14 @@ fn gather(
         next: step.next.clone(),
         branch,
         flags: ticket.flags.clone(),
-        running: ledger.running_turns_of_ticket(key.as_str())? > 0,
-        open_cards: ledger.open_cards(key.as_str())?,
+        // The other members of a team run at the same time: a member waits only for its own
+        // turn, which its last turn says.
+        running: !member && ledger.running_turns_of_ticket(key.as_str())? > 0,
+        open_cards: if member {
+            0
+        } else {
+            ledger.open_cards(key.as_str())?
+        },
         refusal,
         cap,
         rounds: step.rounds,
@@ -1398,6 +1630,7 @@ fn gather(
         } else {
             Vec::new()
         },
+        codex_fallback,
     })
 }
 
@@ -1487,7 +1720,7 @@ fn last_turn(ctx: &Ctx, ledger: &Ledger, row: &TurnRow) -> Result<LastTurn> {
     })
 }
 
-fn clear_limit(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket) -> Result<()> {
+pub(crate) fn clear_limit(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket) -> Result<()> {
     ticket.flags.retain(|f| f != WAITS_FOR_LIMIT);
     ticket.counts.reasons.remove(WAITS_FOR_LIMIT);
     let now = time::now_rfc3339();
@@ -1518,6 +1751,32 @@ fn enter_turn(
     resume: Option<String>,
     message: Option<String>,
 ) -> Result<Option<Action>> {
+    match run_before(ctx, ledger, ticket, step)? {
+        Before::Done => {}
+        Before::Wait => return Ok(None),
+        Before::Flag(action) => return Ok(Some(action)),
+    }
+    write_issue(ctx, ledger, ticket)?;
+    Ok(Some(start_action(ticket, step, resume, message)))
+}
+
+/// Where the `before` entries of a turn step are.
+pub(crate) enum Before {
+    /// Each one is done in this visit.
+    Done,
+    /// One waits, such as for an approval or a reconcile.
+    Wait,
+    /// One failed: the action sets the flag.
+    Flag(Action),
+}
+
+/// Runs each `before` entry of the step that is not done in this visit, in order.
+pub(crate) fn run_before(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &mut Ticket,
+    step: &Step,
+) -> Result<Before> {
     for (index, entry) in step.before.iter().enumerate() {
         let label = entry.label();
         // An entry that is done in this visit does not run again while a later one waits.
@@ -1526,7 +1785,13 @@ fn enter_turn(
         }
         let args = match entry_args(ctx, &ticket.key, entry) {
             Ok(args) => args,
-            Err(text) => return Ok(Some(flag_action(ticket, super::state::NEEDS_YOU, &text))),
+            Err(text) => {
+                return Ok(Before::Flag(flag_action(
+                    ticket,
+                    super::state::NEEDS_YOU,
+                    &text,
+                )))
+            }
         };
         match entry.kind {
             EntryKind::Job => {
@@ -1539,7 +1804,7 @@ fn enter_turn(
                 let result = executor::job(ctx, ledger, &run)?;
                 if result.failure.is_some() || !result.ok {
                     let why = result.failure.unwrap_or(result.detail);
-                    return Ok(Some(flag_action(
+                    return Ok(Before::Flag(flag_action(
                         ticket,
                         super::state::NEEDS_YOU,
                         &format!(
@@ -1560,7 +1825,7 @@ fn enter_turn(
                 if op.outcome.needs_you()
                     && !matches!(op.outcome, Outcome::Waiting { .. } | Outcome::Uncertain)
                 {
-                    return Ok(Some(flag_action(
+                    return Ok(Before::Flag(flag_action(
                         ticket,
                         super::state::NEEDS_YOU,
                         &format!(
@@ -1570,7 +1835,7 @@ fn enter_turn(
                     )));
                 }
                 if op.outcome != Outcome::Confirmed {
-                    return Ok(None);
+                    return Ok(Before::Wait);
                 }
             }
         }
@@ -1582,8 +1847,7 @@ fn enter_turn(
         save(ledger, ticket, &time::now_rfc3339(), None)?;
         crash_point("before-entry-done");
     }
-    write_issue(ctx, ledger, ticket)?;
-    Ok(Some(start_action(ticket, step, resume, message)))
+    Ok(Before::Done)
 }
 
 /// Asks `observe` for the ticket, writes `issue.json` to the ticket folder, and keeps the facts
@@ -1603,12 +1867,14 @@ pub(crate) fn write_issue(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket) -> Re
     )?;
     let now = time::now_rfc3339();
     ticket.counts.seen = Some(Seen::of(&facts, &now));
-    save(ledger, ticket, &now, None)
+    let event = super::kind::decide_kind(ctx, ticket, &facts)?;
+    save(ledger, ticket, &now, event)
 }
 
 /// Serves the read verbs of a turn that ended with requests, writes each answer as a document
 /// of the ticket folder, and gives the action that resumes the session with the files.
-fn serve(
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn serve(
     ctx: &Ctx,
     ledger: &Ledger,
     adapter: &Adapter,
@@ -1616,6 +1882,7 @@ fn serve(
     step: &Step,
     turn_id: &str,
     session: &str,
+    member: bool,
 ) -> Result<Option<Action>> {
     let outcome = turn::outcome(ctx, ledger, &TurnId::parse(turn_id)?)?;
     let requests = outcome
@@ -1626,12 +1893,13 @@ fn serve(
         .cloned()
         .unwrap_or_default();
     let secrets = Secrets::read(ctx.config()?)?;
-    let reads: Vec<&str> = adapter
+    let mut reads: Vec<&str> = adapter
         .verbs
         .values()
         .filter(|v| v.read)
         .map(|v| v.name.as_str())
         .collect();
+    reads.extend(super::git_verbs::NAMES);
     let mut lines = Vec::new();
     let mut files = Vec::new();
     if requests.is_empty() {
@@ -1644,6 +1912,17 @@ fn serve(
             .unwrap_or("")
             .trim();
         let args = request.get("args").cloned().unwrap_or(Value::Null);
+        // The read verbs of git: the core serves them in the clone, with no adapter call.
+        if super::git_verbs::NAMES.contains(&verb) && !adapter.verbs.contains_key(verb) {
+            match super::git_verbs::serve(ctx, ticket, verb, &args, &secrets) {
+                Ok((name, detail)) => {
+                    lines.push(format!("- {verb}: .vision/{name} ({detail})"));
+                    files.push(name);
+                }
+                Err(e) => lines.push(format!("- {verb}: it failed, so it has no file: {e:#}")),
+            }
+            continue;
+        }
         match adapter.verbs.get(verb) {
             Some(spec) if spec.read => match executor::read(ctx, ledger, &ticket.key, verb, &args) {
                 Ok(answer) => {
@@ -1679,9 +1958,13 @@ fn serve(
         }
     }
     if let Some(visit) = ticket.counts.visit.as_mut() {
+        let extra = match (member, turn_agent(step)) {
+            (true, Some((agent, _))) => visit.member_extra.entry(agent).or_default(),
+            _ => &mut visit.extra,
+        };
         for name in &files {
-            if !visit.extra.contains(name) {
-                visit.extra.push(name.clone());
+            if !extra.contains(name) {
+                extra.push(name.clone());
             }
         }
     }

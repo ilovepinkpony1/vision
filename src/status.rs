@@ -315,7 +315,10 @@ fn ticket_table(tickets: &[TicketView]) -> String {
     let mut rows = vec![["KEY", "STEP", "NOW", "MARKS", "PR", "COST"].map(String::from)];
     for ticket in tickets {
         rows.push([
-            ticket.key.clone(),
+            match &ticket.ticket_kind {
+                Some(kind) => format!("{} ({kind})", ticket.key),
+                None => ticket.key.clone(),
+            },
             dash(ticket.step.as_deref()),
             ticket.now.clone(),
             marks_text(&ticket.marks),
@@ -360,6 +363,7 @@ mod tests {
             title: None,
             step: step.map(str::to_string),
             kind: None,
+            ticket_kind: None,
             now: now.into(),
             works: None,
             flags: Vec::new(),

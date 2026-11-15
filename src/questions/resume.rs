@@ -189,7 +189,12 @@ pub(crate) fn message(questions: &[Question], dropped: &[Value], person: &str) -
 }
 
 /// Appends each answer to `answers.md` of the ticket folder, once for each card.
-fn append_answers(ctx: &Ctx, key: &TicketKey, asking: &str, questions: &[Question]) -> Result<()> {
+pub(crate) fn append_answers(
+    ctx: &Ctx,
+    key: &TicketKey,
+    asking: &str,
+    questions: &[Question],
+) -> Result<()> {
     let path = ctx.paths.ticket_doc(key, "answers.md");
     let mut text = read_optional(&path)?.unwrap_or_default();
     let before = text.len();
@@ -204,9 +209,14 @@ fn append_answers(ctx: &Ctx, key: &TicketKey, asking: &str, questions: &[Questio
         }
         text.push_str(&format!("{header} {}\n\n", q.card.text.trim()));
         text.push_str(&format!(
-            "- Asked by: {}, step {}, turn {asking}\n",
+            "- Asked by: {}, step {}, {} {asking}\n",
             q.agent,
-            if q.step.is_empty() { "-" } else { &q.step }
+            if q.step.is_empty() { "-" } else { &q.step },
+            if super::batch::parse(asking).is_some() {
+                "batch"
+            } else {
+                "turn"
+            }
         ));
         match (q.needless(), &q.answer) {
             (Some(reason), _) => {

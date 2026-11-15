@@ -19,18 +19,22 @@ The core knows no project. An adapter gives the steps, the scripts, and the name
 
 - Adapter: the step list and the scripts that know one project.
 - Agent: a role with a role file, a model, and its own principles.
+- Analyst: the agent that merges the findings of a team into `plan.md`, `acceptance.json`, and its questions.
 - Card: one question of an agent, with its choices, its recommendation, and its evidence.
+- Batch: the cards of one ask step, created at once and answered as one set.
 - Clone: a full copy of the project repo that only Vision uses.
 - Curator: the agent that proposes changes to the memory.
 - Decision: one answered question with its reason and where it applies.
 - End fact: a fact that the runner tests to know that a step is complete.
 - Executor: the part of `vision` that holds the credentials and runs each operation.
 - Judge: the agent that answers a card, proposes an answer, or sends the card to the person.
+- Kind: the class of a ticket, such as bug, feature, or chore. It comes from the issue type through `[kinds]`.
 - Ledger: the SQLite store of the evidence.
 - Operation: one change outside the machine, with a durable id and a state.
 - Principle: one rule that the Curator distilled from decisions, or that the person wrote.
 - Supervisor: the process that owns one running session.
-- Turn: one Claude Code session that does one step, or continues one.
+- Team: the members of one turn step. Each member is an agent in its own session, and the members run at the same time.
+- Turn: one session of Claude Code or of Codex that does one step, or continues one.
 - Verb: one kind of operation, such as `git.push`.
 
 ## 3. Files on disk
@@ -115,6 +119,10 @@ docs/design.md
 project = "demo"              # the name of the adapter
 user = "user"                 # the writer name of the person in the memory
 clones = []                   # absolute paths of the clones that Vision owns
+
+[codex]                       # the Codex CLI, for reader agents whose runner is codex
+bin = "codex"
+# price = { input = 1.25, output = 10.0 }   # dollars for one million tokens. Without it, a turn on Codex costs 0 and only its tokens count.
 
 [claude]
 bin = "claude"
@@ -221,6 +229,8 @@ Rules:
 
 `escapes.priority` is a regular expression of a small syntax: characters, `.`, `\d`, `\w`, `\s` and their opposites, classes such as `[0-3]`, groups `( )` and `(?: )`, `|`, `*`, `+`, `?`, `{n,m}`, `^`, `$`, and `(?i)` at the start. It must have a group. A search that takes too many steps finds nothing.
 
+`[agents.NAME] runner` is `claude` or `codex`, and `fallback = { model, effort }` names the Claude model that runs the agent when Codex fails. Only a reader agent runs on Codex. The Judge and the Curator always run on Claude.
+
 ## 5. The ledger
 
 SQLite in WAL mode, with a busy timeout of 5 seconds. `PRAGMA user_version` holds the schema version. Each migration is one numbered SQL file that the binary embeds.
@@ -278,6 +288,8 @@ Migration 7 adds `path`, `line`, `title`, `turn`, and `track` to `findings`, and
 - `escapes (id, check_id, path, line, priority, title, url)`.
 
 A row of `findings` with the source `cr` is one finding of one round of a gate cr. A row with the source `escape` is one comment of a review bot that no finding of ours matched. No comment text is stored beyond its title, masked and cut to 200 characters.
+
+The counts of a ticket also hold its kind, the members of a team step whose end facts held, the documents of the read verbs of each member, and the number of turns on Codex before a fallback. No column changes for them. A span with `waits_on` `skipped` marks a step that its `when` skipped. The questions of an ask step have the turn `ask:<KEY>:<step>:<n>`.
 
 Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger records the evidence from the first ticket, because Vision cannot read later what it did not record.
 
@@ -393,6 +405,14 @@ A skill reads the files that it links, and a worker runs its scripts. So a turn 
 A folder of `claude.plugins` that does not exist or that holds no plugin refuses the turn. `vision doctor` names each plugin and the number of its skills in its line `plugins`, and fails such a folder. With an empty list, there is no such line.
 
 A work turn of a ticket also gets the journal folder of the home as `--add-dir`, in the read allow list of its sandbox, and with the deny rules of a plugin folder. It is the one folder of the home that a session reads, and the session never writes it. The Judge, the Curator, and a turn of `curator` or `eval` do not get it. The facts file has `related`, the path of `related.md` in the session view, or null, and `journal`, the real path of the journal folder.
+
+A reader turn of an agent whose runner is `codex` starts `codex exec --json --skip-git-repo-check --ignore-user-config -C <view> -c default_permissions="vision_reader" -c permissions.vision_reader.extends=":read-only" -c 'permissions.vision_reader.filesystem={...}' -m <model> -c model_reasoning_effort=<effort> --output-last-message <file> -`, with the prompt on standard input. The prompt holds the role file, the form of the result object, and the first line of a Claude turn. A resume uses `codex exec resume ... <thread> -` with the same keys. The effort `max` is `xhigh` for Codex. The configuration of the person for Codex stays out, and Codex uses its own login, whose folder Vision never reads.
+
+The permission profile `vision_reader` reads the view folder, the extra folders of the turn, and `sandbox.allow_read`. It hides `VISION_HOME`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude`, `~/.gnupg`, `~/Library/Keychains`, `~/.netrc`, `~/.docker`, `~/.kube`, and `~/.codex`. Its commands have no network and write nothing. Before each turn on Codex, the supervisor runs `codex sandbox` with the same profile, with no model call: a command must read `/etc/hosts` and must not read a canary file with a random token in the turn folder. Any other result fails the turn with `codex cannot hide private folders on this machine`, and the fallback runs.
+
+The supervisor keeps the events of Codex in `codex.jsonl` and writes the same lines as a Claude turn into `stream.jsonl`: the thread as the session, each message, each command as a Bash call, and the tokens. So the collector, the journal, and the live view read one form. When Codex is missing, fails, reports a usage limit, a login problem, or a refusal, or gives no valid result after one resume, the same step or member runs again with Claude on its `fallback` model, in a fresh session, with the event `fallback`. With no `fallback`, the ticket gets the flag `needs-you`. `vision open` does not work on a turn on Codex, and a message to a running turn on Codex waits for the next turn.
+
+The core serves two read verbs in the clone, with no adapter call and no token: `git.log { path, from?, to?, limit? }` gives the commits that touched a path or its lines `from` to `to`, with their messages, at most `limit` (20 by default, 200 at most), and `git.blame { path, from, to }`. A path that is absolute, starts with `-`, or holds `..` is refused. Each answer is masked and cut at 200 KB.
 
 ### 7.4 The supervisor
 
@@ -515,6 +535,8 @@ The Judge is a reader turn. It gets the cards, the ticket folder, and the memory
       "topics": {"type": "array", "items": {"type": "string"}},
       "reason": {"type": "string"}}}}}}
 ```
+
+An ask step (section 11.2) creates the cards of its documents as one batch. The Judge sees them as it sees the cards of a turn. When each card has an answer, the answers go to `answers.md`, and the ticket moves to `changed` or to `same`. A member of a team never asks a card: it writes its open questions into its findings, and the analyst asks them.
 
 ### 8.3 The rules in code
 
@@ -684,7 +706,7 @@ Each agent has a model and an effort level. The person sets them, and Vision nev
 
 ```
 vision model                         each agent: model, effort, source, and the recommendation
-vision model set AGENT MODEL [--effort E]
+vision model set AGENT MODEL [--effort E] [--runner claude|codex]
 vision model reset AGENT             go back to the default of Vision
 vision model recommend [AGENT]       the evidence for each model that the agent used
 vision model eval AGENT --models A,B [--n N]    replay past work with each model
@@ -706,6 +728,16 @@ The defaults, with the reason for each one:
 | shepherd | `claude-opus-5-5` | high | It gives verdicts on review comments and fixes the valid ones. |
 | judge | `claude-fable-5-2` | high | It can answer alone, so a wrong answer costs the most. Its turns are short. |
 | curator | `claude-fable-5-2` | high | It runs seldom, and its proposals change each later answer. |
+| repro | `claude-opus-5-5` | high | It must show the bug with a failing spec. A false reproduction sends the fix the wrong way. |
+| cause | `gpt-6.1-sol` on Codex | high | A second model finds the cause on its own. Its fallback is `claude-opus-5-5` high. |
+| history | `claude-sonnet-5-5` | medium | It summarizes why the code is as it is. A stronger model adds little. |
+| points | `claude-opus-5-5` | high | It tests each point of a feature against the code. |
+| scope | `claude-opus-5-5` | high | It finds each place that a chore touches. |
+| analyst | `claude-opus-5-5` | xhigh | Its plan decides the build, so it checks each claim against the code. |
+| critic | `gpt-6.1-sol` on Codex | xhigh | A second model reads a wide plan. Its fallback is `claude-opus-5-5` high. |
+| critic-narrow | `gpt-6.1-sol` on Codex | high | A narrow plan needs a lighter read. Its fallback is `claude-opus-5-5` high. |
+
+`--runner codex` moves a reader agent to Codex. Without `--runner`, a model whose name starts with `claude-` runs on Claude, and another model keeps the runner of the agent.
 
 `recommend` reads the ledger. For each agent and each model with at least 10 turns, it prints these numbers:
 
@@ -898,6 +930,64 @@ A job can have `env = "session"`: the environment of a work session. It holds th
 
 A job that a built-in adapter knows by its name can have keys of its own, such as the commands of the precheck (section 11.5). The loader tests them. The call of `bin/job` gets them in `table`, with `timeout`.
 
+The adapter can name kinds and a width:
+
+```toml
+[kinds]
+map = { Bug = "bug", Story = "feature", Task = "chore" }   # the issue type -> the kind
+default = "feature"
+
+[width]
+doc = "plan.md"               # the document whose section ## Files lists the changed files
+files = 3                     # this many files or more is wide
+paths = ["db/**"]             # a listed file that matches is wide
+```
+
+The kind comes from `issue.type` of the first `observe` after `take`: an exact match, then a match in any case, then `default`. `vision kind KEY NAME` changes it. A plan is wide when its section `## Files` lists `files` files or more, or a file that matches `paths`. Else it is narrow.
+
+A step can have `when`, such as `when = ["bug"]` or `when = ["wide"]`. Its words are kinds, `wide`, and `narrow`. Kinds are ORed, widths are ORed, and the two groups are ANDed. A step whose `when` does not hold is skipped in the same tick, with the event `skipped <step>: <why>`. A width word whose document does not exist yet sets the flag `needs-you`. The end step and a wait step have no `when`.
+
+A turn step can have `team` in the place of `agent`, `turn`, and `expects`:
+
+```toml
+team = [
+  { agent = "repro",   turn = "worker", expects = ["doc:findings-repro.md", "clean"], when = ["bug"] },
+  { agent = "cause",   turn = "reader", expects = ["doc:findings-cause.md"], when = ["bug"] },
+  { agent = "history", turn = "reader", expects = ["doc:findings-history.md"], when = ["bug"] },
+]
+```
+
+Each member whose `when` holds starts in the same tick, in its own session, and has its own `rounds`. A team has at most one worker or tester, and a member never reads a document that another member expects. A member that ends with `questions` is refused, and it writes them under `## Open questions` in its findings. When each member is done, the `after` verbs run and the ticket moves to `next`. A member that uses its rounds sets the flag `needs-you`. `vision retry` starts again only the members whose end facts did not hold. A new entry into the step gives each member `answers.md`.
+
+An ask step creates the cards of its documents as one batch (section 8.2):
+
+```toml
+[[step]]
+id = "questions"
+kind = "ask"
+docs = ["questions-analyst.json", "questions-critic.json"]
+on = { changed = "amend", same = "reproduced" }
+```
+
+A missing document counts as no card. A document that is not an array of cards sets the flag `needs-you`. A card whose question repeats an earlier one is dropped. The ticket moves to `changed` when an answer is not the recommended choice, when a card has no recommendation, or when the person wrote an answer. Else, and when there is no card, it moves to `same`.
+
+A check step reads one document:
+
+```toml
+[[step]]
+id = "reproduced"
+kind = "check"
+doc = "plan.md"
+line = "Reproduced: yes"
+stop_line = "Decision: drop"
+when = ["bug"]
+next = "plan-ready"
+fail = "investigate"
+cap = 2
+```
+
+A line equal to `stop_line` sets the flag `needs-you`: the person chose to drop the ticket, and runs `vision stop KEY`. A line equal to `line` moves the ticket to `next`. Else the ticket moves to `fail`, which counts against `cap`.
+
 A wait step can have `from`, a time of day such as `"09:00"` in the local time of the machine.
 
 A job can have `command`, a shell command of the person, with `doc` and `env`. The loader refuses `doc` and `env` without `command`, a `doc` that is not a plain file name, and a `doc` that the person or the pipeline owns, such as `plan.md`.
@@ -975,6 +1065,8 @@ The proof gets the approved plan in `args.plan`. A line `Proof: green` in the pl
 `adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
 
 Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
+
+`adapters/demo-investigate` uses the scripts of `adapters/demo` and starts with the investigation: `refine`, `investigate` (a team by kind), `analyze`, `critic` (wide) or `critic-narrow` (narrow), `questions` (ask), `amend`, `reproduced` (check, bugs only), `plan-ready`, and then the rest of the demo path. The fake `codex` of the tests stands in for Codex.
 
 ### 11.5 The adapter for Jira and GitHub
 
@@ -1079,6 +1171,7 @@ vision on | off                    the kill switch
 vision doctor                      test the setup
 vision pick                        the eligible tickets, with the reason for each other one
 vision take KEY...                 start a ticket
+vision kind KEY NAME               set the kind of a ticket; an unknown kind is refused
 vision plan KEY                    show the plan
 vision approve-plan KEY HASH       approve the plan with that hash
 vision approve KEY VERB COMMIT     approve one operation in the mode ask
@@ -1192,6 +1285,8 @@ These keys act on the ticket of the live view:
 In the log, Enter on a turn shows the events of that turn. Esc closes a pager, and then the view.
 
 The key `n` opens the first thing that waits for the person as a card. On Home, this is the first thing of all tickets. If more than one thing waits, the title says which one this is, such as `2 of 3`. The left and right arrows go to the other ones. Esc closes the card, and the thing keeps waiting. After an answer, the next card shows, or the card closes with a notice.
+
+The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show `1 of N` as the other cards do.
 
 Each kind of thing has its card:
 

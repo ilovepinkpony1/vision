@@ -215,6 +215,8 @@ mod tests {
             model: model.into(),
             effort: Effort::High,
             source: Source::Default,
+            runner: crate::config::Runner::Claude,
+            fallback: None,
         }
     }
 

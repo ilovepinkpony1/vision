@@ -20,7 +20,7 @@ fn doctor_on_a_fresh_home_passes_with_one_warning() {
     run.expect_code(0);
     let starts = line_starts(&run.stdout);
     assert_eq!(
-        starts[..7],
+        starts[..8],
         [
             "ok home",
             "ok config",
@@ -28,6 +28,7 @@ fn doctor_on_a_fresh_home_passes_with_one_warning() {
             "warn heartbeat",
             "ok git",
             "ok claude",
+            "ok codex",
             "ok memory",
         ],
         "{run:?}"
@@ -56,6 +57,7 @@ fn doctor_writes_each_result_to_the_health_table() {
             "adapter",
             "archive",
             "claude",
+            "codex",
             "config",
             "git",
             "heartbeat",

@@ -59,9 +59,79 @@ pub struct Adapter {
     pub jobs: BTreeMap<String, Job>,
     /// The envs of `[envs.<name>]`, as free tables.
     pub envs: BTreeMap<String, Map<String, Value>>,
+    /// `[kinds]`: the kind of a ticket from its issue type. `None`: the tickets have no kind.
+    pub kinds: Option<Kinds>,
+    /// `[width]`: wide or narrow from the files that a document lists. `None`: no width.
+    pub width: Option<Width>,
     /// Where [`super::load`] found the folder. `None` for a parsed text.
     pub origin: Option<Origin>,
 }
+
+/// `[kinds]`: the kind of a ticket from the issue type that `observe` gives in `issue.type`.
+/// The kind names are words of the adapter. The core knows none of them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Kinds {
+    /// `map`: issue type -> kind, such as `Bug = "bug"`.
+    pub map: BTreeMap<String, String>,
+    /// `default`: the kind of an issue type that `map` does not name.
+    pub default: String,
+}
+
+impl Kinds {
+    /// Each kind name: the values of `map` and `default`, sorted, each one once.
+    pub fn names(&self) -> Vec<String> {
+        let mut names: BTreeSet<String> = self.map.values().cloned().collect();
+        names.insert(self.default.clone());
+        names.into_iter().collect()
+    }
+
+    /// True when `name` is a kind of this table.
+    pub fn has(&self, name: &str) -> bool {
+        self.default == name || self.map.values().any(|v| v == name)
+    }
+
+    /// The kind of an issue type: the value of `map` for the same text, else for the same text
+    /// in another case, else `default`.
+    pub fn of(&self, issue_type: Option<&str>) -> String {
+        let Some(found) = issue_type.map(str::trim).filter(|t| !t.is_empty()) else {
+            return self.default.clone();
+        };
+        self.map
+            .get(found)
+            .or_else(|| {
+                self.map
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(found))
+                    .map(|(_, v)| v)
+            })
+            .cloned()
+            .unwrap_or_else(|| self.default.clone())
+    }
+}
+
+/// `[width]`: a plan is wide when its document lists `files` files or more in its section
+/// `## Files`, or a file that matches one of `paths`. Else it is narrow.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Width {
+    /// The document of the ticket folder whose section `## Files` lists the changed files.
+    pub doc: String,
+    /// This many files or more is wide.
+    pub files: usize,
+    /// Globs: a listed file that matches one is wide, such as `db/**`.
+    pub paths: Vec<String>,
+}
+
+/// The word of `when` for a wide plan.
+pub const WIDE: &str = "wide";
+/// The word of `when` for a narrow plan.
+pub const NARROW: &str = "narrow";
+/// The document of `[width]` when `doc` is missing.
+pub const DEFAULT_WIDTH_DOC: &str = "plan.md";
+/// The number of files of `[width]` when `files` is missing.
+pub const DEFAULT_WIDTH_FILES: usize = 3;
+/// The keys of `on` of an ask step.
+pub const CHANGED: &str = "changed";
+pub const SAME: &str = "same";
 
 /// One `[[step]]`.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +168,9 @@ pub struct Step {
     pub before: Vec<Entry>,
     /// What runs at the entry of the step, such as `ci.run`.
     pub start: Vec<Entry>,
+    /// `when`: kind names, `wide`, or `narrow`. The kinds are ORed, the widths are ORed, and
+    /// the two groups are ANDed. A step whose `when` does not hold is skipped. Empty: always.
+    pub when: Vec<String>,
 }
 
 impl Step {
@@ -105,15 +178,90 @@ impl Step {
     pub fn expect_args_of(&self, job: &str) -> Map<String, Value> {
         self.expect_args.get(job).cloned().unwrap_or_default()
     }
+
+    /// The members of a team step, or none.
+    pub fn team(&self) -> &[Member] {
+        match &self.kind {
+            StepKind::Turn(turn) => &turn.team,
+            _ => &[],
+        }
+    }
+
+    /// The member of a team step with this agent.
+    pub fn member(&self, agent: &str) -> Option<&Member> {
+        self.team().iter().find(|m| m.agent == agent)
+    }
+
+    /// One member of a team step as a step of its own: its agent, its kind of turn, its reads
+    /// (after the reads of the step), its end facts, and its rounds. It has no `before`, no
+    /// `after`, no `fail`, and no cap: those belong to the team step. Its `next` says that
+    /// the member is done.
+    pub fn member_view(&self, member: &Member) -> Step {
+        let (reads, with) = match &self.kind {
+            StepKind::Turn(turn) => (turn.reads.clone(), turn.with.clone()),
+            _ => (Vec::new(), Map::new()),
+        };
+        let mut reads = reads;
+        for name in &member.reads {
+            if !reads.contains(name) {
+                reads.push(name.clone());
+            }
+        }
+        Step {
+            id: self.id.clone(),
+            kind: StepKind::Turn(TurnStep {
+                agent: member.agent.clone(),
+                turn: member.turn,
+                reads,
+                with,
+                findings: None,
+                team: Vec::new(),
+            }),
+            next: self.next.clone(),
+            on: BTreeMap::new(),
+            cap: None,
+            rounds: member.rounds,
+            extra_rounds: 0,
+            fail: BTreeMap::new(),
+            expects: member.expects.clone(),
+            expect_args: member.expect_args.clone(),
+            after: Vec::new(),
+            before: Vec::new(),
+            start: Vec::new(),
+            when: member.when.clone(),
+        }
+    }
 }
 
-/// The five kinds of step (section 11).
+/// One member of `team` of a turn step: one agent that works in its own turn and session, in
+/// parallel with the other members.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Member {
+    pub agent: String,
+    pub turn: TurnKind,
+    /// More documents of the ticket folder for this member. A member never reads a document
+    /// that another member of the team expects.
+    pub reads: Vec<String>,
+    pub expects: Vec<Expect>,
+    pub expect_args: BTreeMap<String, Map<String, Value>>,
+    /// `when` of the member, with the words of `when` of a step.
+    pub when: Vec<String>,
+    /// The turns that one visit gets for failed end facts of this member: `rounds` of the
+    /// member, else `rounds` of the step.
+    pub rounds: u32,
+}
+
+/// The kinds of step (section 11).
 #[derive(Clone, Debug, PartialEq)]
 pub enum StepKind {
     Turn(TurnStep),
     Job(JobStep),
     Human(HumanStep),
     Wait(WaitStep),
+    /// The cards of some documents go to the Judge and the person as one batch.
+    Ask(AskStep),
+    /// A line of a document decides where the ticket goes.
+    Check(CheckStep),
     End,
 }
 
@@ -124,25 +272,63 @@ impl StepKind {
             StepKind::Job(_) => "job",
             StepKind::Human(_) => "human",
             StepKind::Wait(_) => "wait",
+            StepKind::Ask(_) => "ask",
+            StepKind::Check(_) => "check",
             StepKind::End => "end",
         }
     }
 }
 
-/// A turn step: one agent works in a session.
+/// A turn step: one agent works in a session, or the members of `team` work in parallel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TurnStep {
-    /// The agent, such as `builder`.
+    /// The agent, such as `builder`. Empty for a team step.
     pub agent: String,
     /// The kind of turn: reader, worker, or tester.
     pub turn: TurnKind,
-    /// Documents of the ticket folder that the session gets, such as `approved-plan.md`.
+    /// Documents of the ticket folder that the session gets, such as `approved-plan.md`. A
+    /// team step gives them to each member.
     pub reads: Vec<String>,
     /// `with`: values that go into the facts file under `with`.
     pub with: Map<String, Value>,
     /// `findings`: the source of the findings that the documents of the step list, such as
     /// `review` or `qa`. The pipeline stores one `findings` row for each one. `None`: none.
     pub findings: Option<String>,
+    /// `team`: the members that work in parallel, each in its own turn and session. Empty for
+    /// a step of one agent.
+    pub team: Vec<Member>,
+}
+
+impl TurnStep {
+    /// The agents of the step: its agent, or each member of its team.
+    pub fn agents(&self) -> Vec<&str> {
+        if self.team.is_empty() {
+            vec![self.agent.as_str()]
+        } else {
+            self.team.iter().map(|m| m.agent.as_str()).collect()
+        }
+    }
+}
+
+/// An ask step: it reads the cards of its documents, and they go to the Judge and the person
+/// as one batch. `on.changed` or `on.same` says where the ticket goes after the answers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AskStep {
+    /// The documents of the ticket folder with a JSON array of cards each.
+    pub docs: Vec<String>,
+}
+
+/// A check step: a line of a document decides where the ticket goes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckStep {
+    /// The document of the ticket folder, such as `plan.md`.
+    pub doc: String,
+    /// A line equal to this text (trimmed) moves the ticket to `next`.
+    pub line: String,
+    /// A line equal to this text sets the flag needs-you: the person stops the ticket.
+    pub stop_line: Option<String>,
+    /// The step when no line holds. The move counts as an entry of that step.
+    pub fail: String,
 }
 
 /// A job step: the adapter runs one job.
@@ -563,20 +749,18 @@ impl Adapter {
             let StepKind::Turn(turn) = &step.kind else {
                 continue;
             };
-            let known = crate::models::agent(&turn.agent).is_some()
-                || self.role_file(&turn.agent).is_some()
-                || agents_dir(paths)
-                    .join(format!("{}.md", turn.agent))
-                    .is_file();
-            if !known {
-                bail!(
-                    "{}: step `{}`: the agent `{}` has no role file. Use one of {}, or write roles/{}.md in the adapter folder",
-                    self.dir.join(FILE).display(),
-                    step.id,
-                    turn.agent,
-                    crate::models::agent_names().join(", "),
-                    turn.agent
-                );
+            for agent in turn.agents() {
+                let known = crate::models::agent(agent).is_some()
+                    || self.role_file(agent).is_some()
+                    || agents_dir(paths).join(format!("{agent}.md")).is_file();
+                if !known {
+                    bail!(
+                        "{}: step `{}`: the agent `{agent}` has no role file. Use one of {}, or write roles/{agent}.md in the adapter folder",
+                        self.dir.join(FILE).display(),
+                        step.id,
+                        crate::models::agent_names().join(", "),
+                    );
+                }
             }
         }
         Ok(())
@@ -603,8 +787,8 @@ impl Problems {
     }
 }
 
-const TOP_KEYS: [&str; 8] = [
-    "name", "branch", "base", "scripts", "step", "verbs", "jobs", "envs",
+const TOP_KEYS: [&str; 10] = [
+    "name", "branch", "base", "scripts", "step", "verbs", "jobs", "envs", "kinds", "width",
 ];
 
 fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapter {
@@ -649,6 +833,8 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
     let verbs = parse_verbs(table.remove("verbs"), problems);
     let jobs = parse_jobs(table.remove("jobs"), builtin.as_deref(), problems);
     let envs = parse_envs(table.remove("envs"), problems);
+    let kinds = parse_kinds(table.remove("kinds"), problems);
+    let width = parse_width(table.remove("width"), problems);
     let steps = parse_steps(table.remove("step"), problems);
     for key in table.keys() {
         problems.add(
@@ -670,10 +856,231 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
         verbs,
         jobs,
         envs,
+        kinds,
+        width,
         origin: None,
     };
     check_links(&adapter, problems);
+    check_when(&adapter, problems);
+    check_teams(&adapter, problems);
     adapter
+}
+
+/// `[kinds]`: `map` from issue types to kinds, and `default`.
+fn parse_kinds(value: Option<toml::Value>, problems: &mut Problems) -> Option<Kinds> {
+    let value = value?;
+    let at = "[kinds]";
+    let toml::Value::Table(mut table) = value else {
+        problems.add(
+            at,
+            "it must be a table, such as [kinds] with map = { Bug = \"bug\" } and default = \"feature\"",
+        );
+        return None;
+    };
+    let mut map = BTreeMap::new();
+    match table.remove("map") {
+        None => {}
+        Some(toml::Value::Table(items)) => {
+            for (issue_type, kind) in items {
+                match kind {
+                    toml::Value::String(kind) if valid_name(&kind, false) => {
+                        map.insert(issue_type, kind);
+                    }
+                    other => problems.add(
+                        at,
+                        format!("map.{issue_type} must name a kind with letters, digits, '-', or '_', such as \"bug\", not `{other}`"),
+                    ),
+                }
+            }
+        }
+        Some(other) => problems.add(
+            at,
+            format!("map must be a table from an issue type to a kind, such as map = {{ Bug = \"bug\" }}, not `{other}`"),
+        ),
+    }
+    let default = string(table.remove("default"), at, problems);
+    for key in table.keys() {
+        problems.add(
+            at,
+            format!("`{key}` is not a key of [kinds]. The keys: map, default"),
+        );
+    }
+    let Some(default) = default else {
+        problems.add(
+            at,
+            "it needs default, the kind of an issue type that map does not name, such as default = \"feature\"",
+        );
+        return None;
+    };
+    if !valid_name(&default, false) {
+        problems.add(
+            at,
+            format!("default `{default}` is not a kind name: letters, digits, '-', or '_'"),
+        );
+    }
+    for word in [WIDE, NARROW] {
+        if default == word || map.values().any(|v| v == word) {
+            problems.add(
+                at,
+                format!("`{word}` is a word of [width], so it cannot be a kind"),
+            );
+        }
+    }
+    Some(Kinds { map, default })
+}
+
+/// `[width]`: `doc`, `files`, and `paths`.
+fn parse_width(value: Option<toml::Value>, problems: &mut Problems) -> Option<Width> {
+    let value = value?;
+    let at = "[width]";
+    let toml::Value::Table(mut table) = value else {
+        problems.add(
+            at,
+            "it must be a table, such as [width] with doc = \"plan.md\", files = 3, paths = [\"db/**\"]",
+        );
+        return None;
+    };
+    let doc =
+        string(table.remove("doc"), at, problems).unwrap_or_else(|| DEFAULT_WIDTH_DOC.to_string());
+    if !valid_document_name(&doc) {
+        problems.add(
+            at,
+            format!("doc names `{doc}`, which is not a plain file name of the ticket folder"),
+        );
+    }
+    let files = match table.remove("files") {
+        None => DEFAULT_WIDTH_FILES,
+        Some(toml::Value::Integer(n)) if (1..=10_000).contains(&n) => n as usize,
+        Some(other) => {
+            problems.add(
+                at,
+                format!("files is the number of files that makes a plan wide, such as files = 3, not `{other}`"),
+            );
+            DEFAULT_WIDTH_FILES
+        }
+    };
+    let paths = strings(table.remove("paths"), &format!("{at} paths"), problems);
+    for path in &paths {
+        if path.trim().is_empty() {
+            problems.add(at, "paths holds an empty glob");
+        }
+    }
+    for key in table.keys() {
+        problems.add(
+            at,
+            format!("`{key}` is not a key of [width]. The keys: doc, files, paths"),
+        );
+    }
+    Some(Width { doc, files, paths })
+}
+
+/// The words of each `when`: a kind of `[kinds]`, or `wide` or `narrow` with `[width]`. The end
+/// step and a wait step have no `when`, because they have no `next` to skip to.
+fn check_when(adapter: &Adapter, problems: &mut Problems) {
+    let check = |at: &str, words: &[String], problems: &mut Problems| {
+        for word in words {
+            if word == WIDE || word == NARROW {
+                if adapter.width.is_none() {
+                    problems.add(
+                        at,
+                        format!("when names `{word}`, but the adapter has no [width] that says which plan is wide"),
+                    );
+                }
+            } else if let Some(kinds) = &adapter.kinds {
+                if !kinds.has(word) {
+                    problems.add(
+                        at,
+                        format!(
+                            "when names `{word}`, which is no kind of [kinds] and not wide or narrow. The kinds: {}",
+                            kinds.names().join(", ")
+                        ),
+                    );
+                }
+            } else {
+                problems.add(
+                    at,
+                    format!("when names `{word}`, but the adapter has no [kinds], so a ticket has no kind. Add [kinds], or use wide or narrow"),
+                );
+            }
+        }
+    };
+    for step in &adapter.steps {
+        let at = format!("step `{}`", step.id);
+        check(&at, &step.when, problems);
+        for member in step.team() {
+            check(
+                &format!("{at} team member `{}`", member.agent),
+                &member.when,
+                problems,
+            );
+        }
+    }
+}
+
+/// The rules of a team: at most one member that changes the clone, no agent two times, and no
+/// member that reads a document that another member expects.
+fn check_teams(adapter: &Adapter, problems: &mut Problems) {
+    for step in &adapter.steps {
+        let team = step.team();
+        if team.is_empty() {
+            continue;
+        }
+        let at = format!("step `{}`", step.id);
+        let writers: Vec<&str> = team
+            .iter()
+            .filter(|m| m.turn != TurnKind::Reader)
+            .map(|m| m.agent.as_str())
+            .collect();
+        if writers.len() > 1 {
+            problems.add(
+                &at,
+                format!(
+                    "the team has more than one worker or tester ({}), but the clone holds one of them. Make the others readers",
+                    writers.join(", ")
+                ),
+            );
+        }
+        let mut seen = BTreeSet::new();
+        for member in team {
+            if !seen.insert(member.agent.as_str()) {
+                problems.add(
+                    &at,
+                    format!("the team names the agent `{}` more than once", member.agent),
+                );
+            }
+        }
+        let shared = match &step.kind {
+            StepKind::Turn(turn) => turn.reads.clone(),
+            _ => Vec::new(),
+        };
+        for member in team {
+            for expect in &member.expects {
+                if let Expect::Job(job) = expect {
+                    if !adapter.jobs.contains_key(job) {
+                        problems.add(&at, missing_job(job, &format!("expects job:{job}")));
+                    }
+                }
+            }
+            for other in team.iter().filter(|o| o.agent != member.agent) {
+                for name in shared.iter().chain(&member.reads) {
+                    let expected = other.expects.iter().any(|e| match e {
+                        Expect::Doc(doc) => doc == name,
+                        Expect::Gate(gate) => gate.doc == *name,
+                        _ => false,
+                    });
+                    if expected {
+                        problems.add(
+                            &at,
+                            format!(
+                                "the member `{}` reads {name}, which the member `{}` expects. A member never gets the documents of another member",
+                                member.agent, other.agent
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn check_branch(branch: &str, problems: &mut Problems) {
@@ -997,17 +1404,24 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
             "rounds",
             "fail",
             "extra_rounds",
+            "team",
+            "when",
         ],
         "job" => &[
-            "job", "args", "expects", "before", "after", "start", "next", "cap",
+            "job", "args", "expects", "before", "after", "start", "next", "cap", "when",
         ],
-        "human" => &["action", "expects", "after", "start", "next", "cap"],
+        "human" => &["action", "expects", "after", "start", "next", "cap", "when"],
         "wait" => &[
             "start", "watch", "on", "every", "wait", "limit", "cap", "from",
         ],
+        "ask" => &["docs", "on", "cap", "when"],
+        "check" => &["doc", "line", "stop_line", "next", "fail", "cap", "when"],
         _ => &[],
     }
 }
+
+/// The step kinds that the loader knows.
+const STEP_KINDS: [&str; 7] = ["turn", "job", "human", "wait", "ask", "check", "end"];
 
 fn parse_steps(value: Option<toml::Value>, problems: &mut Problems) -> Vec<Step> {
     let Some(value) = value else {
@@ -1063,13 +1477,18 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         );
     }
     let Some(kind) = string(table.remove("kind"), &at, problems) else {
-        problems.add(&at, "it has no kind. Use turn, job, human, wait, or end");
-        return None;
-    };
-    if !["turn", "job", "human", "wait", "end"].contains(&kind.as_str()) {
         problems.add(
             &at,
-            format!("the kind `{kind}` is not known. Use turn, job, human, wait, or end"),
+            "it has no kind. Use turn, job, human, wait, ask, check, or end",
+        );
+        return None;
+    };
+    if !STEP_KINDS.contains(&kind.as_str()) {
+        problems.add(
+            &at,
+            format!(
+                "the kind `{kind}` is not known. Use turn, job, human, wait, ask, check, or end"
+            ),
         );
         return None;
     }
@@ -1081,13 +1500,27 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         .collect();
     for key in extra {
         table.remove(&key);
-        problems.add(
-            &at,
-            format!("the key `{key}` does not belong to a {kind} step"),
-        );
+        let why = match (kind.as_str(), key.as_str()) {
+            ("end", "when") => "the end step has no when: a ticket always ends there".to_string(),
+            ("wait", "when") => "a wait step has no when: it has no next to skip to".to_string(),
+            _ => format!("the key `{key}` does not belong to a {kind} step"),
+        };
+        problems.add(&at, why);
     }
     let next = string(table.remove("next"), &at, problems);
-    let cap = string(table.remove("cap"), &at, problems);
+    let cap = match table.remove("cap") {
+        None => None,
+        Some(toml::Value::Integer(n)) if (1..=1000).contains(&n) => Some(n.to_string()),
+        Some(toml::Value::String(name)) => Some(name),
+        Some(other) => {
+            problems.add(
+                &at,
+                format!("cap is a key of [caps], such as cap = \"review_rounds\", or a number of entries, such as cap = 2, not `{other}`"),
+            );
+            None
+        }
+    };
+    let when = strings(table.remove("when"), &format!("{at} when"), problems);
     let rounds = match table.remove("rounds") {
         None => DEFAULT_ROUNDS,
         Some(toml::Value::Integer(n)) if (1..=i64::from(MAX_ROUNDS)).contains(&n) => n as u32,
@@ -1107,7 +1540,22 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         &at,
         problems,
     );
-    let fail = fail_routes(table.remove("fail"), &expects, &at, problems);
+    let fail_value = table.remove("fail");
+    let (fail, check_fail) = if kind == "check" {
+        let target = string(fail_value, &at, problems);
+        if target.is_none() {
+            problems.add(
+                &at,
+                "a check step names the step of a failed check in fail, such as fail = \"investigate\"",
+            );
+        }
+        (BTreeMap::new(), target.unwrap_or_default())
+    } else {
+        (
+            fail_routes(fail_value, &expects, &at, problems),
+            String::new(),
+        )
+    };
     if kind != "turn" && expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
         problems.add(
             &at,
@@ -1118,7 +1566,74 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
     let before = entries(table.remove("before"), &format!("{at} before"), problems);
     let start = entries(table.remove("start"), &format!("{at} start"), problems);
     let kind = match kind.as_str() {
-        "turn" => StepKind::Turn(turn_step(&mut table, &at, problems)),
+        "turn" => {
+            let turn = turn_step(&mut table, &at, problems, rounds);
+            if !turn.team.is_empty() {
+                if !expects.is_empty() {
+                    problems.add(
+                        &at,
+                        "a step with team names the end facts of each member in team, so it has no expects",
+                    );
+                }
+                if !fail.is_empty() || turn.findings.is_some() {
+                    problems.add(
+                        &at,
+                        "a step with team has no fail and no findings: each member has its own end facts and rounds",
+                    );
+                }
+            }
+            StepKind::Turn(turn)
+        }
+        "ask" => {
+            let docs = strings(table.remove("docs"), &format!("{at} docs"), problems);
+            if docs.is_empty() {
+                problems.add(
+                    &at,
+                    "an ask step names the documents of its cards, such as docs = [\"questions-analyst.json\"]",
+                );
+            }
+            for name in &docs {
+                if !valid_document_name(name) {
+                    problems.add(
+                        &at,
+                        format!("docs names `{name}`, which is not a plain file name of the ticket folder"),
+                    );
+                }
+            }
+            StepKind::Ask(AskStep { docs })
+        }
+        "check" => {
+            let doc = string(table.remove("doc"), &at, problems).unwrap_or_default();
+            if !valid_document_name(&doc) {
+                problems.add(
+                    &at,
+                    "a check step names the document that it reads, such as doc = \"plan.md\"",
+                );
+            }
+            let line = string(table.remove("line"), &at, problems).unwrap_or_default();
+            if line.trim().is_empty() || line.contains(['\n', '\r']) {
+                problems.add(
+                    &at,
+                    "a check step names the line that moves the ticket on, such as line = \"Reproduced: yes\"",
+                );
+            }
+            let stop_line = string(table.remove("stop_line"), &at, problems);
+            if stop_line
+                .as_deref()
+                .is_some_and(|l| l.trim().is_empty() || l.contains(['\n', '\r']))
+            {
+                problems.add(
+                    &at,
+                    "stop_line is one line, such as stop_line = \"Decision: drop\"",
+                );
+            }
+            StepKind::Check(CheckStep {
+                doc,
+                line: line.trim().to_string(),
+                stop_line: stop_line.map(|l| l.trim().to_string()),
+                fail: check_fail,
+            })
+        }
         "job" => {
             let job = string(table.remove("job"), &at, problems).unwrap_or_default();
             if job.is_empty() {
@@ -1141,11 +1656,25 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         _ => StepKind::End,
     };
     let on = match &kind {
-        StepKind::Wait(_) | StepKind::Turn(_) => on_table(table.remove("on"), &at, problems),
+        StepKind::Wait(_) | StepKind::Turn(_) | StepKind::Ask(_) => {
+            on_table(table.remove("on"), &at, problems)
+        }
         _ => BTreeMap::new(),
     };
     match &kind {
         StepKind::End => {}
+        StepKind::Ask(_) => {
+            let keys: Vec<&str> = on.keys().map(String::as_str).collect();
+            if keys != [CHANGED, SAME] {
+                problems.add(
+                    &at,
+                    format!(
+                        "on of an ask step has exactly the keys changed and same, such as on = {{ changed = \"amend\", same = \"reproduced\" }}, not {}",
+                        if keys.is_empty() { "none".to_string() } else { keys.join(", ") }
+                    ),
+                );
+            }
+        }
         StepKind::Turn(turn) if !on.is_empty() => {
             if turn.findings.is_none() {
                 problems.add(
@@ -1204,6 +1733,7 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         after,
         before,
         start,
+        when,
     })
 }
 
@@ -1514,17 +2044,9 @@ fn check_doc_refs(value: &Value) -> Result<(), String> {
     }
 }
 
-fn turn_step(table: &mut Table, at: &str, problems: &mut Problems) -> TurnStep {
-    let agent = string(table.remove("agent"), at, problems).unwrap_or_default();
-    if agent.is_empty() {
-        problems.add(
-            at,
-            "a turn step names its agent, such as agent = \"builder\"",
-        );
-    } else if !valid_name(&agent, false) {
-        problems.add(at, format!("`{agent}` is not a valid agent name"));
-    }
-    let turn = match string(table.remove("turn"), at, problems).as_deref() {
+/// The kind of turn of `turn = "..."`.
+fn turn_kind(value: Option<toml::Value>, at: &str, problems: &mut Problems) -> TurnKind {
+    match string(value, at, problems).as_deref() {
         Some("reader") => TurnKind::Reader,
         Some("worker") => TurnKind::Worker,
         Some("tester") => TurnKind::Tester,
@@ -1542,9 +2064,13 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems) -> TurnStep {
             );
             TurnKind::Reader
         }
-    };
-    let reads = strings(table.remove("reads"), &format!("{at} reads"), problems);
-    for name in &reads {
+    }
+}
+
+/// A list of document names of the ticket folder, such as `reads`.
+fn document_names(value: Option<toml::Value>, at: &str, problems: &mut Problems) -> Vec<String> {
+    let names = strings(value, &format!("{at} reads"), problems);
+    for name in &names {
         if !valid_document_name(name) {
             problems.add(
                 at,
@@ -1554,6 +2080,113 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems) -> TurnStep {
             );
         }
     }
+    names
+}
+
+/// `team` of a turn step: a list of tables, each with `agent`, `turn`, `expects`, and the
+/// optional `reads`, `when`, and `rounds`.
+fn team(value: toml::Value, at: &str, problems: &mut Problems, rounds: u32) -> Vec<Member> {
+    let toml::Value::Array(items) = value else {
+        problems.add(
+            at,
+            "team must be a list of members, such as team = [{ agent = \"cause\", turn = \"reader\", expects = [\"doc:findings-cause.md\"] }]",
+        );
+        return Vec::new();
+    };
+    if items.is_empty() {
+        problems.add(at, "team names no member");
+    }
+    let mut members = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let toml::Value::Table(mut fields) = item else {
+            problems.add(at, format!("team member {} must be a table", index + 1));
+            continue;
+        };
+        let agent = string(fields.remove("agent"), at, problems).unwrap_or_default();
+        let here = format!("{at} team member `{agent}`");
+        if agent.is_empty() || !valid_name(&agent, false) {
+            problems.add(
+                &format!("{at} team member {}", index + 1),
+                "a member names its agent, such as agent = \"cause\"",
+            );
+        }
+        let turn = turn_kind(fields.remove("turn"), &here, problems);
+        let reads = document_names(fields.remove("reads"), &here, problems);
+        let (expects, expect_args) = expects(fields.remove("expects"), &here, problems);
+        if expects.is_empty() {
+            problems.add(
+                &here,
+                "a member names its end facts, such as expects = [\"doc:findings-cause.md\"]",
+            );
+        }
+        let when = strings(fields.remove("when"), &format!("{here} when"), problems);
+        let member_rounds = match fields.remove("rounds") {
+            None => rounds,
+            Some(toml::Value::Integer(n)) if (1..=i64::from(MAX_ROUNDS)).contains(&n) => n as u32,
+            Some(other) => {
+                problems.add(
+                    &here,
+                    format!("rounds is a number from 1 to {MAX_ROUNDS}, not `{other}`"),
+                );
+                rounds
+            }
+        };
+        for key in fields.keys() {
+            problems.add(
+                &here,
+                format!("`{key}` is not a key of a member. The keys: agent, turn, expects, reads, when, rounds"),
+            );
+        }
+        members.push(Member {
+            agent,
+            turn,
+            reads,
+            expects,
+            expect_args,
+            when,
+            rounds: member_rounds,
+        });
+    }
+    members
+}
+
+fn turn_step(table: &mut Table, at: &str, problems: &mut Problems, rounds: u32) -> TurnStep {
+    let members = match table.remove("team") {
+        Some(value) => team(value, at, problems, rounds),
+        None => Vec::new(),
+    };
+    if !members.is_empty() {
+        for key in ["agent", "turn"] {
+            if table.remove(key).is_some() {
+                problems.add(
+                    at,
+                    format!("a step with team names the {key} of each member in team, so it has no {key}"),
+                );
+            }
+        }
+        let reads = document_names(table.remove("reads"), at, problems);
+        let with = object(table.remove("with"), &format!("{at} with"), problems);
+        let findings = string(table.remove("findings"), at, problems);
+        return TurnStep {
+            agent: String::new(),
+            turn: TurnKind::Reader,
+            reads,
+            with,
+            findings,
+            team: members,
+        };
+    }
+    let agent = string(table.remove("agent"), at, problems).unwrap_or_default();
+    if agent.is_empty() {
+        problems.add(
+            at,
+            "a turn step names its agent, such as agent = \"builder\"",
+        );
+    } else if !valid_name(&agent, false) {
+        problems.add(at, format!("`{agent}` is not a valid agent name"));
+    }
+    let turn = turn_kind(table.remove("turn"), at, problems);
+    let reads = document_names(table.remove("reads"), at, problems);
     let with = object(table.remove("with"), &format!("{at} with"), problems);
     let findings = string(table.remove("findings"), at, problems);
     if let Some(source) = &findings {
@@ -1570,6 +2203,7 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems) -> TurnStep {
         reads,
         with,
         findings,
+        team: Vec::new(),
     }
 }
 
@@ -1712,13 +2346,21 @@ fn check_links(adapter: &Adapter, problems: &mut Problems) {
             }
         }
         if let Some(cap) = &step.cap {
-            if !caps.contains(cap) {
+            if !caps.contains(cap) && cap.parse::<u32>().is_err() {
                 problems.add(
                     &at,
                     format!(
-                        "cap `{cap}` is not a key of [caps]. The keys: {}",
+                        "cap `{cap}` is not a key of [caps] or a number. The keys: {}",
                         caps.join(", ")
                     ),
+                );
+            }
+        }
+        if let StepKind::Check(check) = &step.kind {
+            if !check.fail.is_empty() && !ids.contains(check.fail.as_str()) {
+                problems.add(
+                    &at,
+                    format!("fail names the step `{}`, which does not exist", check.fail),
                 );
             }
         }
@@ -2850,5 +3492,84 @@ url = "http://localhost:3000"
             adapter.role_file("planner"),
             Some(adapter_dir.join("roles/planner.md"))
         );
+    }
+
+    /// The adapter of the demo with the investigation before the plan.
+    const INVESTIGATE: &str = include_str!("../../adapters/demo-investigate/adapter.toml");
+
+    /// The investigation adapter with one text replaced.
+    fn investigate_with(old: &str, new: &str) -> String {
+        assert!(INVESTIGATE.contains(old), "{old}");
+        INVESTIGATE.replacen(old, new, 1)
+    }
+
+    #[test]
+    fn the_investigation_path_parses_kinds_width_teams_and_the_new_steps() {
+        let adapter = parse(INVESTIGATE).unwrap();
+        assert_eq!(adapter.kinds.as_ref().unwrap().of(Some("Bug")), "bug");
+        assert_eq!(adapter.kinds.as_ref().unwrap().of(Some("Epic")), "feature");
+        assert_eq!(
+            adapter.kinds.as_ref().unwrap().names(),
+            ["bug", "chore", "feature"]
+        );
+        let width = adapter.width.as_ref().unwrap();
+        assert_eq!((width.doc.as_str(), width.files), ("plan.md", 3));
+        assert_eq!(width.paths, ["db/**"]);
+        let team = adapter.step("investigate").unwrap();
+        let StepKind::Turn(turn) = &team.kind else {
+            panic!("{team:?}");
+        };
+        let agents: Vec<&str> = turn.team.iter().map(|m| m.agent.as_str()).collect();
+        assert_eq!(agents, ["repro", "cause", "history", "points", "scope"]);
+        assert_eq!(turn.team[0].turn, TurnKind::Worker);
+        assert_eq!(turn.team[0].when, ["bug"]);
+        assert_eq!(adapter.step("critic").unwrap().when, ["wide"]);
+        let StepKind::Ask(ask) = &adapter.step("questions").unwrap().kind else {
+            panic!("questions");
+        };
+        assert_eq!(
+            ask.docs,
+            ["questions-analyst.json", "questions-critic.json"]
+        );
+        let check = adapter.step("reproduced").unwrap();
+        let StepKind::Check(gate) = &check.kind else {
+            panic!("reproduced");
+        };
+        assert_eq!(gate.line, "Reproduced: yes");
+        assert_eq!(gate.stop_line.as_deref(), Some("Decision: drop"));
+        assert_eq!(gate.fail, "investigate");
+        assert_eq!(check.cap.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn the_loader_refuses_a_wrong_team_when_kinds_width_ask_or_check() {
+        let two_workers = investigate_with(
+            "{ agent = \"cause\", turn = \"reader\"",
+            "{ agent = \"cause\", turn = \"worker\"",
+        );
+        let reads_other = investigate_with(
+            "{ agent = \"cause\", turn = \"reader\", expects",
+            "{ agent = \"cause\", turn = \"reader\", reads = [\"findings-repro.md\"], expects",
+        );
+        let cases: Vec<(String, &str)> = vec![
+            (two_workers, "step `investigate`: the team has more than one worker or tester (repro, cause)"),
+            (reads_other, "the member `cause` reads findings-repro.md, which the member `repro` expects"),
+            (investigate_with("when = [\"wide\"]", "when = [\"huge\"]"), "step `critic`: when names `huge`, which is no kind of [kinds] and not wide or narrow"),
+            (investigate_with("[width]\ndoc = \"plan.md\"", "[sizes]\ndoc = \"plan.md\""), "step `critic`: when names `wide`, but the adapter has no [width]"),
+            (investigate_with("[kinds]\nmap", "[types]\nmap"), "when names `bug`, but the adapter has no [kinds], so a ticket has no kind"),
+            (investigate_with("default = \"feature\"\n", ""), "[kinds]: it needs default"),
+            (investigate_with("Task = \"chore\"", "Task = \"wide\""), "`wide` is a word of [width], so it cannot be a kind"),
+            (investigate_with("same = \"reproduced\"", "kept = \"reproduced\""), "step `questions`: on of an ask step has exactly the keys changed and same"),
+            (investigate_with("fail = \"investigate\"\ncap = 2", "fail = \"dig\"\ncap = 2"), "step `reproduced`: fail names the step `dig`, which does not exist"),
+            (investigate_with("line = \"Reproduced: yes\"\n", ""), "step `reproduced`: a check step names the line that moves the ticket on"),
+            (investigate_with("docs = [\"questions-analyst.json\", \"questions-critic.json\"]\n", ""), "step `questions`: an ask step names the documents of its cards"),
+            (investigate_with("id = \"done\"\nkind = \"end\"", "id = \"done\"\nkind = \"end\"\nwhen = [\"bug\"]"), "step `done`: the end step has no when"),
+            (investigate_with("reads = [\"issue.json\", \"refine.md\"]\nteam", "agent = \"repro\"\nreads = [\"issue.json\", \"refine.md\"]\nteam"), "step `investigate`: a step with team names the agent of each member in team, so it has no agent"),
+            (investigate_with("{ agent = \"history\", turn = \"reader\"", "{ agent = \"cause\", turn = \"reader\""), "step `investigate`: the team names the agent `cause` more than once"),
+        ];
+        for (text, expected) in cases {
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
     }
 }

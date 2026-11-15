@@ -10,6 +10,10 @@ env = {}                          # more variables with a fixed value that a ses
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 plugins = []                      # folders of Claude Code plugins for each work turn: their skills, with the tool Skill. Never writable in a turn.
 
+[codex]                           # the Codex CLI for the reader turns of an agent whose runner is codex. It uses its own login.
+bin = "codex"
+# price = { input = 1.25, output = 10.0 }   # dollars for one million tokens. Without it, a turn on Codex costs 0, and only its tokens count.
+
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"
 email = ""                    # "" means: an address that names nobody. A bot: "<id>+<app>[bot]@users.noreply.github.com"

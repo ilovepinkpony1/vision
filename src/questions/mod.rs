@@ -19,6 +19,7 @@
 //! The pipeline must not resume a turn whose result has the kind `questions`, and must not
 //! start a Judge turn: this module owns both.
 
+pub mod batch;
 pub mod card;
 mod commands;
 mod intake;
@@ -132,6 +133,11 @@ impl Agents {
         if let Some(known) = self.0.get(turn) {
             return Ok(known.clone());
         }
+        if let Some(found) = batch::parse(turn) {
+            let found = ("agent".to_string(), found.step);
+            self.0.insert(turn.to_string(), found.clone());
+            return Ok(found);
+        }
         let row = ledger.turn(turn)?;
         let found = (
             row.as_ref()
@@ -158,7 +164,13 @@ impl Question {
             .answer
             .as_deref()
             .and_then(|a| serde_json::from_str(a).ok());
-        let (agent, step) = agents.of(ledger, &row.turn)?;
+        let (mut agent, step) = agents.of(ledger, &row.turn)?;
+        // A card of the batch of an ask step names the agent that wrote it.
+        if batch::parse(&row.turn).is_some() {
+            if let Some(by) = batch::asker(&row.card) {
+                agent = by;
+            }
+        }
         Ok(Question {
             row,
             card,

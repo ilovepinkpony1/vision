@@ -94,6 +94,7 @@ pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
         check_heartbeat(ctx),
         check_git(ctx),
         check_claude(ctx),
+        check_codex(ctx),
     ];
     checks.extend(check_plugins(ctx));
     checks.push(check_memory(ctx));
@@ -478,6 +479,129 @@ fn check_claude(ctx: &Ctx) -> Check {
             ),
         ),
     }
+}
+
+/// The Codex CLI: not used, or its path and its version. The test asks the binary only for its
+/// version: it makes no model call. A missing binary is a warning, because each agent on Codex
+/// has its fallback on Claude.
+fn check_codex(ctx: &Ctx) -> Check {
+    let config = match ctx.config() {
+        Ok(config) => config,
+        Err(e) => return Check::new("codex", Level::Fail, format!("{e:#}")),
+    };
+    // The agents of the steps of the adapter, or each agent when the adapter does not load.
+    let named: Option<Vec<String>> = crate::adapter::load(ctx).ok().map(|a| {
+        a.steps
+            .iter()
+            .filter_map(|s| match &s.kind {
+                crate::adapter::StepKind::Turn(turn) => Some(turn.agents()),
+                _ => None,
+            })
+            .flatten()
+            .map(str::to_string)
+            .collect()
+    });
+    let users: Vec<&str> = crate::models::AGENTS
+        .iter()
+        .filter(|spec| {
+            named
+                .as_ref()
+                .is_none_or(|n| n.iter().any(|a| a == spec.name))
+        })
+        .filter(|spec| {
+            crate::models::choice(config, spec.name)
+                .is_ok_and(|c| c.runner == crate::config::Runner::Codex)
+        })
+        .map(|spec| spec.name)
+        .collect();
+    if users.is_empty() {
+        return Check::new("codex", Level::Ok, "not used: no agent runs on Codex");
+    }
+    let bin = match ctx.codex_bin() {
+        Ok(bin) => bin,
+        Err(e) => return Check::new("codex", Level::Fail, format!("{e:#}")),
+    };
+    let Some(path) = find_program(&bin) else {
+        return Check::new(
+            "codex",
+            Level::Warn,
+            format!(
+                "`{bin}` is not found, so {} run on their fallback with Claude. Install the Codex CLI, or set codex.bin in config.toml or VISION_CODEX_BIN",
+                users.join(", ")
+            ),
+        );
+    };
+    // The same test of the sandbox as at the start of each turn on Codex, with no model call.
+    use crate::turn::codex;
+    let hidden = codex::hidden_paths(crate::paths::user_home().ok().as_deref(), ctx.paths.home());
+    let test = ctx.paths.home().join(format!(
+        ".doctor-{}-{}",
+        codex::SANDBOX_TEST,
+        std::process::id()
+    ));
+    let program = path.display().to_string();
+    if let Some(problem) =
+        codex::sandbox_problem(&program, &test, &codex::permission_args(&hidden, &[]))
+    {
+        return Check::new(
+            "codex",
+            Level::Warn,
+            format!(
+                "{problem}, so {} run on their fallback with Claude",
+                users.join(", ")
+            ),
+        );
+    }
+    match program_version(&path) {
+        Some(version) => Check::new(
+            "codex",
+            Level::Ok,
+            format!(
+                "{} ({version}) for {}. Its sandbox hides the home of Vision and the private folders",
+                path.display(),
+                users.join(", ")
+            ),
+        ),
+        None => Check::new(
+            "codex",
+            Level::Warn,
+            format!(
+                "{} did not say its version in 10 seconds, so {} can fall back to Claude",
+                path.display(),
+                users.join(", ")
+            ),
+        ),
+    }
+}
+
+/// The first line of `<program> --version`, or `None` after 10 seconds or a failure.
+fn program_version(path: &std::path::Path) -> Option<String> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next()?.trim().to_string();
+    (output.status.success() && !line.is_empty()).then_some(line)
 }
 
 fn check_memory(ctx: &Ctx) -> Check {

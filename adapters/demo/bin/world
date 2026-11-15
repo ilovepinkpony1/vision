@@ -10,6 +10,7 @@
     world request-changes ROOT PR [--author A]
     world merge ROOT PR                  merge the pull request into main
     world status ROOT KEY STATUS         set the status of a ticket
+    world type ROOT KEY TYPE             set the issue type of a ticket, such as Bug, Story, or Task
     world show ROOT                      print the world as JSON
 
 Only a person or a test runs it; the executor never does.
@@ -162,6 +163,18 @@ def cmd_status(args):
     print("%s is %s" % (args.key, args.status))
 
 
+def cmd_type(args):
+    world = world_at(args.root)
+    with world.lock():
+        tracker = world.tracker()
+        ticket = world.ticket(tracker, args.key)
+        if ticket is None:
+            raise w.Failure("the tracker has no ticket %s" % args.key)
+        ticket["type"] = args.type
+        world.save("tracker.json", tracker)
+    print("%s is a %s" % (args.key, args.type))
+
+
 def cmd_show(args):
     world = world_at(args.root)
     print(json.dumps({"tracker": world.tracker(), "prs": world.prs(), "ci": world.ci()}, indent=2, sort_keys=True))
@@ -207,6 +220,11 @@ def main():
     p.add_argument("key")
     p.add_argument("status")
     p.set_defaults(run=cmd_status)
+    p = sub.add_parser("type", help="set the issue type of a ticket")
+    p.add_argument("root")
+    p.add_argument("key")
+    p.add_argument("type")
+    p.set_defaults(run=cmd_type)
     p = sub.add_parser("show", help="print the world as JSON")
     p.add_argument("root")
     p.set_defaults(run=cmd_show)

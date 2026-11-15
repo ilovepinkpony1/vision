@@ -39,6 +39,9 @@ pub struct Counts {
     pub seen: Option<Seen>,
     /// When the end step finished the ticket.
     pub finished: Option<String>,
+    /// The kind of the ticket, a kind name of `[kinds]` of the adapter: decided at the first
+    /// observe after the take, or set by `vision kind`. `None` with no `[kinds]`.
+    pub kind: Option<String>,
 }
 
 /// One visit of a step: from its entry to the move to the next step.
@@ -86,6 +89,15 @@ pub struct Visit {
     /// `<index>:<label>`, so that each one runs one time for a visit, also while a later entry
     /// waits for an approval or a reconcile.
     pub before_done: Vec<String>,
+    /// A team step: the members whose end facts held in an earlier visit that `vision retry`
+    /// replaced. They do not start again.
+    pub team_held: Vec<String>,
+    /// A team step: more documents for the later turns of each member, by agent, such as the
+    /// answers of its read verbs. A member never gets those of another member.
+    pub member_extra: BTreeMap<String, Vec<String>>,
+    /// The agents that fell back from Codex to Claude in this visit, each with the number of
+    /// its turns of the visit before the fallback. Those turns no longer count.
+    pub fallback: BTreeMap<String, u32>,
 }
 
 impl Visit {
@@ -164,6 +176,7 @@ impl Counts {
             *entries += 1;
         }
         let (agent, action) = match &step.kind {
+            StepKind::Turn(turn) if !turn.team.is_empty() => (None, None),
             StepKind::Turn(turn) => (Some(turn.agent.clone()), None),
             StepKind::Human(human) => (None, Some(human.action.clone())),
             _ => (None, None),
@@ -225,7 +238,12 @@ pub fn flags_text(flags: &[String]) -> String {
 /// What a step waits on, for the `spans` row.
 pub fn waits_on(step: &Step) -> String {
     match &step.kind {
+        StepKind::Turn(turn) if !turn.team.is_empty() => {
+            format!("team:{}", turn.agents().join(","))
+        }
         StepKind::Turn(turn) => format!("agent:{}", turn.agent),
+        StepKind::Ask(_) => "cards".to_string(),
+        StepKind::Check(check) => format!("check:{}", check.doc),
         StepKind::Job(job) => format!("job:{}", job.job),
         StepKind::Human(human) => format!("person:{}", human.action),
         StepKind::Wait(wait) => format!("watch:{}", wait.watch),

@@ -740,11 +740,14 @@ fn a_turn_that_asks_for_facts_gets_the_read_verbs_and_a_refusal_for_each_other_v
     );
     assert!(world.clone().join(".vision/issue-DEMO-13.json").is_file());
     assert_eq!(world.acts_of("git.push"), 0);
-    // Each turn knows the facts that it can ask for: the read verbs, with their `about`.
+    // Each turn knows the facts that it can ask for: the read verbs, with their `about`, and
+    // the two verbs of git that the core serves.
     for turn in &turns {
         let requests = facts_of(&world, &turn.id)["requests"].clone();
-        assert_eq!(requests.as_array().unwrap().len(), 1, "{requests}");
+        assert_eq!(requests.as_array().unwrap().len(), 3, "{requests}");
         assert_eq!(requests[0]["verb"], "tracker.issue");
+        assert_eq!(requests[1]["verb"], "git.log");
+        assert_eq!(requests[2]["verb"], "git.blame");
         assert!(
             requests[0]["about"].as_str().unwrap().contains("args: key"),
             "{requests}"

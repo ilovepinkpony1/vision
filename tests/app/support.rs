@@ -65,6 +65,7 @@ pub fn view(key: &str, title: &str, step: &str, now: &str) -> TicketView {
         title: (!title.is_empty()).then(|| title.to_string()),
         step: Some(step.into()),
         kind: Some("turn".into()),
+        ticket_kind: None,
         now: now.into(),
         works: None,
         flags: Vec::new(),

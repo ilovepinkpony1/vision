@@ -11,6 +11,8 @@ use crate::util::log::Logger;
 
 /// The variable that points `vision` at a different Claude Code binary, such as a fake in tests.
 pub const CLAUDE_BIN_ENV: &str = "VISION_CLAUDE_BIN";
+/// The variable that points `vision` at a different Codex binary, such as a fake in tests.
+pub const CODEX_BIN_ENV: &str = "VISION_CODEX_BIN";
 
 /// The context of one command. The configuration loads on first use, so that a command such as
 /// `vision prompt` never reads it, and `vision init` can run before the file exists.
@@ -60,6 +62,14 @@ impl Ctx {
         match std::env::var(CLAUDE_BIN_ENV) {
             Ok(bin) if !bin.is_empty() => Ok(bin),
             _ => Ok(self.config()?.claude.bin.clone()),
+        }
+    }
+
+    /// The Codex binary: `VISION_CODEX_BIN` when it is set, else `codex.bin` of the configuration.
+    pub fn codex_bin(&self) -> Result<String> {
+        match std::env::var(CODEX_BIN_ENV) {
+            Ok(bin) if !bin.is_empty() => Ok(bin),
+            _ => Ok(self.config()?.codex.bin.clone()),
         }
     }
 

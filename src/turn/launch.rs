@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::config::Effort;
+use crate::config::{CodexPrice, Effort, Runner};
 use crate::ctx::Ctx;
 use crate::ledger::turns::{NewTurn, Window};
 use crate::ledger::{Event, Ledger};
@@ -102,6 +102,13 @@ pub struct LaunchRequest {
     /// True when a failed turn gets no automatic resume, such as a replay turn that nobody reads.
     #[serde(default)]
     pub no_retry: bool,
+    /// A runner that replaces the runner of the agent, such as Claude for the fallback of an
+    /// agent on Codex.
+    #[serde(default)]
+    pub runner: Option<Runner>,
+    /// True for a member of a team step: its result can never be `questions`.
+    #[serde(default)]
+    pub member: bool,
 }
 
 impl LaunchRequest {
@@ -131,6 +138,8 @@ impl LaunchRequest {
             time_limit_secs: None,
             retry_of: None,
             no_retry: false,
+            runner: None,
+            member: false,
         }
     }
 }
@@ -168,6 +177,22 @@ pub struct Plan {
     pub effort: Effort,
     /// The result schema in `agents/`.
     pub schema: String,
+    /// The program of the turn: Claude Code, or the Codex CLI for a reader.
+    #[serde(default = "claude_runner")]
+    pub runner: Runner,
+    /// A turn on Codex: the file of its prompt, which goes to standard input.
+    #[serde(default)]
+    pub prompt_file: Option<PathBuf>,
+    /// A turn on Codex: the file where Codex writes the last message of the agent.
+    #[serde(default)]
+    pub last_message: Option<PathBuf>,
+    /// A turn on Codex: the price of its tokens at the launch.
+    #[serde(default)]
+    pub price: Option<CodexPrice>,
+}
+
+fn claude_runner() -> Runner {
+    Runner::Claude
 }
 
 /// `launch.json` of a turn folder.
@@ -400,10 +425,22 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     if let Some(effort) = request.effort {
         choice.effort = effort;
     }
+    let runner = request.runner.unwrap_or(choice.runner);
+    if runner == Runner::Codex && (request.kind != TurnKind::Reader || alone) {
+        bail!(
+            "the {} turn of {} cannot run on Codex: only a reader turn of a work agent runs there. Run `vision model set {} <model> --runner claude`",
+            request.kind,
+            request.agent,
+            request.agent
+        );
+    }
     // The supervisor starts the binary with the environment of the session, and `claude.env`
     // can give that session a `PATH` of its own. So a plain name is resolved here, with the
     // `PATH` of this process. A name that is not found stays, and the start names the problem.
-    let program = ctx.claude_bin()?;
+    let program = match runner {
+        Runner::Claude => ctx.claude_bin()?,
+        Runner::Codex => ctx.codex_bin()?,
+    };
     let program = crate::util::process::find_program(&program)
         .map_or(program, |path| path.display().to_string());
     let session = request.resumes.clone().unwrap_or_else(ids::new_session_id);
@@ -447,11 +484,13 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
 
         // The fixed values of `claude.env` come first, so that a value of the runner wins.
         let mut env_set = config.claude.env.clone();
-        if let Some(dir) = config.claude_config_dir(paths)? {
-            env_set.insert("CLAUDE_CONFIG_DIR".into(), dir.display().to_string());
-        }
-        if settings::sandboxed(request.kind) {
-            env_set.insert("GIT_CONFIG_GLOBAL".into(), gitconfig.display().to_string());
+        if runner == Runner::Claude {
+            if let Some(dir) = config.claude_config_dir(paths)? {
+                env_set.insert("CLAUDE_CONFIG_DIR".into(), dir.display().to_string());
+            }
+            if settings::sandboxed(request.kind) {
+                env_set.insert("GIT_CONFIG_GLOBAL".into(), gitconfig.display().to_string());
+            }
         }
         let tools = settings::tools(request.kind, skills);
         let mode = settings::permission_mode(request.kind);
@@ -494,6 +533,37 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         for dir in &plugins.dirs {
             args.extend(["--plugin-dir".into(), dir.display().to_string()]);
         }
+        let (mut prompt_file, mut last_message) = (None, None);
+        if runner == Runner::Codex {
+            let last = turn.dir.join(super::codex::LAST_MESSAGE);
+            // The commands of the turn never read the home of Vision or a private folder.
+            // The working folder and the folders of `sandbox.allow_read` stay readable: the
+            // same list that a worker of Claude reads.
+            let hidden =
+                super::codex::hidden_paths(crate::paths::user_home().ok().as_deref(), paths.home());
+            let mut readable = vec![workdir.clone()];
+            readable.extend(add_dirs.iter().cloned());
+            for entry in &config.sandbox.allow_read {
+                readable.push(crate::paths::expand_tilde(entry).with_context(|| {
+                    format!("could not read sandbox.allow_read entry `{entry}`")
+                })?);
+            }
+            args = super::codex::args(
+                &workdir.display().to_string(),
+                &choice.model,
+                choice.effort,
+                &last.display().to_string(),
+                request.resumes.as_deref(),
+                &super::codex::permission_args(&hidden, &readable),
+            );
+            let file = turn.dir.join(super::codex::PROMPT_FILE);
+            atomic_write(
+                &file,
+                super::codex::prompt(&role, &first_message(&id), &schema).as_bytes(),
+            )?;
+            prompt_file = Some(file);
+            last_message = Some(last);
+        }
         let plan = Plan {
             turn: id.to_string(),
             ticket: request.ticket.to_string(),
@@ -517,6 +587,10 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             model: choice.model.clone(),
             effort: choice.effort,
             schema: roles::schema_name(&request.agent).into(),
+            runner,
+            prompt_file,
+            last_message,
+            price: config.codex.price,
         };
         let launch_file = LaunchFile {
             request: request.clone(),
@@ -569,6 +643,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
                 "turn": id_text, "agent": request.agent, "step": request.step,
                 "kind": request.kind, "model": plan.model, "effort": plan.effort,
                 "session": session, "resumes": request.resumes, "retry_of": request.retry_of,
+                "runner": plan.runner, "member": request.member,
             })),
     )?;
     ctx.log(&format!(

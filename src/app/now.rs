@@ -167,15 +167,25 @@ pub fn now(input: &Input) -> Now {
             .works
             .as_ref()
             .map_or(seconds.unwrap_or(0) / 60, |w| w.minutes);
+        let mut lines = vec![format!(
+            "step {} · turn {} of this ticket",
+            turn.step, turn.n
+        )];
+        // A team step: each member with its state.
+        if !facts.team.is_empty() {
+            let list: Vec<String> = facts
+                .team
+                .iter()
+                .map(|(agent, state)| format!("{agent} {state}"))
+                .collect();
+            lines.push(format!("team: {}", list.join(", ")));
+        }
         let mut now = Now::new(
             Kind::Agent,
             Tone::Work,
             format!("{} works · {minutes} min", turn.agent),
             format!("{} works", turn.agent),
-            vec![format!(
-                "step {} · turn {} of this ticket",
-                turn.step, turn.n
-            )],
+            lines,
         );
         now.agent = Some(turn.agent.clone());
         now.seconds = seconds;

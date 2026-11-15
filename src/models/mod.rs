@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::cli::{ModelArgs, ModelCommand};
-use crate::config::{AgentPin, Config, ConfigEditor, Effort};
+use crate::config::{AgentPin, Config, ConfigEditor, Effort, Runner};
 use crate::ctx::Ctx;
 use crate::ledger::turns::ModelChange;
 use crate::ledger::{Event, Ledger};
@@ -33,13 +33,19 @@ pub struct AgentSpec {
     pub alone: bool,
     /// The result schema in `agents/`.
     pub schema: &'static str,
+    /// The program of its turns by default.
+    pub runner: Runner,
+    /// The model with Claude and the effort that take the work of a failed turn on Codex.
+    pub fallback: Option<(&'static str, Effort)>,
+    /// The name of its role file in `agents/`, without `.md`. Two agents can share one.
+    pub role: &'static str,
 }
 
 /// The schema of each work turn (section 7.6).
 pub const TURN_SCHEMA: &str = "turn.schema.json";
 
 /// The agents and their defaults (section 10).
-pub const AGENTS: [AgentSpec; 7] = [
+pub const AGENTS: [AgentSpec; 15] = [
     AgentSpec {
         name: "scout",
         model: "claude-fable-5-2",
@@ -47,6 +53,9 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "A wrong reading of the ticket costs the full build. Its turns are short.",
         alone: false,
         schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "scout",
     },
     AgentSpec {
         name: "builder",
@@ -55,6 +64,9 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "It writes the code and uses the most tokens. This model costs half as much as the top model.",
         alone: false,
         schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "builder",
     },
     AgentSpec {
         name: "reviewer",
@@ -63,6 +75,9 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "The review is the last gate before a person reads the code.",
         alone: false,
         schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "reviewer",
     },
     AgentSpec {
         name: "tester",
@@ -71,6 +86,9 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "A false pass sends a bug to a person.",
         alone: false,
         schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "tester",
     },
     AgentSpec {
         name: "shepherd",
@@ -79,6 +97,9 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "It gives verdicts on review comments and fixes the valid ones.",
         alone: false,
         schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "shepherd",
     },
     AgentSpec {
         name: "judge",
@@ -87,6 +108,9 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "It can answer alone, so a wrong answer costs the most. Its turns are short.",
         alone: true,
         schema: "judge.schema.json",
+        runner: Runner::Claude,
+        fallback: None,
+        role: "judge",
     },
     AgentSpec {
         name: "curator",
@@ -95,6 +119,97 @@ pub const AGENTS: [AgentSpec; 7] = [
         reason: "It runs seldom, and its proposals change each later answer.",
         alone: true,
         schema: "curator.schema.json",
+        runner: Runner::Claude,
+        fallback: None,
+        role: "curator",
+    },
+    AgentSpec {
+        name: "repro",
+        model: "claude-opus-5-5",
+        effort: Effort::High,
+        reason: "It shows the bug with a real failing spec. A false reproduction sends the whole plan the wrong way.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "repro",
+    },
+    AgentSpec {
+        name: "cause",
+        model: "gpt-6.1-sol",
+        effort: Effort::High,
+        reason: "A second model finds the cause on its own, so its guess does not follow the other agents. It only reads.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Codex,
+        fallback: Some(("claude-opus-5-5", Effort::High)),
+        role: "cause",
+    },
+    AgentSpec {
+        name: "history",
+        model: "claude-sonnet-5-5",
+        effort: Effort::Medium,
+        reason: "It reads commit messages and blame output, which needs little reasoning, so its turns stay cheap.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "history",
+    },
+    AgentSpec {
+        name: "points",
+        model: "claude-opus-5-5",
+        effort: Effort::High,
+        reason: "It tests each point of the ticket against the code. A point that it misses costs a second build.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "points",
+    },
+    AgentSpec {
+        name: "scope",
+        model: "claude-opus-5-5",
+        effort: Effort::High,
+        reason: "It finds each place that a chore touches. A place that it misses breaks the build later.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "scope",
+    },
+    AgentSpec {
+        name: "analyst",
+        model: "claude-opus-5-5",
+        effort: Effort::Xhigh,
+        reason: "It checks each finding against the code and writes the plan and the questions. The plan decides the whole build.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Claude,
+        fallback: None,
+        role: "analyst",
+    },
+    AgentSpec {
+        name: "critic",
+        model: "gpt-6.1-sol",
+        effort: Effort::Xhigh,
+        reason: "A wide plan touches many files, the database, or security. A second model at its top effort finds what the plan missed.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Codex,
+        fallback: Some(("claude-opus-5-5", Effort::High)),
+        role: "critic",
+    },
+    AgentSpec {
+        name: "critic-narrow",
+        model: "gpt-6.1-sol",
+        effort: Effort::High,
+        reason: "A narrow plan has less to miss, so the critic reads it one notch lower.",
+        alone: false,
+        schema: TURN_SCHEMA,
+        runner: Runner::Codex,
+        fallback: Some(("claude-opus-5-5", Effort::High)),
+        role: "critic",
     },
 ];
 
@@ -180,36 +295,88 @@ pub struct ModelChoice {
     pub model: String,
     pub effort: Effort,
     pub source: Source,
+    /// The program of the turns.
+    pub runner: Runner,
+    /// The model with Claude of a failed turn on Codex. `None` for an agent on Claude.
+    pub fallback: Option<Fallback>,
+}
+
+/// The model with Claude and the effort that take the work of a failed turn on Codex.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Fallback {
+    pub model: String,
+    pub effort: Effort,
+}
+
+impl std::fmt::Display for Fallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.model, self.effort)
+    }
 }
 
 /// The model and the effort of an agent: the pin of the person, else the default. A pin may
 /// name only the model or only the effort; the other value is the default.
 pub fn choice(config: &Config, name: &str) -> Result<ModelChoice> {
     let spec = require_agent(name)?;
+    let default_fallback = || {
+        spec.fallback.map(|(model, effort)| Fallback {
+            model: model.to_string(),
+            effort,
+        })
+    };
     let Some(pin) = config.agents.get(name) else {
         return Ok(ModelChoice {
             agent: name.to_string(),
             model: spec.model.to_string(),
             effort: spec.effort,
             source: Source::Default,
+            runner: spec.runner,
+            fallback: match spec.runner {
+                Runner::Codex => default_fallback(),
+                Runner::Claude => None,
+            },
         });
     };
     let model = match pin.model.as_deref() {
         Some(model) => full_model_id(model)?,
         None => spec.model.to_string(),
     };
+    let runner = pin.runner.unwrap_or(spec.runner);
+    let fallback = match (runner, &pin.fallback) {
+        (Runner::Claude, _) => None,
+        (Runner::Codex, Some(given)) => Some(Fallback {
+            model: full_model_id(&given.model)?,
+            effort: given
+                .effort
+                .or(spec.fallback.map(|(_, e)| e))
+                .unwrap_or(Effort::High),
+        }),
+        (Runner::Codex, None) => default_fallback(),
+    };
     Ok(ModelChoice {
         agent: name.to_string(),
         model,
         effort: pin.effort.unwrap_or(spec.effort),
-        source: if pin.model.is_some() || pin.effort.is_some() {
+        source: if pin.model.is_some()
+            || pin.effort.is_some()
+            || pin.runner.is_some()
+            || pin.fallback.is_some()
+        {
             Source::Yours {
                 since: pin.pinned_at.clone(),
             }
         } else {
             Source::Default
         },
+        runner,
+        fallback,
     })
+}
+
+/// The role file of an agent in `agents/`, without `.md`: its own name, or the name of the role
+/// that it shares, such as `critic` for `critic-narrow`.
+pub fn role_name(name: &str) -> &str {
+    agent(name).map_or(name, |spec| spec.role)
 }
 
 /// `vision model`, `model set`, `model reset`, `model recommend`, and `model eval`.
@@ -220,7 +387,8 @@ pub fn run(ctx: &Ctx, args: ModelArgs) -> Result<()> {
             agent,
             model,
             effort,
-        }) => set(ctx, &agent, &model, effort),
+            runner,
+        }) => set(ctx, &agent, &model, effort, runner),
         Some(ModelCommand::Reset { agent }) => reset(ctx, &agent),
         Some(ModelCommand::Recommend { agent, json }) => {
             recommend_command(ctx, agent.as_deref(), json || args.json)
@@ -247,6 +415,10 @@ pub struct ModelRow {
     pub recommended_model: Option<String>,
     /// The reason of the default of Vision.
     pub reason: String,
+    /// The program of the turns: `claude` or `codex`.
+    pub runner: Runner,
+    /// The model with Claude of a failed turn on Codex, such as `claude-opus-5-5 high`.
+    pub fallback: Option<String>,
 }
 
 /// The rows of `vision model`, in the order of section 10.
@@ -267,6 +439,8 @@ pub fn rows(config: &Config, ledger: &Ledger) -> Result<Vec<ModelRow>> {
             recommendation: advice.text,
             recommended_model: advice.recommended,
             reason: spec.reason.to_string(),
+            runner: choice.runner,
+            fallback: choice.fallback.as_ref().map(ToString::to_string),
         });
     }
     Ok(rows)
@@ -295,9 +469,14 @@ pub fn render_model_rows(rows: &[ModelRow]) -> String {
         .map(String::from)
         .to_vec()];
     for row in rows {
+        // A turn on Codex says so next to its model.
+        let model = match row.runner {
+            Runner::Claude => row.model.clone(),
+            Runner::Codex => format!("{} on codex", row.model),
+        };
         table.push(vec![
             row.agent.clone(),
-            row.model.clone(),
+            model,
             row.effort.to_string(),
             row.source.clone(),
         ]);
@@ -315,7 +494,12 @@ pub fn render_model_rows(rows: &[ModelRow]) -> String {
             ),
             _ => format!("reason of the default: {}", row.reason),
         };
-        for text in [reason, format!("recommendation: {}", row.recommendation)] {
+        let mut texts = vec![reason];
+        if let Some(fallback) = &row.fallback {
+            texts.push(format!("fallback on claude: {fallback}"));
+        }
+        texts.push(format!("recommendation: {}", row.recommendation));
+        for text in texts {
             for part in wrap(&text, "  ", "    ", WIDTH) {
                 let _ = writeln!(out, "{part}");
             }
@@ -346,20 +530,40 @@ fn wrap(text: &str, first: &str, rest: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// `vision model set AGENT MODEL [--effort E]`: pins the model in `[agents.<agent>]` with
-/// `pinned_at`, and records the change in `model_changes`. Without `--effort`, a pinned effort
-/// stays, else the effort follows the default.
-fn set(ctx: &Ctx, agent: &str, model: &str, effort: Option<Effort>) -> Result<()> {
+/// `vision model set AGENT MODEL [--effort E] [--runner R]`: pins the model in
+/// `[agents.<agent>]` with `pinned_at`, and records the change in `model_changes`. Without
+/// `--effort`, a pinned effort stays, else the effort follows the default. Without `--runner`,
+/// a Claude model (a short name or an id that starts with `claude-`) runs on Claude, and any
+/// other model keeps the runner of the agent.
+fn set(
+    ctx: &Ctx,
+    agent: &str,
+    model: &str,
+    effort: Option<Effort>,
+    runner: Option<Runner>,
+) -> Result<()> {
     ctx.require_setup()?;
     let spec = require_agent(agent)?;
     let model = full_model_id(model)?;
     let config = ctx.config()?;
     let old = choice(config, agent)?;
     let effort = effort.or_else(|| config.agents.get(agent).and_then(|p| p.effort));
+    let runner = runner.unwrap_or(if model.starts_with("claude-") {
+        Runner::Claude
+    } else {
+        old.runner
+    });
+    if runner == Runner::Codex && spec.alone {
+        bail!("{agent} cannot run on Codex: only a reader turn of a work agent runs on Codex");
+    }
     let at = time::now_rfc3339();
+    let pinned = config.agents.get(agent);
     let pin = AgentPin {
         model: Some(model.clone()),
         effort,
+        runner: (runner != spec.runner || pinned.and_then(|p| p.runner).is_some())
+            .then_some(runner),
+        fallback: pinned.and_then(|p| p.fallback.clone()),
         pinned_at: Some(at.clone()),
     };
     let mut editor = ConfigEditor::open(&ctx.paths.config())?;
@@ -367,9 +571,16 @@ fn set(ctx: &Ctx, agent: &str, model: &str, effort: Option<Effort>) -> Result<()
     editor.save()?;
     let effort = effort.unwrap_or(spec.effort);
     record(ctx, agent, &model, effort, &old, "set", &at)?;
+    let on = |r: Runner| match r {
+        Runner::Claude => String::new(),
+        Runner::Codex => " on codex".to_string(),
+    };
     println!(
-        "{agent} now uses {model} with the effort {effort} (it used {} {}). The value stays until you change it.",
-        old.model, old.effort
+        "{agent} now uses {model}{} with the effort {effort} (it used {}{} {}). The value stays until you change it.",
+        on(runner),
+        old.model,
+        on(old.runner),
+        old.effort
     );
     Ok(())
 }
@@ -547,6 +758,7 @@ mod tests {
                 model: Some("opus".into()),
                 effort: None,
                 pinned_at: Some("2026-11-16T14:30:00Z".into()),
+                ..AgentPin::default()
             },
         );
         let judge = choice(&config, "judge").unwrap();
@@ -564,6 +776,7 @@ mod tests {
                 model: Some("claude-haiku-5-5[1m]".into()),
                 effort: Some(Effort::Low),
                 pinned_at: Some("2026-11-16T14:30:00Z".into()),
+                ..AgentPin::default()
             },
         );
         let rows: Vec<ModelRow> = AGENTS
@@ -581,6 +794,8 @@ mod tests {
                             .into(),
                     recommended_model: None,
                     reason: spec.reason.to_string(),
+                    runner: choice.runner,
+                    fallback: choice.fallback.as_ref().map(ToString::to_string),
                 }
             })
             .collect();

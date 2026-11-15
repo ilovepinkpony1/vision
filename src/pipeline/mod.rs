@@ -12,16 +12,20 @@
 //!
 //! The core knows no project: the steps, the verbs, and the jobs are data of `adapter.toml`.
 
+mod ask;
 pub mod commands;
 pub mod decide;
 pub mod docs;
 pub mod facts;
 pub mod follow;
 pub mod gates;
+pub mod git_verbs;
+pub mod kind;
 mod machine;
 mod request;
 pub mod rounds;
 pub mod state;
+mod team;
 pub mod view;
 
 use anyhow::Result;
@@ -40,7 +44,8 @@ pub use commands::{
 pub use machine::{crash_point, CRASH_CODE, CRASH_ENV};
 pub use view::{plan_hash, TicketView, SHORT_HASH};
 
-/// `vision pick`, `take`, `plan`, `approve-plan`, `log`, `diff`, `stop`, `retry`, and `report`.
+/// `vision pick`, `take`, `plan`, `approve-plan`, `log`, `diff`, `stop`, `retry`, `report`, and
+/// `kind`.
 pub fn run(ctx: &Ctx, command: PipelineCommand) -> Result<()> {
     match command {
         PipelineCommand::Pick { json } => commands::pick(ctx, json),
@@ -54,6 +59,7 @@ pub fn run(ctx: &Ctx, command: PipelineCommand) -> Result<()> {
         PipelineCommand::Report { key, week, json } => {
             commands::report(ctx, key.as_ref(), week, json)
         }
+        PipelineCommand::Kind { key, name } => kind::kind_command(ctx, &key, &name),
     }
 }
 

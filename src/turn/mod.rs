@@ -14,6 +14,7 @@
 //! - [`resolve_plugins`] gives the plugin folders of `claude.plugins` that each work turn
 //!   loads and reads, and [`find_plugins`] the plugins in one folder, for `vision doctor`.
 
+pub mod codex;
 mod collect;
 mod control;
 mod inbox;
@@ -36,6 +37,7 @@ use crate::cli::TurnCommand;
 use crate::ctx::Ctx;
 use crate::tick::{Pass, TurnStart};
 
+pub use codex::ran_on_codex;
 pub use collect::{collect, outcome, Collected, TurnOutcome, TurnStatus, CONTINUE};
 pub use control::{kill_all, kill_turn, running_turn_of, running_turns, tell, RunningTurn, Told};
 pub use inbox::MessageFile;

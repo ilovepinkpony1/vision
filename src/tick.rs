@@ -64,6 +64,9 @@ pub struct TurnStart {
     pub resumes: Option<String>,
     /// The `message` of `facts.json`, such as the answers to the cards, or `continue`.
     pub message: Option<String>,
+    /// True when the agent fell back from Codex in this visit: the turn runs on the fallback
+    /// model of the agent with Claude.
+    pub fallback: bool,
 }
 
 /// A job of the adapter to run (section 11).

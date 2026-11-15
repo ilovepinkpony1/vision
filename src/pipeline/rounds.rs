@@ -239,6 +239,7 @@ mod tests {
                 reads: Vec::new(),
                 with: Default::default(),
                 findings: None,
+                team: Vec::new(),
             }),
             next: Some("done".into()),
             on: BTreeMap::new(),
@@ -254,6 +255,7 @@ mod tests {
             after: Vec::new(),
             before: Vec::new(),
             start: Vec::new(),
+            when: Vec::new(),
         }
     }
 

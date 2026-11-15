@@ -46,6 +46,11 @@ pub fn fake_claude() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bin/fake-claude")
 }
 
+/// The fake Codex CLI.
+pub fn fake_codex() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bin/fake-codex")
+}
+
 /// The folder of the demo adapter in this repo.
 pub fn demo_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("adapters/demo")
@@ -168,6 +173,7 @@ impl World {
             .env("HOME", &self.user_home)
             .env("VISION_HOME", &self.vision)
             .env("VISION_CLAUDE_BIN", fake_claude())
+            .env("VISION_CODEX_BIN", fake_codex())
             .stdin(Stdio::null());
         if let Some(tmp) = std::env::var_os("TMPDIR") {
             command.env("TMPDIR", tmp);

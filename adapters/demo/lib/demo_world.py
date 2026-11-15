@@ -3,7 +3,7 @@
 The `[adapter]` table of the configuration names the folder with `root`:
 
     root/
-      tracker.json   {"tickets": [{"key", "title", "description", "status", "assignee"}]}
+      tracker.json   {"tickets": [{"key", "title", "description", "status", "assignee", "type"}]}
       remote.git/    a bare repo: the remote of the clones
       prs.json       {"next": 1, "prs": [{"number", "key", "branch", "head", "title", "body",
                       "draft", "merged", "closed", "approvals", "changes_requested",
@@ -58,6 +58,7 @@ TOY_TICKETS = [
         "description": "The calculator can only add. Add a function subtract(a, b) that gives a minus b, with a test.",
         "status": "To Do",
         "assignee": None,
+        "type": "Story",
     },
     {
         "key": "DEMO-13",
@@ -65,6 +66,7 @@ TOY_TICKETS = [
         "description": "Add a function multiply(a, b) that gives a times b, with a test.",
         "status": "To Do",
         "assignee": None,
+        "type": "Story",
     },
 ]
 
@@ -274,7 +276,7 @@ class World:
 
 
 def issue_of(ticket):
-    return {k: ticket.get(k) for k in ("key", "title", "description", "status", "assignee")}
+    return {k: ticket.get(k) for k in ("key", "title", "description", "status", "assignee", "type")}
 
 
 # observe -------------------------------------------------------------------------------------

@@ -296,6 +296,14 @@ fn no_retry(
             "the turn already was the automatic resume of {first}, so this is the second failure"
         ));
     }
+    // Codex that failed, such as at a usage limit or with a login problem, gets no second try
+    // on Codex: the pipeline gives the work to the fallback of the agent at once.
+    if file.plan.runner == crate::config::Runner::Codex && reason == Reason::Error {
+        return Some(
+            "a turn on Codex that failed is not resumed on Codex: its agent falls back to Claude"
+                .into(),
+        );
+    }
     match reason {
         Reason::Result | Reason::Error | Reason::Crash => {}
         Reason::Timeout | Reason::Contract | Reason::Killed => {

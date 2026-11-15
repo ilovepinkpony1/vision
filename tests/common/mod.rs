@@ -82,7 +82,11 @@ impl Home {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", &self.user_home)
             .env("VISION_HOME", &self.vision)
-            .env("VISION_CLAUDE_BIN", &self.fake_claude);
+            .env("VISION_CLAUDE_BIN", &self.fake_claude)
+            .env(
+                "VISION_CODEX_BIN",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bin/fake-codex"),
+            );
         if let Some(tmp) = std::env::var_os("TMPDIR") {
             command.env("TMPDIR", tmp);
         }

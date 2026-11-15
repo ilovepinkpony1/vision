@@ -702,7 +702,9 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             "github.pr",
             "jira.issue",
             "jira.search",
-            "review.read"
+            "review.read",
+            "git.log",
+            "git.blame"
         ]
     );
     assert!(review_facts["requests"][0]["about"]

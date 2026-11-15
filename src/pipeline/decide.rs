@@ -140,6 +140,9 @@ pub struct Facts {
     pub skip_cap: bool,
     /// What is open, for the message of a cap: such as the open findings of `review.md`.
     pub open: Vec<String>,
+    /// The last turn ran on Codex: `Some(true)` when its agent has a fallback on Claude,
+    /// `Some(false)` when it has none. `None` for a turn on Claude.
+    pub codex_fallback: Option<bool>,
 }
 
 /// Where a turn step with `on` moves: the step, and how, such as `on findings`.
@@ -192,6 +195,9 @@ pub enum Next {
     RunJob,
     /// Move to the step `to`.
     Move { to: String, how: String },
+    /// The turn on Codex failed, or its end facts did not hold after its rounds: the same
+    /// agent runs again on its fallback model with Claude, in a fresh session.
+    Fallback { why: String },
     /// The end step: free the clone, close the span, and record a merged pull request.
     Finish,
 }
@@ -356,7 +362,16 @@ fn turn_next(
             "the turn {} failed, and its automatic resume runs",
             turn.id
         )),
-        TurnStatus::Failed => flag(format!("the turn {} failed: {}", turn.id, turn.reason)),
+        TurnStatus::Failed => match facts.codex_fallback {
+            Some(true) => Next::Fallback {
+                why: format!("the turn {} on Codex failed: {}", turn.id, turn.reason),
+            },
+            Some(false) => flag(format!(
+                "the turn {} on Codex failed, and its agent has no fallback: {}",
+                turn.id, turn.reason
+            )),
+            None => flag(format!("the turn {} failed: {}", turn.id, turn.reason)),
+        },
         TurnStatus::Done => match turn.kind.as_deref() {
             Some("questions") => {
                 if facts.open_cards > 0 {
@@ -400,6 +415,14 @@ fn turn_next(
                     let rounds = facts.rounds.max(1);
                     let mut extra = None;
                     if failures >= rounds {
+                        if facts.codex_fallback == Some(true) {
+                            return Next::Fallback {
+                                why: format!(
+                                    "the turns on Codex gave no result that holds its end facts: {}",
+                                    rounds_text(fact, facts.rounds, failures, found)
+                                ),
+                            };
+                        }
                         // After `rounds`, a loop that converges gets one more turn at a time,
                         // up to `extra_rounds`.
                         let used = failures - rounds;
@@ -517,7 +540,7 @@ fn after_next(facts: &Facts, list: List, entries: &[(String, OpFact)]) -> Next {
 }
 
 /// The first entry that is not confirmed decides; `None` when each one is confirmed.
-fn ops_next(list: List, entries: &[(String, OpFact)]) -> Option<Next> {
+pub(crate) fn ops_next(list: List, entries: &[(String, OpFact)]) -> Option<Next> {
     for (index, (label, fact)) in entries.iter().enumerate() {
         let detail = |d: &str| {
             if d.is_empty() {
@@ -559,7 +582,7 @@ fn ops_next(list: List, entries: &[(String, OpFact)]) -> Option<Next> {
     None
 }
 
-fn cap_text(step: &str, name: &str, value: u32, n: u32, open: &[String]) -> String {
+pub(crate) fn cap_text(step: &str, name: &str, value: u32, n: u32, open: &[String]) -> String {
     let mut text = format!("the step {step} reached its cap {name} = {value}: this is entry {n}");
     if open.is_empty() {
         text.push_str(". Nothing open is listed");
@@ -777,6 +800,7 @@ mod tests {
             n: 1,
             skip_cap: false,
             open: Vec::new(),
+            codex_fallback: None,
         }
     }
 

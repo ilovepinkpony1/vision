@@ -45,7 +45,24 @@ fn model_shows_each_agent_with_its_default_and_reason() {
         .collect();
     assert_eq!(
         agents,
-        ["AGENT", "scout", "builder", "reviewer", "tester", "shepherd", "judge", "curator"],
+        [
+            "AGENT",
+            "scout",
+            "builder",
+            "reviewer",
+            "tester",
+            "shepherd",
+            "judge",
+            "curator",
+            "repro",
+            "cause",
+            "history",
+            "points",
+            "scope",
+            "analyst",
+            "critic",
+            "critic-narrow"
+        ],
         "{}",
         run.stdout
     );
@@ -64,13 +81,13 @@ fn model_shows_each_agent_with_its_default_and_reason() {
             .iter()
             .filter(|l| l.starts_with("  recommendation: "))
             .count(),
-        7,
+        15,
         "{}",
         run.stdout
     );
 
     let rows = rows(&home);
-    assert_eq!(rows.len(), 7);
+    assert_eq!(rows.len(), 15);
     let judge = row(&rows, "judge");
     assert_eq!(judge["model"], "claude-fable-5-2");
     assert_eq!(judge["effort"], "high");
