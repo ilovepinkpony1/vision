@@ -82,6 +82,8 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
             "in-review",
             "comments",
             "ci-review",
+            "fix-ci-review",
+            "rerequest",
             "ready-to-merge",
             "done"
         ]
@@ -177,6 +179,7 @@ fn the_path_goes_through_ci_again_after_the_comments_and_each_loop_has_a_cap() {
     for (id, cap) in [
         ("review", "review_rounds"),
         ("fix-ci", "ci_fix"),
+        ("fix-ci-review", "ci_fix"),
         ("qa", "qa_fix"),
         ("fix-qa", "qa_fix"),
         ("comments", "comments"),
@@ -216,16 +219,61 @@ fn the_path_goes_through_ci_again_after_the_comments_and_each_loop_has_a_cap() {
             }
         }
     }
-    // The commit of the comments step goes through the CI wait before the merge.
+    // The commit of the comments step goes through the CI wait before the merge. The round
+    // pushes and replies, and it asks for the review again only after CI is green.
     let comments = step("comments");
     assert_eq!(comments.next.as_deref(), Some("ci-review"));
     let after: Vec<String> = comments.after.iter().map(|e| e.label()).collect();
-    assert_eq!(after, ["git.push", "review.reply", "review.rerequest"]);
+    assert_eq!(after, ["git.push", "review.reply"]);
     assert_eq!(comments.after[1].args["verdicts"], "{doc:verdicts.json}");
     let ci_review = step("ci-review");
     assert_eq!(ci_review.start[0].name, "ci.run");
-    assert_eq!(ci_review.on["green"], "in-review");
-    assert_eq!(ci_review.on["red"], "fix-ci");
+    assert_eq!(ci_review.on["green"], "rerequest");
+    assert_eq!(ci_review.on["red"], "fix-ci-review");
+    let rerequest = step("rerequest");
+    let StepKind::Act(act) = &rerequest.kind else {
+        panic!("rerequest is an act step: {rerequest:?}")
+    };
+    let run: Vec<String> = act.run.iter().map(|e| e.label()).collect();
+    assert_eq!(run, ["review.rerequest"]);
+    assert_eq!(rerequest.next.as_deref(), Some("in-review"));
+    // A CI fix in code review is a turn like fix-ci, and its commit goes to CI again.
+    let (fix, fix_ci) = (step("fix-ci-review"), step("fix-ci"));
+    let (StepKind::Turn(turn), StepKind::Turn(fix_ci_turn)) = (&fix.kind, &fix_ci.kind) else {
+        panic!("fix-ci-review and fix-ci are turn steps")
+    };
+    assert_eq!(turn.agent, "builder");
+    assert_eq!(turn.turn, TurnKind::Worker);
+    assert_eq!(turn.reads, fix_ci_turn.reads);
+    assert_eq!(fix.before, fix_ci.before);
+    assert_eq!(fix.expects, fix_ci.expects);
+    assert_eq!(fix.expect_args, fix_ci.expect_args);
+    assert_eq!(fix.after, fix_ci.after);
+    assert_eq!(fix.next.as_deref(), Some("ci-review"));
+    // From the comments on, no step goes back to the review, the QA, open-pr, or the CI of
+    // the draft: each step that the ticket can reach is a step of the code review.
+    let mut reached = BTreeSet::from(["comments"]);
+    let mut todo = vec!["comments"];
+    while let Some(id) = todo.pop() {
+        let s = step(id);
+        for target in s.next.iter().chain(s.on.values()) {
+            if reached.insert(target.as_str()) {
+                todo.push(target.as_str());
+            }
+        }
+    }
+    assert_eq!(
+        reached,
+        BTreeSet::from([
+            "comments",
+            "ci-review",
+            "fix-ci-review",
+            "rerequest",
+            "in-review",
+            "ready-to-merge",
+            "done"
+        ])
+    );
     for id in ["in-review", "ready-to-merge"] {
         let StepKind::Wait(wait) = &step(id).kind else {
             panic!("{id} is a wait step")
@@ -292,7 +340,7 @@ fn the_steps_name_their_documents_and_their_evidence() {
     assert_eq!(step("ci").on["red"], "ci-rerun");
     assert_eq!(step("ci-rerun").on["red"], "fix-ci");
     // The steps after the pull request exists push their own commits.
-    for id in ["fix-ci", "comments"] {
+    for id in ["fix-ci", "comments", "fix-ci-review"] {
         assert_eq!(step(id).after[0].name, "git.push", "{id}");
     }
     // Each wait step names the values that mean "not yet", and has a limit.
@@ -308,7 +356,7 @@ fn the_steps_name_their_documents_and_their_evidence() {
         assert!(spec.limit.is_some_and(|l| l >= 600), "{}", wait.id);
     }
     // The proof of each step reads the approved plan.
-    for id in ["build", "review", "fix-ci"] {
+    for id in ["build", "review", "fix-ci", "fix-ci-review"] {
         assert_eq!(
             step(id).expect_args_of("proof")["plan"],
             "{doc:approved-plan.md}",

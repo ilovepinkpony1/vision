@@ -1128,11 +1128,11 @@ The path has these parts:
 5. The Tester does QA on the local app. A kept bug goes to `fix-qa`, then to the review, and then to QA again.
 6. When QA holds with no kept bug, the act step `open-pr` runs `git.push` and then `pr.open`. `pr.open` opens a draft pull request with the text of `pr.md`.
 7. `ci.run` starts the CI workflow. After a red run, `ci.rerun` runs the failed jobs one more time. After a second red run, the Builder fixes the fault. A green run goes to `ready`.
-8. The person marks the pull request as ready. The team reviews it.
-9. The Shepherd judges each comment that waits, and it fixes each fault that a comment names. `review.reply` answers each comment.
+8. The person marks the pull request as ready. The team reviews it, and the ticket waits in `in-review`.
+9. The Shepherd judges each comment that waits, and it fixes each fault that a comment names. `git.push` pushes the fix, and `review.reply` answers each comment. Then CI runs at the new head in `ci-review`. After a green run, the act step `rerequest` runs `review.rerequest`, and the ticket waits in `in-review` for a new round or the approval. After a red run, the Builder fixes the fault in `fix-ci-review`, and the fix goes through `ci-review` again.
 10. After the approval, the person merges, and the ticket ends.
 
-No commit leaves the machine before the review and the local QA hold. The steps after `open-pr`, such as `fix-ci` and `comments`, push their own commits.
+A round of comments never goes back to the review, the QA, or `open-pr`, and a late round after the approval takes the same path. No commit leaves the machine before the review and the local QA hold. The steps after `open-pr`, such as `fix-ci`, `comments`, and `fix-ci-review`, push their own commits.
 
 These rules keep the tokens and the repo safe:
 

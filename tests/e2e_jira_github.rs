@@ -13,6 +13,11 @@
 //! leaves the machine. Only then the act step open-pr pushes the branch and opens the pull
 //! request, and CI runs.
 //!
+//! A round of comments pushes its fix and replies, and then waits for CI at the new head. Only
+//! a green run asks for the review again, in the act step rerequest. A late round after the
+//! approval takes the same path, and its red run goes to fix-ci-review and to CI again, never
+//! to the review, the QA, or open-pr.
+//!
 //! Nothing here reaches the network: each address of `[adapter]` points at the fake server, and
 //! git pushes to a local bare repo.
 //!
@@ -405,6 +410,41 @@ http_timeout = 20
             .collect()
     }
 
+    /// The verbs of the operations of the ticket at one commit, oldest first.
+    fn verbs_at(&self, head: &str) -> Vec<String> {
+        self.ledger()
+            .operations_of(KEY, None)
+            .unwrap()
+            .into_iter()
+            .filter(|o| {
+                let call: Value = serde_json::from_str(&o.args).unwrap();
+                call["head"] == head
+            })
+            .map(|o| o.verb)
+            .collect()
+    }
+
+    /// The CI results of the ticket, as (commit, result), oldest first.
+    fn ci_checks(&self) -> Vec<(String, String)> {
+        self.ledger()
+            .checks_of(KEY, None)
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.kind == "ci")
+            .map(|c| (c.head, c.result))
+            .collect()
+    }
+
+    /// The steps of the ticket in the order of its visits, from the spans.
+    fn path(&self) -> Vec<String> {
+        self.ledger()
+            .spans_of(Some(KEY))
+            .unwrap()
+            .into_iter()
+            .map(|s| s.state)
+            .collect()
+    }
+
     /// Asserts that nothing left the machine yet: no push, no pull request, and no operation
     /// of git.push or pr.open.
     fn assert_nothing_left(&self, when: &str) {
@@ -626,12 +666,33 @@ fn scenarios(p: &Project) {
         {"comment_id": 701, "kind": "conversation", "verdict": "out-of-scope", "fix_commit": "", "reply": "Division belongs to a different ticket."}
     ])
     .to_string();
+    // The late round: the fix names subtract in a README, and a note in TODO.txt makes ci.sh
+    // fail at its head.
+    let late_verdicts = json!([
+        {"comment_id": 502, "kind": "inline", "verdict": "valid", "fix_commit": "", "reply": "README.md names subtract now."},
+        {"comment_id": 603, "kind": "review", "verdict": "valid", "fix_commit": "", "reply": "Done: README.md names subtract."}
+    ])
+    .to_string();
     p.scenario(
         "shepherd",
         "comments",
+        json!([
+            runs_then(
+                "git mv test_subtract.sh test_calc_subtract.sh && git commit -q -m 'Name the test of subtract like the others'",
+                result("Answered three comments.", &[("verdicts.json", &verdicts)])
+            ),
+            runs_then(
+                "printf 'subtract(a, b) gives a minus b.\\n' > README.md && echo 'Link README.md from the docs.' > TODO.txt && git add -A && git commit -q -m 'Name subtract in the README'",
+                result("Answered two comments.", &[("verdicts.json", &late_verdicts)])
+            )
+        ]),
+    );
+    p.scenario(
+        "builder",
+        "fix-ci-review",
         json!([runs_then(
-            "git mv test_subtract.sh test_calc_subtract.sh && git commit -q -m 'Name the test of subtract like the others'",
-            result("Answered three comments.", &[("verdicts.json", &verdicts)])
+            "git rm -q TODO.txt && git commit -q -m 'Remove the TODO file of the README'",
+            result("Fixed the CI: the TODO file made ci.sh fail.", &[])
         )]),
     );
     let dir = p.vision.join("claude/fake-scenarios");
@@ -827,16 +888,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     p.tick_to("ready");
     let fixed = p.head();
     assert_ne!(fixed, qa_fixed);
-    let checks: Vec<(String, String)> = p
-        .ledger()
-        .checks_of(KEY, None)
-        .unwrap()
-        .into_iter()
-        .filter(|c| c.kind == "ci")
-        .map(|c| (c.head, c.result))
-        .collect();
     assert_eq!(
-        checks,
+        p.ci_checks(),
         [
             (qa_fixed.clone(), "red".to_string()),
             (fixed.clone(), "green".to_string())
@@ -903,14 +956,19 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         [(501, "inline"), (601, "review"), (701, "conversation")]
     );
 
-    // The Shepherd round: a fix, then its push, the replies, and the new review request, each
-    // in the mode auto.
+    // The Shepherd round: a fix, then its push and the replies, each in the mode auto. The
+    // review is not asked again yet: CI runs at the new head first.
     p.tick_to("ci-review");
     let shepherd = p.head();
     assert_ne!(shepherd, fixed);
+    assert_eq!(p.verbs_at(&shepherd), ["git.push", "review.reply"]);
     assert_eq!(
         p.operations("review.reply"),
         [("confirmed".to_string(), shepherd.clone())]
+    );
+    assert!(
+        p.operations("review.rerequest").is_empty(),
+        "no review request before CI holds"
     );
     assert_eq!(p.remote_branch().as_deref(), Some(shepherd.as_str()));
     let state = p.server.state();
@@ -937,8 +995,9 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         ]
     );
     assert_eq!(
-        p.server.state()["pulls"]["7"]["requested_reviewers"],
-        json!([{"login": "lead"}])
+        state["pulls"]["7"]["requested_reviewers"],
+        json!([]),
+        "the review is not asked again before CI holds"
     );
     let reviews = p.ledger().review_rows_after(0, 10).unwrap();
     let reviews: Vec<(Option<i64>, Option<String>, Option<String>)> = reviews
@@ -954,9 +1013,45 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         ]
     );
 
-    // A new CI run of the commit of the comments, then the approval and the merge.
+    // ci-review: CI runs at the head of the comments. Only its green run moves the ticket to
+    // rerequest, and that act step asks for the review again.
+    p.tick_to("rerequest");
+    assert_eq!(
+        p.verbs_at(&shepherd),
+        ["git.push", "review.reply", "ci.run"]
+    );
+    assert_eq!(
+        p.ci_checks().last(),
+        Some(&(shepherd.clone(), "green".to_string()))
+    );
+    assert_eq!(
+        p.server.state()["pulls"]["7"]["requested_reviewers"],
+        json!([]),
+        "the move to rerequest runs no verb"
+    );
     p.tick_to("in-review");
+    assert_eq!(
+        p.verbs_at(&shepherd),
+        ["git.push", "review.reply", "ci.run", "review.rerequest"],
+        "the push, the replies, CI, and only then the review request"
+    );
+    assert_eq!(
+        p.operations("review.rerequest"),
+        [("confirmed".to_string(), shepherd.clone())]
+    );
+    assert_eq!(
+        p.server.state()["pulls"]["7"]["requested_reviewers"],
+        json!([{"login": "lead"}])
+    );
     assert_eq!(p.server.state()["runs"].as_array().unwrap().len(), 3);
+    // The round went back to no step before the pull request: not the review, the QA, or
+    // open-pr.
+    let path = p.path();
+    let round = path.iter().rposition(|s| s == "comments").unwrap();
+    assert_eq!(
+        path[round..],
+        ["comments", "ci-review", "rerequest", "in-review"]
+    );
     p.tick();
     assert_eq!(
         p.step().as_deref(),
@@ -990,6 +1085,94 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     p.tick();
     assert!(p.flags().is_empty(), "{:?}", p.flags());
     assert_eq!(p.step().as_deref(), Some("ready-to-merge"));
+
+    // A late round: after the approval, the lead asks for one more change, so ready-to-merge
+    // goes to comments, and the round takes the same path. Its fix leaves TODO.txt, so CI is
+    // red at its head: fix-ci-review fixes it and pushes, CI runs again at the new head, and
+    // only the green run asks for the review again.
+    p.server.team(
+        "comment",
+        json!({"number": 7, "id": 502, "login": "lead", "path": "calc.sh", "line": 1,
+               "body": "Name subtract in a README too."}),
+    );
+    p.server.team(
+        "review",
+        json!({"number": 7, "id": 603, "login": "lead", "state": "CHANGES_REQUESTED",
+               "body": "One more thing before the merge.\nSee the inline comment."}),
+    );
+    p.tick_to("comments");
+    p.tick_to("ci-review");
+    let late = p.head();
+    assert_ne!(late, shepherd);
+    assert_eq!(p.verbs_at(&late), ["git.push", "review.reply"]);
+    assert_eq!(p.remote_branch().as_deref(), Some(late.as_str()));
+    let replies = p.server.state()["comments"]["7"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["in_reply_to_id"] == 502)
+        .count();
+    assert_eq!(replies, 1, "the late round replies before CI");
+    p.tick_to("fix-ci-review");
+    assert_eq!(p.verbs_at(&late), ["git.push", "review.reply", "ci.run"]);
+    assert_eq!(
+        p.ci_checks().last(),
+        Some(&(late.clone(), "red".to_string()))
+    );
+    assert_eq!(
+        p.operations("review.rerequest").len(),
+        1,
+        "a red run asks for no review"
+    );
+    p.tick_to("ci-review");
+    let ci_fixed = p.head();
+    assert_ne!(ci_fixed, late);
+    assert_eq!(p.verbs_at(&ci_fixed), ["git.push"]);
+    assert_eq!(
+        p.remote_branch().as_deref(),
+        Some(ci_fixed.as_str()),
+        "fix-ci-review pushes its own commit"
+    );
+    p.tick_to("rerequest");
+    assert_eq!(
+        p.ci_checks().last(),
+        Some(&(ci_fixed.clone(), "green".to_string()))
+    );
+    assert_eq!(p.operations("review.rerequest").len(), 1);
+    p.tick_to("in-review");
+    assert_eq!(
+        p.verbs_at(&ci_fixed),
+        ["git.push", "ci.run", "review.rerequest"]
+    );
+    assert_eq!(
+        p.server.state()["pulls"]["7"]["requested_reviewers"],
+        json!([{"login": "lead"}])
+    );
+    let path = p.path();
+    let round = path.iter().rposition(|s| s == "comments").unwrap();
+    assert_eq!(
+        path[round - 1..],
+        [
+            "ready-to-merge",
+            "comments",
+            "ci-review",
+            "fix-ci-review",
+            "ci-review",
+            "rerequest",
+            "in-review"
+        ]
+    );
+    p.tick();
+    assert_eq!(
+        p.step().as_deref(),
+        Some("in-review"),
+        "the review is asked again, and nothing waits"
+    );
+    p.server.team(
+        "review",
+        json!({"number": 7, "id": 604, "login": "lead", "state": "APPROVED", "body": ""}),
+    );
+    p.tick_to("ready-to-merge");
     p.server.team("merge", json!({"number": 7}));
     p.tick_until("the end", |p| p.counts()["finished"].is_string());
     let row = p.row().unwrap();
@@ -1002,14 +1185,9 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .is_some());
     assert!(git(&p.remote, &["log", "-1", "--format=%s", "main"]).contains("Merge pull request #7"));
 
-    // The path through each step of adapter.toml.
-    let spans: Vec<String> = p
-        .ledger()
-        .spans_of(Some(KEY))
-        .unwrap()
-        .into_iter()
-        .map(|s| s.state)
-        .collect();
+    // The path through each step of adapter.toml. After the first entry into comments, each
+    // step is a step of the code review.
+    let spans = p.path();
     assert_eq!(
         spans,
         [
@@ -1031,12 +1209,36 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             "in-review",
             "comments",
             "ci-review",
+            "rerequest",
             "in-review",
             "ready-to-merge",
+            "ready-to-merge",
+            "comments",
+            "ci-review",
+            "fix-ci-review",
+            "ci-review",
+            "rerequest",
+            "in-review",
             "ready-to-merge",
             "done"
         ]
     );
+    let first = spans.iter().position(|s| s == "comments").unwrap();
+    for step in &spans[first..] {
+        assert!(
+            [
+                "comments",
+                "ci-review",
+                "fix-ci-review",
+                "rerequest",
+                "in-review",
+                "ready-to-merge",
+                "done"
+            ]
+            .contains(&step.as_str()),
+            "the code review went back to {step}: {spans:?}"
+        );
+    }
 
     // The operations: each one confirmed, and each verb as often as the path needs it.
     let ops = p.ledger().operations_of(KEY, None).unwrap();
@@ -1049,11 +1251,11 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         by_verb,
         BTreeMap::from([
             ("ci.rerun", 1),
-            ("ci.run", 3),
-            ("git.push", 3),
+            ("ci.run", 5),
+            ("git.push", 5),
             ("pr.open", 1),
-            ("review.reply", 1),
-            ("review.rerequest", 1),
+            ("review.reply", 2),
+            ("review.rerequest", 2),
             ("tracker.describe", 1),
             ("tracker.move", 2),
         ])
@@ -1070,17 +1272,21 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             ),
             (
                 "POST /repos/acme/widgets/actions/workflows/ci.yml/dispatches".to_string(),
-                3
+                5
             ),
-            ("POST /repos/acme/widgets/issues/7/comments".to_string(), 2),
+            ("POST /repos/acme/widgets/issues/7/comments".to_string(), 3),
             ("POST /repos/acme/widgets/pulls".to_string(), 1),
             (
                 "POST /repos/acme/widgets/pulls/7/comments/501/replies".to_string(),
                 1
             ),
             (
-                "POST /repos/acme/widgets/pulls/7/requested_reviewers".to_string(),
+                "POST /repos/acme/widgets/pulls/7/comments/502/replies".to_string(),
                 1
+            ),
+            (
+                "POST /repos/acme/widgets/pulls/7/requested_reviewers".to_string(),
+                2
             ),
             ("POST /rest/api/3/issue/DEMO-12/transitions".to_string(), 2),
             (
@@ -1097,7 +1303,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .iter()
         .map(|r| r["head_sha"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(dispatched.len(), 3, "one run for each commit");
+    assert_eq!(dispatched.len(), 5, "one run for each commit");
     let requests = p.server.requests();
     for r in &requests {
         let path = r["path"].as_str().unwrap();
@@ -1163,7 +1369,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     if let Some(out) = std::env::var_os("VISION_E2E_DUMP") {
         std::fs::write(out, p.report()).unwrap();
     }
-    // The path takes about 50 s on a laptop. The time is printed, not asserted: a busy machine
+    // The path takes about 60 s on a laptop. The time is printed, not asserted: a busy machine
     // makes each process slower, and that says nothing about the code.
     eprintln!("the whole path took {:?}", started.elapsed());
 }
@@ -1212,7 +1418,7 @@ fn a_private_adapter_with_the_built_in_scripts_keeps_each_write_in_shadow() {
     let text = check.to_string();
     assert!(
         text.contains(&p.vision.join("adapters/jira-github").display().to_string())
-            && text.contains("15 steps")
+            && text.contains("17 steps")
             && text.contains("with the built-in scripts builtin:jira-github"),
         "{text}"
     );

@@ -148,13 +148,21 @@
 #   ready:     the person marks the pull request ready -> in-review
 #   in-review: review.state approved -> ready-to-merge, changes or comments -> comments,
 #              merged -> done
-#   comments -> ci-review: a commit of the comments goes through CI again; green -> in-review,
-#              red -> fix-ci
-#   ready-to-merge: merged -> done, changes or comments -> comments
+#   comments:  the Shepherd fixes and answers the comments. git.push, then review.reply
+#              -> ci-review
+#   ci-review: CI runs at the new head. green -> rerequest, red -> fix-ci-review -> ci-review
+#   rerequest: an act step, with no turn: review.rerequest asks the reviewers again
+#              -> in-review
+#   ready-to-merge: merged -> done, changes or comments -> comments (a late round takes the
+#              same path)
 #
 # Nothing leaves the machine before the review and the local QA hold: the commits of build,
 # review, and fix-qa stay in the clone until open-pr. The steps after open-pr push their own
-# commits: fix-ci and comments name git.push in after.
+# commits: fix-ci, comments, and fix-ci-review name git.push in after.
+#
+# A round of comments never goes back to the review, the QA, or open-pr. The reviewers are
+# asked again only after CI is green at the new head. A red run goes to fix-ci-review, and its
+# commit goes through CI again.
 #
 # review.state is the first value that holds of: merged, closed, comments (a comment waits),
 # changes (a reviewer asks for changes and is not asked again), conflict (the open pull request
@@ -164,9 +172,10 @@
 # resolves the conflict, commits, pushes the branch, and runs `vision retry KEY`: the step looks
 # again, and the ticket goes on.
 #
-# Each turn step of a loop has a cap: fix-ci (ci_fix), qa and fix-qa (qa_fix), comments
-# (comments), review (review_rounds). Each wait step names the values that mean "not yet" in
-# `wait`, and its `limit` in seconds: any other value, or a longer wait, needs the person.
+# Each turn step of a loop has a cap: fix-ci and fix-ci-review (ci_fix), qa and fix-qa
+# (qa_fix), comments (comments), review (review_rounds). Each wait step names the values that
+# mean "not yet" in `wait`, and its `limit` in seconds: any other value, or a longer wait,
+# needs the person.
 #
 # The proof gets the approved plan in args.plan. A line `Proof: green` of the plan declares the
 # whole proof green (a change with no new behavior), and a line `Proof: green <path>` declares
@@ -366,7 +375,6 @@ expects = ["clean", "doc:verdicts.json"]
 after = [
   "git.push",
   { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } },
-  "review.rerequest",
 ]
 cap = "comments"
 next = "ci-review"
@@ -376,10 +384,28 @@ id = "ci-review"
 kind = "wait"
 start = ["ci.run"]
 watch = "ci.state"
-on = { green = "in-review", red = "fix-ci" }
+on = { green = "rerequest", red = "fix-ci-review" }
 wait = ["running", "none"]
 limit = 7200
 every = 60
+
+[[step]]
+id = "fix-ci-review"          # a CI fix in code review goes to CI again, never to the review
+kind = "turn"
+agent = "builder"
+turn = "worker"
+before = ["job:ci-log"]
+reads = ["ci-log.txt", "approved-plan.md"]
+expects = ["commits", "clean", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push"]
+cap = "ci_fix"
+next = "ci-review"
+
+[[step]]
+id = "rerequest"
+kind = "act"
+run = ["review.rerequest"]    # only after CI is green at the head of the round
+next = "in-review"
 
 [[step]]
 id = "ready-to-merge"
