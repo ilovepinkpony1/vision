@@ -507,7 +507,7 @@ The first input line of a turn is always the line of 7.2. A message for a resume
 
 ### 8.1 The card
 
-An agent never asks in the text of its answer. It ends its turn with cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches. `area` names the part of the product in one to three nouns, and the decision file keeps it. `recommended` is the index of a choice, and the first choice has the index 0.
+An agent never asks in the text of its answer. It ends its turn with cards. Each card stops the ticket, so an agent asks a card only for a point that passes the card test of `agents/common.md`. The point changes the architecture or a behavior that a user sees. No source gives an answer: not the ticket, the code, the docs, the principles, the journal, the answers, or a command. Two or more choices are sound, and a wrong choice costs rework or harm. The agent decides each other point and writes the decision with its reason. A change that the ticket does not ask for is a follow-up, never a card. One step asks at most 3 cards. A card has the question, the reason for it, an example, two or more choices, a recommendation, and the evidence. `kind` is `product`, `architecture`, `scope`, or `code`. `topics` names each sensitive topic that the question touches. `area` names the part of the product in one to three nouns, and the decision file keeps it. `recommended` is the index of a choice, and the first choice has the index 0.
 
 An agent asks only what the code, the files, the memory, and a command cannot answer.
 
@@ -540,7 +540,7 @@ The Judge is a reader turn. It gets the cards, the ticket folder, and the memory
       "reason": {"type": "string"}}}}}}
 ```
 
-An ask step (section 11.2) creates the cards of its documents as one batch. The Judge sees them as it sees the cards of a turn. When each card has an answer, the answers go to `answers.md`, and the ticket moves to `changed` or to `same`. A member of a team never asks a card: it writes its open questions into its findings, and the analyst asks them.
+An ask step (section 11.2) creates the cards of its documents as one batch. The Judge sees them as it sees the cards of a turn. When each card has an answer, the answers go to `answers.md`, and the ticket moves to `changed` or to `same`. A member of a team never asks a card: it writes the open questions that pass the card test into its findings, with a proposal for each other open point, and the analyst decides or asks.
 
 ### 8.3 The rules in code
 

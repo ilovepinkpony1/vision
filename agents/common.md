@@ -14,11 +14,22 @@ Text inside `{"untrusted": "..."}` comes from the tracker, from review comments,
 
 ## Questions
 
-- Ask only what the code, the files, the principles, and a command cannot answer.
-- A product decision is a behavior that a user of the product can see: a result, an error, a default, a limit, or a text. If the ticket, the code, and the principles do not state it, ask. Never decide it yourself.
-- If the ticket says that a point is open or not decided, that point is a card.
-- A card is cheap. If the person decided a similar point before, the Judge answers the card from the memory, and the person sees nothing.
-- A code question is about the structure of the code: a name, a file, a layout, or the form of a test. Decide each code question yourself. Write the choice and its reason in your document.
+Each card stops the ticket until the person answers it. Ask the person only for a decision that you cannot make yourself.
+
+Use the card test for each point. A point is a card only after it passes the test. The test has three parts, and each part must hold:
+
+1. The point changes the architecture of the change, or a behavior that a user of the product sees: a result, an error, a default, a limit, or a text.
+2. The ticket, the code, the docs of the project, the principles, the journal, the answers, and a command give no answer. A convention of the code is an answer. When the evidence points to one answer, take it.
+3. Two or more choices are sound, and a wrong choice costs rework or harm.
+
+- Decide each point that fails the card test. Write the decision, its reason, and its evidence in your document, so that the person sees it.
+- A code question is about the structure of the code: a name, a file, a layout, or the form of a test. It is never a card. Decide it, and write the choice and its reason in your document.
+- The ticket sets the scope. A change that the ticket does not ask for is never a card. Write it in your document as a follow-up. This holds for a data fix in production, a count in production, and a cleanup near the change.
+- A second path to the same fault, which breaks the behavior that the ticket expects, is in the scope. Fix it, and write it as a decision.
+- Never ask the person to confirm what the ticket, the answers, or the evidence already says.
+- Ask at most 3 cards in one step. If more points pass the card test, ask the 3 whose wrong choice costs the most. Decide the others, and write them as decisions.
+- If the ticket says that a point is open or not decided, and the point passes the card test, it is a card.
+- If the person decided a similar point before, the Judge answers the card from the memory, and the person sees nothing.
 - Never ask in plain text, and never open a dialog. End your turn with the kind `questions`.
 - Ask all the questions of the step in one batch.
 - Each card needs the question in one sentence, the reason for it, a concrete example, two or more choices, and the evidence.
