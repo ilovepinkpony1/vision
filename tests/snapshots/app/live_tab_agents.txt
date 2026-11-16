@@ -1,0 +1,32 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
+ ⠸ build               6:00│   ▀▀▀▀▀▀▀  ⠸ 6:00 · 5 tool calls                       │ commits    none to push
+ ○ review                  │                                                        │
+ ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ ci                      │ All 13  Agents 7  Questions 0  Steps 3  Writes 1     › │ to you                0
+ ○ fix-ci                  │ 13:52:04 turn  scout starts a turn at the step refine… │ by memory             1
+ ○ ready                   │ 13:56:14 turn  the turn of scout ended: it gave its r… │ by the Judge          0
+ ○ comments                │ 13:56:30 turn  builder starts a turn at the step plan… │
+ ○ ci-review               │ 14:05:30 turn  the turn of builder ended: it gave its… │ MARKS
+ ○ ready-to-merge          │ 14:24:00 turn  builder starts a turn at the step buil… │ plan          3f2a1b4 ✓
+ ○ done                    │ 14:24:20 says  The export writes each row by hand. I   │ proof                 -
+                           │                add a CSV writer and keep the order of  │ CI                    -
+ TEAM                      │                the columns that the plan names.        │ PR                    -
+ ✓ scout     fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │
+ ● builder   opus-5-5 xhigh│                month next.                             │ LIMITS
+ · reviewer  opus-5-5 max  │                                                        │ 5h ━━━━━━━━━━ 31% of 60
+ · tester    opus-5-5 high │                                                        │    resets at 18:00
+ · shepherd  opus-5-5 high │                                                        │ 7d ━━━━━━━━━━ 71% of 85
+ · judge     fable-5-2 high│                                                        │
+ · curator   fable-5-2 high│                                                        │ ENGINE
+                           │                                                        │ ● on   last pass 2s ago
+                           │                                                        │
+                           │                                                        │
+                           │                                                        │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
+

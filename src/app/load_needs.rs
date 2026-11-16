@@ -1,12 +1,14 @@
 //! The reads of the cards of the things that wait, each in a thread of the runtime, through the
 //! functions of today that return data: the needs of the snapshot, the cards of `vision needs
-//! --json`, the plan of `vision plan`, the operations that wait for `vision approve`, the
-//! operations that the mode shadow or hold kept from running, the status rows, the open
-//! proposals of the Curator, and the notices that wait. The read of a check of a chain is here too. None of them changes
-//! the state.
+//! --json` with the drafts of their forms, the plan of `vision plan`, the operations that wait
+//! for `vision approve`, the operations that the mode shadow or hold kept from running, the
+//! status rows, the open proposals of the Curator, and the notices that wait. The read of a
+//! check of a chain is here too. None of them changes the state.
+//!
+//! The cards of one asking id become one item: the form of a set of questions.
 
 use super::chain::{Check, CheckFacts, OpFacts};
-use super::needs::{FlagItem, NeedItem, PlanItem, ProposalItem, WriteItem};
+use super::needs::{FlagItem, NeedItem, PlanItem, ProposalItem, QuestionSet, WriteItem};
 use crate::adapter::{self, Adapter};
 use crate::config::Config;
 use crate::ctx::Ctx;
@@ -19,7 +21,8 @@ use crate::pipeline::{plan_hash, plan_of, status_rows, TicketView};
 use crate::snapshot::{collect_needs, NeedKind};
 
 /// Each thing that waits for the person, in the order of the needs of the snapshot: the
-/// questions, the flags and the plans, the writes, the proposals, and the notices.
+/// questions, the flags and the plans, the writes, the proposals, and the notices. The
+/// questions of one asking id are one form, at the place of its first question.
 pub fn needs(paths: &Paths) -> Result<Vec<NeedItem>, String> {
     read_needs(paths).map_err(|e| format!("{e:#}"))
 }
@@ -37,28 +40,44 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
     let notices = ledger.unread_notices()?;
     let views = status_rows(&ctx, &ledger, &needs)?;
     let mut items: Vec<NeedItem> = Vec::new();
-    let mut push = |item: NeedItem| {
-        if !items.iter().any(|i| i.id() == item.id()) {
-            items.push(item);
-        }
-    };
     for need in &needs {
         let ticket = need.ticket.as_deref().unwrap_or("");
         let view = views.iter().find(|v| v.key == ticket);
         match need.kind {
             NeedKind::Card => {
-                if let Some(card) = cards.iter().find(|c| c.id == need.id) {
-                    push(NeedItem::Question(card.clone()));
+                let Some(card) = cards.iter().find(|c| c.id == need.id) else {
+                    continue;
+                };
+                let set = items.iter_mut().find_map(|item| match item {
+                    NeedItem::Questions(set) if set.turn == card.turn => Some(set),
+                    _ => None,
+                });
+                match set {
+                    Some(set) => {
+                        if !set.cards.iter().any(|c| c.id == card.id) {
+                            set.cards.push(card.clone());
+                        }
+                    }
+                    None => items.push(NeedItem::Questions(QuestionSet {
+                        turn: card.turn.clone(),
+                        ticket: card.ticket.clone(),
+                        cards: vec![card.clone()],
+                        saved: Default::default(),
+                        gone: Vec::new(),
+                    })),
                 }
             }
             NeedKind::Plan => {
                 let key = TicketKey::parse(ticket)?;
                 if let Some(plan) = plan_of(&ctx, &key)?.filter(|p| p.waits) {
-                    push(NeedItem::Plan(PlanItem {
-                        ticket: ticket.to_string(),
-                        step: view.and_then(|v| v.step.clone()).unwrap_or_default(),
-                        plan,
-                    }));
+                    push(
+                        &mut items,
+                        NeedItem::Plan(PlanItem {
+                            ticket: ticket.to_string(),
+                            step: view.and_then(|v| v.step.clone()).unwrap_or_default(),
+                            plan,
+                        }),
+                    );
                 }
             }
             NeedKind::Operation => {
@@ -68,7 +87,7 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
                         && format!("{} {}", op.verb, commit_arg(&op.head)) == need.id
                 }) {
                     let item = write_item(op, config, adapter.as_ref(), view, &facts);
-                    push(NeedItem::Approval(item));
+                    push(&mut items, NeedItem::Approval(item));
                 }
             }
             NeedKind::Flag => {
@@ -78,36 +97,70 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
                 let facts = state_facts_of(&ctx, &ledger, ticket)?.unwrap_or_default();
                 let flag = flag_item(&ledger, view, &facts, &need.id)?;
                 if need.id == PAUSED {
-                    push(NeedItem::Paused(flag));
+                    push(&mut items, NeedItem::Paused(flag));
                     continue;
                 }
                 let writes = open_writes(&ctx, &ledger, ticket)?;
                 if writes.is_empty() {
-                    push(NeedItem::Flag(flag));
+                    push(&mut items, NeedItem::Flag(flag));
                 }
                 for op in &writes {
                     let item = write_item(op, config, adapter.as_ref(), Some(view), &facts);
-                    push(NeedItem::FirstWrite(item));
+                    push(&mut items, NeedItem::FirstWrite(item));
                 }
             }
             NeedKind::Notice => {
                 if let Some(notice) = notices.iter().find(|n| n.name() == need.id) {
-                    push(NeedItem::Notice(notice.clone()));
+                    push(&mut items, NeedItem::Notice(notice.clone()));
                 }
             }
             NeedKind::Proposal => {
                 if let Some(p) = proposals.iter().find(|p| p.name == need.id) {
-                    push(NeedItem::Proposal(ProposalItem {
-                        name: p.name.clone(),
-                        summary: p.summary.clone(),
-                        open: p.open,
-                        replaying: p.replaying,
-                    }));
+                    push(
+                        &mut items,
+                        NeedItem::Proposal(ProposalItem {
+                            name: p.name.clone(),
+                            summary: p.summary.clone(),
+                            open: p.open,
+                            replaying: p.replaying,
+                        }),
+                    );
                 }
             }
         }
     }
+    // The drafts of each form, from the drafts file of its ticket. The first form of a ticket
+    // also names the drafts whose questions no longer wait.
+    let waiting: Vec<&str> = cards.iter().map(|c| c.id.as_str()).collect();
+    let mut files = std::collections::BTreeMap::new();
+    for item in &mut items {
+        if let NeedItem::Questions(set) = item {
+            let first = !files.contains_key(&set.ticket);
+            let drafts = files
+                .entry(set.ticket.clone())
+                .or_insert_with(|| super::drafts::read(paths, &set.ticket));
+            set.saved = set
+                .cards
+                .iter()
+                .filter_map(|c| drafts.get(&c.id).map(|d| (c.id.clone(), d.clone())))
+                .collect();
+            if first {
+                set.gone = drafts
+                    .keys()
+                    .filter(|id| !waiting.contains(&id.as_str()))
+                    .cloned()
+                    .collect();
+            }
+        }
+    }
     Ok(items)
+}
+
+/// Adds an item, unless an item with its id is already there.
+fn push(items: &mut Vec<NeedItem>, item: NeedItem) {
+    if !items.iter().any(|i| i.id() == item.id()) {
+        items.push(item);
+    }
 }
 
 fn write_item(

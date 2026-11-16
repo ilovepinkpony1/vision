@@ -9,7 +9,7 @@ mod middle;
 mod right;
 
 use super::canvas::{ink, Canvas};
-use super::header::{header, keys, spinner};
+use super::header::{header, keys, keys_width, spinner};
 use super::theme::T;
 use crate::app::live::{Live, TicketData};
 use crate::app::model::App;
@@ -61,15 +61,16 @@ pub fn draw(app: &App, c: &mut Canvas, key: &str) {
     match &live.tell {
         Some(line) => tell_line(c, data, line),
         None => {
-            let list = footer(data, &now);
+            let list = footer(data, &now, c.w - 1);
             let refs: Vec<(&str, &str)> = list.iter().map(|(k, l)| (*k, l.as_str())).collect();
             keys(c, &refs);
         }
     }
 }
 
-/// The keys that can act in the present state: the key of the state first.
-fn footer(data: &TicketData, now: &Now) -> Vec<(&'static str, String)> {
+/// The keys that can act in the present state: the key of the state first. The row fits
+/// `room` cells, see [`fit`].
+fn footer(data: &TicketData, now: &Now, room: i32) -> Vec<(&'static str, String)> {
     let has = |flag: &str| data.view.flags.iter().any(|f| f.flag == flag);
     let done = now.kind == Kind::Done;
     let stopped = now.kind == Kind::Stopped;
@@ -99,12 +100,46 @@ fn footer(data: &TicketData, now: &Now) -> Vec<(&'static str, String)> {
         add("x", "stop");
     }
     add("esc", "home");
-    add("l", "log");
+    add("l", "log and tool calls");
+    add("f", "filter");
     add("p", "plan");
     if data.view.clone.is_some() && !done {
         add("d", "commits");
     }
     add("?", "keys");
+    fit(list, room)
+}
+
+/// Makes the keys of the footer fit `room` cells. The hints that the person needs least change
+/// first, in this order, until the row fits: `d` and `p` go, the hint of `t` gets short, `o`
+/// and `x` go, and the hint of `l` gets short. So `f filter` stays at each width that the app
+/// allows, and `?` lists each key.
+fn fit(mut list: Vec<(&'static str, String)>, room: i32) -> Vec<(&'static str, String)> {
+    let wide = |list: &[(&'static str, String)]| {
+        let refs: Vec<(&str, &str)> = list.iter().map(|(k, l)| (*k, l.as_str())).collect();
+        keys_width(&refs)
+    };
+    let steps: [(&str, Option<&str>); 6] = [
+        ("d", None),
+        ("p", None),
+        ("t", Some("tell")),
+        ("o", None),
+        ("x", None),
+        ("l", Some("log")),
+    ];
+    for (key, short) in steps {
+        if wide(&list) <= room {
+            break;
+        }
+        match short {
+            Some(label) => {
+                for item in list.iter_mut().filter(|(k, _)| *k == key) {
+                    item.1 = label.to_string();
+                }
+            }
+            None => list.retain(|(k, _)| *k != key),
+        }
+    }
     list
 }
 
@@ -149,4 +184,100 @@ fn tell_line(c: &mut Canvas, data: &TicketData, line: &crate::app::line::Line) {
 /// The data of the live view, for the other parts of the view.
 pub fn data(live: &Live) -> Option<&TicketData> {
     live.data.data.as_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(items: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+        items.iter().map(|(k, l)| (*k, l.to_string())).collect()
+    }
+
+    fn wide(list: &[(&'static str, String)]) -> i32 {
+        let refs: Vec<(&str, &str)> = list.iter().map(|(k, l)| (*k, l.as_str())).collect();
+        keys_width(&refs)
+    }
+
+    #[test]
+    fn the_footer_keeps_f_at_each_width_that_the_app_allows() {
+        let running = list(&[
+            ("r", "continue"),
+            ("n", "needs (12)"),
+            ("t", "tell the next turn"),
+            ("o", "open session"),
+            ("x", "stop"),
+            ("esc", "home"),
+            ("l", "log and tool calls"),
+            ("f", "filter"),
+            ("p", "plan"),
+            ("d", "commits"),
+            ("?", "keys"),
+        ]);
+        let stopped = list(&[
+            ("enter", "resume"),
+            ("r", "continue"),
+            ("n", "needs (12)"),
+            ("t", "tell the next turn"),
+            ("esc", "home"),
+            ("l", "log and tool calls"),
+            ("f", "filter"),
+            ("p", "plan"),
+            ("d", "commits"),
+            ("?", "keys"),
+        ]);
+        for full in [running, stopped] {
+            for w in 100..=200 {
+                let room = w - 1;
+                let fitted = fit(full.clone(), room);
+                assert!(wide(&fitted) <= room, "{w}: {fitted:?}");
+                assert!(
+                    fitted.contains(&("f", "filter".to_string())),
+                    "{w}: {fitted:?}"
+                );
+                assert_eq!(fitted.last(), full.last(), "{w}");
+            }
+            assert_eq!(
+                fit(full.clone(), 199),
+                full,
+                "a wide window keeps each hint"
+            );
+        }
+    }
+
+    #[test]
+    fn the_hints_that_the_person_needs_least_change_first() {
+        let full = list(&[
+            ("r", "retry"),
+            ("n", "needs (1)"),
+            ("t", "tell the next turn"),
+            ("o", "open session"),
+            ("x", "stop"),
+            ("esc", "home"),
+            ("l", "log and tool calls"),
+            ("f", "filter"),
+            ("p", "plan"),
+            ("d", "commits"),
+            ("?", "keys"),
+        ]);
+        // At 120 columns: `d` and `p` go, and the hint of `t` gets short.
+        assert_eq!(
+            fit(full.clone(), 119),
+            list(&[
+                ("r", "retry"),
+                ("n", "needs (1)"),
+                ("t", "tell"),
+                ("o", "open session"),
+                ("x", "stop"),
+                ("esc", "home"),
+                ("l", "log and tool calls"),
+                ("f", "filter"),
+                ("?", "keys"),
+            ])
+        );
+        // At 130 columns, only `d` and `p` go.
+        let at_130 = fit(full, 129);
+        assert!(at_130.contains(&("t", "tell the next turn".to_string())));
+        assert!(!at_130.iter().any(|(k, _)| *k == "p" || *k == "d"));
+    }
 }

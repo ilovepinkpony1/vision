@@ -728,6 +728,211 @@ fn the_answers_of_the_person_go_back_to_the_asking_session() {
     );
 }
 
+/// The `human` rows: the kind, the card, the value, and the reason.
+fn humans(home: &TestHome) -> Vec<(String, String, Option<String>, Option<String>)> {
+    home.ledger()
+        .conn()
+        .prepare("SELECT kind, object, value, reason FROM human ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+}
+
+#[test]
+fn answer_file_records_each_answer_of_a_set_or_none() {
+    let home = TestHome::new();
+    seed_memory(&home);
+    judge_scenario(
+        &home,
+        json!([judge_result(vec![
+            entry("Q-0001", "answer", "decision", &["D-0001"], true, Some(0)),
+            entry("Q-0002", "propose", "principle", &["P-001"], false, Some(0)),
+            entry("Q-0003", "ask", "none", &[], false, None),
+            entry("Q-0004", "ask", "none", &[], false, None),
+        ])]),
+    );
+    let asking = ask(
+        &home,
+        "four",
+        vec![card(1, &[]), card(2, &[]), card(3, &[]), card(4, &[])],
+        resumed_steps(),
+    );
+    judge_round(&home);
+    let file = home.vision.join("answers.json");
+    let answer_file = |text: Value| {
+        std::fs::write(&file, text.to_string()).unwrap();
+        home.run(&["answer", "--file", file.to_str().unwrap()])
+    };
+    let before = decision_files(&home);
+    let waiting = || {
+        let states = states(&home);
+        assert_eq!(
+            states,
+            ["answered", "proposed", "asked", "asked"],
+            "nothing was recorded"
+        );
+        assert!(humans(&home).is_empty(), "no human row");
+        assert_eq!(decision_files(&home), before, "no decision file");
+    };
+
+    // A card that the Judge answered refuses the whole set, and the error names it.
+    let run = answer_file(json!({
+        "Q-0001": {"choice": 1},
+        "Q-0002": {"choice": 1, "why": "Finance imports CSV."},
+        "Q-0003": {"text": "Use JSON"}
+    }));
+    run.expect_code(1);
+    assert!(
+        run.stderr
+            .contains("no answer was recorded, because the answer to Q-0001 was refused"),
+        "{run:?}"
+    );
+    assert!(run.stderr.contains("vision correct Q-0001"), "{run:?}");
+    waiting();
+    // A choice that does not exist refuses it too, after a valid answer.
+    let run = answer_file(json!({"Q-0002": {"choice": 1}, "Q-0003": {"choice": 3}}));
+    run.expect_code(1);
+    assert!(
+        run.stderr.contains("the answer to Q-0003 was refused"),
+        "{run:?}"
+    );
+    assert!(run.stderr.contains("from 1 to 2"), "{run:?}");
+    waiting();
+    // An entry that is not valid stops the command before the ledger.
+    let run = answer_file(json!({"Q-0002": {"choice": 1, "text": "CSV"}}));
+    run.expect_code(1);
+    assert!(
+        run.stderr
+            .contains("exactly one of choice, text, or needless"),
+        "{run:?}"
+    );
+    waiting();
+    // A decision file that cannot be written leaves each card waiting, with no human row.
+    let decisions = home.vision.join("memory/decisions");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&decisions, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let locked = std::fs::write(decisions.join(".probe"), "x").is_err();
+    if locked {
+        let run = answer_file(json!({"Q-0002": {"choice": 1}, "Q-0004": {"needless": "code"}}));
+        run.expect_code(1);
+        assert!(
+            run.stderr.contains("decision files could not be written"),
+            "{run:?}"
+        );
+        waiting();
+    }
+    std::fs::set_permissions(&decisions, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_file(decisions.join(".probe"));
+
+    // The whole set: each answer of `vision answer`, with one commit of the memory.
+    let run = answer_file(json!({
+        "Q-0002": {"choice": 1, "why": "Finance imports CSV.", "when": "An internal export."},
+        "Q-0003": {"text": "Use JSON", "why": "The API reads JSON."},
+        "Q-0004": {"needless": "code"}
+    }));
+    run.expect_code(0);
+    assert_eq!(
+        run.stdout,
+        "Saved the answer to Q-0002 as D-0003.\nSaved the answer to Q-0003 as D-0004.\n\
+         Marked Q-0004 as needless. It gets no decision file.\n\
+         Each card of its turn has an answer now, so the next tick sends the answers back to the agent.\n"
+    );
+    assert_eq!(
+        states(&home),
+        ["answered", "answered", "answered", "needless"]
+    );
+    assert_eq!(row(&home, "Q-0002").took_proposal, Some(true));
+    assert_eq!(row(&home, "Q-0003").took_proposal, None);
+    assert_eq!(
+        humans(&home),
+        [
+            (
+                "answer".into(),
+                "Q-0002".into(),
+                Some("CSV".into()),
+                Some("Finance imports CSV.".into())
+            ),
+            (
+                "answer".into(),
+                "Q-0003".into(),
+                Some("Use JSON".into()),
+                Some("The API reads JSON.".into())
+            ),
+            (
+                "needless".into(),
+                "Q-0004".into(),
+                Some("code".into()),
+                None
+            ),
+        ]
+    );
+    let d3 = memory_file(&home, "decisions/D-0003.md");
+    for line in [
+        "by: user",
+        "basis: answer",
+        "## Answer\nCSV",
+        "## Why\nFinance imports CSV.",
+        "## Applies when\nAn internal export.",
+    ] {
+        assert!(d3.contains(line), "{line:?} in {d3}");
+    }
+    assert!(memory_file(&home, "decisions/D-0004.md").contains("## Answer\nUse JSON"));
+    let subject = Command::new("git")
+        .arg("-C")
+        .arg(home.vision.join("memory"))
+        .args(["log", "-2", "--format=%s"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&subject.stdout).trim(),
+        "Count the uses of P-001\nAdd D-0003, D-0004: 2 answers",
+        "one commit holds the decision files of the set, and the count comes after it"
+    );
+    assert_eq!(
+        principle_uses(&home),
+        "uses: {used: 0, agreed: 1, corrected: 0}"
+    );
+    let events: Vec<String> = home
+        .ledger()
+        .conn()
+        .prepare("SELECT kind FROM events WHERE actor = 'user' AND kind LIKE 'card-%' ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(events, ["card-answered", "card-answered", "card-needless"]);
+    // The same file again: each card has its answer now.
+    let run = answer_file(json!({"Q-0002": {"choice": 2}}));
+    run.expect_code(1);
+    assert!(
+        run.stderr.contains("Q-0002 already has an answer"),
+        "{run:?}"
+    );
+
+    // The tick resumes the asking session with the answers.
+    tick(&home);
+    let resumed = home
+        .ledger()
+        .turns_of_ticket(TICKET)
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.resumes.as_deref() == Some(asking.session.as_str()))
+        .count();
+    assert_eq!(resumed, 1);
+    let ledger = home.ledger();
+    let id = ledger
+        .turns_of_ticket(TICKET)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.resumes.as_deref() == Some(asking.session.as_str()))
+        .unwrap()
+        .id;
+    wait_turn(&home, &id);
+}
+
 #[test]
 fn a_correction_supersedes_the_judge_and_reaches_the_ticket() {
     let home = TestHome::new();
@@ -903,6 +1108,15 @@ fn a_correction_supersedes_the_judge_and_reaches_the_ticket() {
         "{answers_md}"
     );
     assert!(answers_md.contains("## Q-0002 corrected:"), "{answers_md}");
+    // Each correction went as a message, and its own event is its line: no line `told`.
+    let told: i64 = home
+        .ledger()
+        .conn()
+        .query_row("SELECT count(*) FROM events WHERE kind = 'told'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(told, 0);
     assert!(
         !answers_md.contains("## Q-0001 corrected:"),
         "Q-0001 went back corrected: {answers_md}"

@@ -6,7 +6,7 @@
 use vision::app::chain::{Check, CheckFacts, End, Owner};
 use vision::app::model::{App, Card, Screen};
 use vision::app::msg::{Action, Effect, Given, Key, Msg};
-use vision::app::needs::{Input, NeedItem, Reply};
+use vision::app::needs::{Draft, Input, NeedItem, Reply};
 
 use super::need_support::*;
 use super::support::*;
@@ -88,9 +88,37 @@ fn the_arguments_of_each_answer() {
     );
 }
 
+/// The draft of a question on the open card.
+fn draft(app: &App, id: &str) -> Option<Draft> {
+    need_card(app).drafts.get(id).cloned()
+}
+
+fn choice(i: usize, why: &str) -> Draft {
+    Draft::Answer {
+        reply: Reply::Choice(i),
+        why: why.into(),
+    }
+}
+
+/// The drafts that the effects write to the drafts file of DEMO-12.
+fn saved(fx: &[Effect]) -> Option<Vec<(String, Draft)>> {
+    fx.iter().rev().find_map(|e| match e {
+        Effect::SaveDrafts { ticket, drafts } if ticket == "DEMO-12" => Some(drafts.clone()),
+        _ => None,
+    })
+}
+
+/// The entries of the file of a send.
+fn sent(done: &Driven) -> std::collections::BTreeMap<String, vision::questions::set::Entry> {
+    assert_eq!(done.inputs.len(), 1, "one send: {done:?}");
+    vision::questions::set::parse_entries(&done.inputs[0]).unwrap()
+}
+
+const SEND: [&str; 3] = ["answer", "--file", "tickets/DEMO-12/answer-send.json"];
+
 #[test]
-fn a_letter_then_the_reason_runs_the_answer_with_its_why() {
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+fn a_letter_then_the_reason_keeps_a_draft_and_s_sends_it_with_its_why() {
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('b'));
     assert!(matches!(
         input(&app),
@@ -101,73 +129,92 @@ fn a_letter_then_the_reason_runs_the_answer_with_its_why() {
     ));
     type_text(&mut app, 3.1, "People compare the file with the table");
     let fx = key(&mut app, 3.2, Key::Enter);
-    let done = drive(&mut app, 3.3, fx, None, none);
+    // Nothing goes to Vision yet: the draft goes to its file, and the review page shows.
+    assert!(jobs(&fx).is_empty());
+    let want = choice(1, "People compare the file with the table");
+    assert_eq!(draft(&app, "Q-0002"), Some(want.clone()));
+    assert_eq!(saved(&fx), Some(vec![("Q-0002".to_string(), want)]));
+    assert!(need_card(&app).reviewing());
+    let fx = key(&mut app, 3.3, Key::Char('s'));
+    let done = drive(&mut app, 3.4, fx, None, none);
+    assert_eq!(done.actions, [args(&SEND)]);
+    let entries = sent(&done);
+    assert_eq!(entries["Q-0002"].choice, Some(2));
     assert_eq!(
-        done.actions,
-        [args(&[
-            "answer",
-            "Q-0002",
-            "--choice",
-            "2",
-            "--why=People compare the file with the table"
-        ])]
+        entries["Q-0002"].why,
+        "People compare the file with the table"
     );
-    // The only item is answered: the card closes with the notice.
+    // The only item is answered: the card closes with the notice, and the draft goes.
     assert_eq!(app.card, None);
     assert_eq!(
         notice(&app),
-        "Saved your answer to Q-0002 with its reason. builder gets it when each question of its turn has an answer."
+        "Sent your answer to Q-0002. builder gets it at the next pass."
     );
+    assert!(done.other.iter().any(|e| matches!(
+        e,
+        Effect::DropDrafts { ticket, ids } if ticket == "DEMO-12" && ids == &["Q-0002".to_string()]
+    )));
 }
 
 #[test]
-fn tab_saves_the_answer_with_no_reason() {
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+fn tab_keeps_the_draft_with_no_reason() {
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('a'));
     type_text(&mut app, 3.1, "this text does not go");
-    let fx = key(&mut app, 3.2, Key::Tab);
-    let done = drive(&mut app, 3.3, fx, None, none);
-    assert_eq!(done.actions, [args(&["answer", "Q-0002", "--choice", "1"])]);
+    key(&mut app, 3.2, Key::Tab);
+    assert_eq!(draft(&app, "Q-0002"), Some(choice(0, "")));
+    let fx = key(&mut app, 3.3, Key::Char('s'));
+    let done = drive(&mut app, 3.4, fx, None, none);
+    let entries = sent(&done);
+    assert_eq!(entries["Q-0002"].choice, Some(1));
+    assert_eq!(entries["Q-0002"].why, "");
 }
 
 #[test]
-fn enter_takes_the_proposal_of_the_judge_or_the_recommended_choice() {
+fn enter_takes_the_draft_else_the_proposal_of_the_judge_or_the_recommended_choice() {
     let mut judged = question(true);
     judged.proposal.as_mut().unwrap().choice = Some(2);
-    let mut app = open_with(SIZE, vec![NeedItem::Question(judged)]);
+    let mut app = open_with(SIZE, vec![form(vec![judged])]);
     key(&mut app, 3.0, Key::Enter);
-    let fx = key(&mut app, 3.1, Key::Tab);
-    let done = drive(&mut app, 3.2, fx, None, none);
-    assert_eq!(done.actions, [args(&["answer", "Q-0002", "--choice", "2"])]);
+    key(&mut app, 3.1, Key::Tab);
+    assert_eq!(draft(&app, "Q-0002"), Some(choice(1, "")));
 
-    // A proposal in words, with no choice, goes as a text.
+    // A proposal in words, with no choice, is a text.
     let mut words = question(true);
     let proposal = words.proposal.as_mut().unwrap();
     proposal.choice = None;
     proposal.answer = "Keep the order, then sort the rest".into();
-    let mut app = open_with(SIZE, vec![NeedItem::Question(words)]);
+    let mut app = open_with(SIZE, vec![form(vec![words])]);
     key(&mut app, 3.0, Key::Enter);
-    let fx = key(&mut app, 3.1, Key::Tab);
-    let done = drive(&mut app, 3.2, fx, None, none);
+    key(&mut app, 3.1, Key::Tab);
     assert_eq!(
-        done.actions,
-        [args(&[
-            "answer",
-            "Q-0002",
-            "--text=Keep the order, then sort the rest"
-        ])]
+        draft(&app, "Q-0002"),
+        Some(Draft::Answer {
+            reply: Reply::Text("Keep the order, then sort the rest".into()),
+            why: String::new()
+        })
     );
 
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Enter);
-    let fx = key(&mut app, 3.1, Key::Tab);
-    let done = drive(&mut app, 3.2, fx, None, none);
-    assert_eq!(done.actions, [args(&["answer", "Q-0002", "--choice", "1"])]);
+    type_text(&mut app, 3.1, "People compare");
+    key(&mut app, 3.2, Key::Enter);
+    assert_eq!(draft(&app, "Q-0002"), Some(choice(0, "People compare")));
+    // With a draft, Enter on its page opens the draft again, with its old reason.
+    key(&mut app, 3.3, Key::Char('1'));
+    key(&mut app, 3.4, Key::Enter);
+    match input(&app) {
+        Input::Why { reply, line } => {
+            assert_eq!(reply, Reply::Choice(0));
+            assert_eq!(line.text(), "People compare");
+        }
+        other => panic!("not the line of the reason: {other:?}"),
+    }
 
     // No proposal and no recommended choice: Enter says what to press.
     let mut plain = question(false);
     plain.recommended = None;
-    let mut app = open_with(SIZE, vec![NeedItem::Question(plain)]);
+    let mut app = open_with(SIZE, vec![form(vec![plain])]);
     let fx = key(&mut app, 3.0, Key::Enter);
     assert!(jobs(&fx).is_empty());
     assert_eq!(input(&app), Input::None);
@@ -179,7 +226,7 @@ fn enter_takes_the_proposal_of_the_judge_or_the_recommended_choice() {
 
 #[test]
 fn e_takes_an_answer_in_the_words_of_the_person() {
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('e'));
     assert!(matches!(input(&app), Input::Words(_)));
     // An empty answer does not go.
@@ -194,17 +241,15 @@ fn e_takes_an_answer_in_the_words_of_the_person() {
         Input::Why { reply: Reply::Text(ref t), .. } if t == "Keep the order, and put the total last"
     ));
     type_text(&mut app, 3.5, "The team reads it");
-    let fx = key(&mut app, 3.6, Key::Enter);
-    let done = drive(&mut app, 3.7, fx, None, none);
+    key(&mut app, 3.6, Key::Enter);
+    let fx = key(&mut app, 3.7, Key::Char('s'));
+    let done = drive(&mut app, 3.8, fx, None, none);
+    let entries = sent(&done);
     assert_eq!(
-        done.actions,
-        [args(&[
-            "answer",
-            "Q-0002",
-            "--text=Keep the order, and put the total last",
-            "--why=The team reads it"
-        ])]
+        entries["Q-0002"].text.as_deref(),
+        Some("Keep the order, and put the total last")
     );
+    assert_eq!(entries["Q-0002"].why, "The team reads it");
 }
 
 #[test]
@@ -215,23 +260,23 @@ fn k_marks_the_question_as_needless_with_its_place() {
         ('m', "memory"),
         ('n', "no-matter"),
     ] {
-        let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+        let mut app = open_with(SIZE, vec![one(false)]);
         key(&mut app, 3.0, Key::Char('k'));
         assert_eq!(input(&app), Input::Needless);
         // Another key does nothing.
         assert!(jobs(&key(&mut app, 3.05, Key::Char('z'))).is_empty());
-        let fx = key(&mut app, 3.1, Key::Char(letter));
-        let done = drive(&mut app, 3.2, fx, None, none);
-        assert_eq!(
-            done.actions,
-            [args(&["answer", "Q-0002", "--needless", place])]
-        );
+        assert_eq!(input(&app), Input::Needless);
+        key(&mut app, 3.1, Key::Char(letter));
+        assert_eq!(draft(&app, "Q-0002"), Some(Draft::Needless(place.into())));
+        let fx = key(&mut app, 3.2, Key::Char('s'));
+        let done = drive(&mut app, 3.3, fx, None, none);
+        assert_eq!(sent(&done)["Q-0002"].needless.as_deref(), Some(place));
     }
 }
 
 #[test]
 fn esc_and_ctrl_c_go_back_one_step_while_the_person_types() {
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('a'));
     key(&mut app, 3.1, Key::Esc);
     assert_eq!(input(&app), Input::None);
@@ -242,6 +287,7 @@ fn esc_and_ctrl_c_go_back_one_step_while_the_person_types() {
     key(&mut app, 3.4, Key::Char('k'));
     key(&mut app, 3.5, Key::Esc);
     assert_eq!(input(&app), Input::None);
+    assert_eq!(draft(&app, "Q-0002"), None, "nothing was kept");
     // With no line open, Esc closes the card, and the question keeps waiting.
     key(&mut app, 3.6, Key::Esc);
     assert_eq!(app.card, None);
@@ -250,9 +296,11 @@ fn esc_and_ctrl_c_go_back_one_step_while_the_person_types() {
 #[test]
 fn a_letter_of_a_choice_wins_over_a_key_of_the_card() {
     let mut view = question(false);
-    for (n, letter) in ['c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k']
-        .into_iter()
-        .enumerate()
+    for (n, letter) in [
+        'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'r',
+    ]
+    .into_iter()
+    .enumerate()
     {
         view.choices.push(vision::questions::ChoiceView {
             n: n + 3,
@@ -261,7 +309,7 @@ fn a_letter_of_a_choice_wins_over_a_key_of_the_card() {
             means: String::new(),
         });
     }
-    let mut app = open_with(SIZE, vec![NeedItem::Question(view)]);
+    let mut app = open_with(SIZE, vec![form(vec![view])]);
     key(&mut app, 3.0, Key::Char('e'));
     assert!(matches!(
         input(&app),
@@ -276,37 +324,45 @@ fn a_letter_of_a_choice_wins_over_a_key_of_the_card() {
     key(&mut app, 3.3, Key::Esc);
     key(&mut app, 3.4, Key::Char('-'));
     assert_eq!(input(&app), Input::Needless);
+    key(&mut app, 3.5, Key::Esc);
+    // `r` is a choice here, so `s` opens the review page.
+    key(&mut app, 3.6, Key::Char('r'));
+    assert!(matches!(
+        input(&app),
+        Input::Why {
+            reply: Reply::Choice(16),
+            ..
+        }
+    ));
+    key(&mut app, 3.7, Key::Esc);
+    key(&mut app, 3.8, Key::Char('s'));
+    assert!(need_card(&app).reviewing());
 }
 
 #[test]
-fn after_an_answer_the_next_card_shows() {
-    let mut app = open_with(
-        SIZE,
-        vec![NeedItem::Question(question(false)), plan_item(false)],
-    );
+fn after_a_send_the_next_card_shows() {
+    let mut app = open_with(SIZE, vec![one(false), plan_item(false)]);
     assert_eq!(need_card(&app).len(), 2);
     key(&mut app, 3.0, Key::Char('a'));
-    let fx = key(&mut app, 3.1, Key::Tab);
-    let done = drive(&mut app, 3.2, fx.clone(), None, none);
+    key(&mut app, 3.1, Key::Tab);
+    let fx = key(&mut app, 3.2, Key::Char('s'));
+    let done = drive(&mut app, 3.3, fx, None, none);
     assert_eq!(done.actions.len(), 1);
     let card = need_card(&app);
     assert_eq!(card.len(), 1);
     assert!(matches!(card.item(), Some(NeedItem::Plan(_))));
-    assert!(notice(&app).starts_with("Saved your answer to Q-0002."));
+    assert!(notice(&app).starts_with("Sent your answer to Q-0002."));
 }
 
 #[test]
-fn the_arrows_move_between_the_cards_and_scroll_a_long_one() {
-    let mut app = open_with(
-        (100, 28),
-        vec![
-            NeedItem::Question(question(false)),
-            plan_item(false),
-            flag(false),
-        ],
-    );
+fn the_arrows_move_through_the_pages_then_to_the_cards_and_scroll_a_long_one() {
+    let mut app = open_with((100, 28), vec![one(false), plan_item(false), flag(false)]);
     key(&mut app, 3.0, Key::Left);
+    assert_eq!((need_card(&app).at, need_card(&app).page), (0, 0));
+    // The form of one question has its question and its review page.
+    key(&mut app, 3.05, Key::Right);
     assert_eq!(need_card(&app).at, 0);
+    assert!(need_card(&app).reviewing());
     key(&mut app, 3.1, Key::Right);
     assert_eq!(need_card(&app).at, 1);
     key(&mut app, 3.2, Key::Down);
@@ -321,7 +377,12 @@ fn the_arrows_move_between_the_cards_and_scroll_a_long_one() {
     assert_eq!(need_card(&app).scroll, end, "the scroll stops at the end");
     key(&mut app, 3.7, Key::Home);
     assert_eq!(need_card(&app).scroll, 0);
+    // Back from the plan, the form shows its review page.
+    key(&mut app, 3.75, Key::Left);
+    assert_eq!(need_card(&app).at, 0);
+    assert!(need_card(&app).reviewing());
     key(&mut app, 3.8, Key::Right);
+    key(&mut app, 3.85, Key::Right);
     key(&mut app, 3.9, Key::Right);
     assert_eq!(need_card(&app).at, 2);
     assert_eq!(need_card(&app).scroll, 0);

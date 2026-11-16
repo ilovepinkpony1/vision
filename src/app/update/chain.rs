@@ -10,7 +10,7 @@
 
 use super::super::chain::{judge, Chain, CheckFacts, End, Mark, Owner, Verdict, Work, MAX_PASSES};
 use super::super::model::{App, Card, OpenedCard, Run, Screen, Tone};
-use super::super::msg::{ChildResult, Effect, Handoff, JobDone, JobKind};
+use super::super::msg::{Action, ChildResult, Effect, Handoff, JobDone, JobKind};
 use super::super::text::{error_line, tidy};
 use super::{engine, models, needs, notice};
 
@@ -216,7 +216,16 @@ fn finish(app: &mut App, fx: &mut Vec<Effect>) {
     };
     chain.end = Some(End::Done);
     match &chain.owner {
-        Owner::Need(item) => needs::done(app, item, &chain.done, fx),
+        Owner::Need(item) => {
+            // The send of a form: its drafts go, also when its card is closed now.
+            for step in &chain.steps {
+                if let Work::Act(Action::AnswerSet { ticket, answers }) = &step.work {
+                    let ids = answers.iter().map(|(id, _)| id.clone()).collect();
+                    needs::sent(app, ticket, ids, fx);
+                }
+            }
+            needs::done(app, item, &chain.done, fx)
+        }
         Owner::TakeOver { .. } => {}
         Owner::Continue(key) => {
             if matches!(&app.card, Some(Card::Opened(card)) if card.key == *key) {

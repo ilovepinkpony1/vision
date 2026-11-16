@@ -14,6 +14,14 @@ pub struct Line {
 }
 
 impl Line {
+    /// A line that starts with this text, with the cursor at its end, such as the old text of
+    /// a draft.
+    pub fn of(text: &str) -> Line {
+        let mut line = Line::default();
+        line.paste(text);
+        line
+    }
+
     pub fn text(&self) -> String {
         self.chars.iter().collect()
     }

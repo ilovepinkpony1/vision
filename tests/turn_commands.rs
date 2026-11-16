@@ -13,6 +13,17 @@ fn pid_of(event: &Value, field: &str) -> u32 {
     event[field].as_u64().expect("a pid") as u32
 }
 
+/// The lines of `vision log KEY` with a message of the person.
+fn told_lines(home: &TestHome, key: &str) -> Vec<String> {
+    let run = home.run(&["log", key]);
+    run.expect_code(0);
+    run.stdout
+        .lines()
+        .filter(|l| l.contains(" told "))
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
 fn tell_sends_a_message_into_a_running_turn() {
     let home = TestHome::new();
@@ -31,6 +42,8 @@ fn tell_sends_a_message_into_a_running_turn() {
     let run = home.run(&["tell", "DEMO-12", "use the old export"]);
     run.expect_code(0);
     assert!(run.stdout.contains("Sent to the running turn"), "{run:?}");
+    // The timeline has the message of the person at once.
+    assert_eq!(told_lines(&home, "DEMO-12").len(), 1);
     home.wait_ended(&launched);
     let stream = home.turn_file(&launched, "stream.jsonl");
     assert!(stream.contains("got: use the old export"), "{stream}");
@@ -47,6 +60,17 @@ fn tell_sends_a_message_into_a_running_turn() {
         Some(launched.id.to_string().as_str())
     );
     assert!(message.delivered.is_some());
+    // One line at the time of the row, also after the session got the message.
+    let told = told_lines(&home, "DEMO-12");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(
+        told[0].starts_with(&format!("{}  event", message.at)),
+        "{told:?}"
+    );
+    assert!(
+        told[0].ends_with("user told scout: use the old export"),
+        "{told:?}"
+    );
     home.collect();
     let outcome = turn::outcome(&home.ctx(), &ledger, &launched.id).unwrap();
     assert_eq!(outcome.status, TurnStatus::Done);
@@ -64,6 +88,12 @@ fn tell_with_no_running_turn_waits_for_the_next_turn() {
         .is_file());
     let ledger = home.ledger();
     assert_eq!(ledger.message(1).unwrap().unwrap().turn, None);
+    let told = told_lines(&home, "DEMO-12");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(
+        told[0].ends_with("user told the next turn: remember the old export"),
+        "{told:?}"
+    );
 
     let scenario = home.scenario(
         "next",
@@ -84,7 +114,14 @@ fn tell_with_no_running_turn_waits_for_the_next_turn() {
         Some(launched.id.to_string().as_str())
     );
     assert!(message.delivered.is_some());
+    // The next turn got the message: the line stays one, with the words of its time.
+    assert_eq!(told_lines(&home, "DEMO-12"), told);
     home.run(&["tell", "DEMO-12", " "]).expect_code(1);
+    assert_eq!(
+        told_lines(&home, "DEMO-12"),
+        told,
+        "an empty message has no line"
+    );
 }
 
 #[test]

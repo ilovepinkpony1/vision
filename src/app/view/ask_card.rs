@@ -1,27 +1,116 @@
-//! The question card (`mAsk` of the design): the question; the proposal of the Judge first,
-//! with its reason and its sources, when it proposed one; why the agent asks; the example;
-//! each choice with its letter, its label, and what it means; the recommended choice with its
-//! reason; the evidence; and why the Judge was not sure. The foot holds the keys, the line of
-//! an answer in the words of the person, the line of the reason, or the question of a needless
-//! card.
+//! The question form (`mAsk` of the design): the questions of one asking turn, or of one ask
+//! step, in one card. The head names who asks and the page, such as "Question 2 of 3", and a
+//! row under it shows each question with its mark: a draft, a proposal of the Judge, or open.
+//!
+//! A question page shows the question; the draft of the person; the proposal of the Judge, with
+//! its reason and its sources; why the agent asks; the example; each choice with its letter, its
+//! label, and what it means; the recommended choice with its reason; the evidence; and why the
+//! Judge was not sure. The foot holds the keys, the line of an answer in the words of the
+//! person, the line of the reason, or the question of a needless card.
+//!
+//! The review page lists each question in two lines, with its draft and its reason, and marks
+//! each question with no draft. Its foot holds the send.
+//!
+//! Each part that a click can hit (a tab of the question row, a choice, a row of the review
+//! page, the send) is placed here, in the same code that draws it.
 
-use super::canvas::ink;
+use super::canvas::{ink, Ink};
 use super::cards::Rows;
-use super::need_card::{Parts, TEXT};
+use super::need_card::{Area, Hit, Parts, TEXT};
 use super::theme::{agent_color, T};
+use crate::app::chain::{End, Owner};
 use crate::app::line::Line;
 use crate::app::model::App;
-use crate::app::needs::{enter_reply, Input, NeedsCard, Reply};
-use crate::app::text::{cut, width, wrap};
+use crate::app::needs::{enter_reply, Draft, Input, Mark, NeedsCard, QuestionSet, Reply, Target};
+use crate::app::recipes::needless_words;
+use crate::app::text::{count, cut, width, wrap};
 use crate::questions::CardView;
 
 /// The column of a value after its name, such as the text after "Why it asks".
 const VALUE: i32 = 17;
 
-pub(super) fn parts(app: &App, card: &NeedsCard, view: &CardView) -> Parts {
-    let mut body = Rows::default();
+pub(super) fn parts(app: &App, card: &NeedsCard, set: &QuestionSet) -> Parts {
+    let mut parts = match card.question() {
+        Some(i) => question(app, card, set, i),
+        None => review(app, card, set),
+    };
+    tabs(card, set, &mut parts);
+    parts
+}
+
+/// The question row: a tab for each question with its mark, and the tab of the review page.
+/// The tab that shows has the color of the accent.
+fn tabs(card: &NeedsCard, set: &QuestionSet, parts: &mut Parts) {
+    let review = set.review();
+    let tab = |i: usize, words: bool| -> (String, Ink) {
+        if i == review {
+            let ready = set.missing(&card.drafts).is_empty();
+            let color = if ready { T.ok } else { T.dim };
+            return ("review".to_string(), ink(color));
+        }
+        let (symbol, word, color) = match set.mark(i, &card.drafts) {
+            Mark::Drafted => ("✓", "draft", T.ok),
+            Mark::Proposed => ("◇", "proposed", agent_color("judge")),
+            Mark::Open => ("·", "open", T.dim),
+        };
+        let text = if words {
+            format!("{} {symbol} {word}", i + 1)
+        } else {
+            format!("{} {symbol}", i + 1)
+        };
+        (text, ink(color))
+    };
+    let all = |words: bool| -> Vec<(String, Ink)> { (0..=review).map(|i| tab(i, words)).collect() };
+    let wide =
+        |list: &[(String, Ink)]| -> usize { list.iter().map(|(t, _)| width(t) + 4).sum::<usize>() };
+    let mut list = all(true);
+    if wide(&list) > TEXT {
+        list = all(false);
+    }
+    let mut row = Vec::new();
+    let mut x = 3;
+    for (i, (text, style)) in list.into_iter().enumerate() {
+        let shown = i == card.page.min(review);
+        let text = if shown { format!(" {text} ") } else { text };
+        let style = if shown {
+            ink(T.bg).on(T.accent).bold()
+        } else {
+            style
+        };
+        let w = width(&text) as i32;
+        parts.hits.push(Hit {
+            target: Target::Page(i),
+            area: Area::Head,
+            row: 0,
+            x,
+            w,
+        });
+        row.push((x, text, style));
+        x += w + 3;
+    }
+    parts.head.rows.push(row);
+}
+
+/// The title of a page: who asks, and the page.
+fn title(set: &QuestionSet, page: &str) -> String {
+    format!("{} · {page}", set.asker())
+}
+
+fn question(app: &App, card: &NeedsCard, set: &QuestionSet, i: usize) -> Parts {
+    let view = &set.cards[i];
+    let draft = card.drafts.get(&view.id);
+    let mut parts = Parts::default();
+    let body = &mut parts.body;
     body.para(3, &view.question, TEXT, ink(T.fg).bold());
     body.blank();
+    if let Some(draft) = draft {
+        let (answer, why) = draft_words(view, draft);
+        named(body, "Your draft", &answer, ink(T.ok).bold());
+        if !why.is_empty() {
+            named(body, "Its reason", &why, ink(T.fg));
+        }
+        body.blank();
+    }
     let judge = agent_color("judge");
     if let Some(p) = &view.proposal {
         let letter = p
@@ -31,29 +120,30 @@ pub(super) fn parts(app: &App, card: &NeedsCard, view: &CardView) -> Parts {
             .map(|l| format!("{l}  "))
             .unwrap_or_default();
         named(
-            &mut body,
+            body,
             "The Judge",
             &format!("proposes {letter}{}", p.answer),
             ink(judge).bold(),
         );
         if !p.reason.is_empty() {
-            named(&mut body, "", &p.reason, ink(judge));
+            named(body, "", &p.reason, ink(judge));
         }
         if !p.sources.is_empty() {
-            named(&mut body, "Its sources", &p.sources.join(", "), ink(T.fg));
+            named(body, "Its sources", &p.sources.join(", "), ink(T.fg));
         }
         body.blank();
     }
     if !view.context.is_empty() {
-        named(&mut body, "Why it asks", &view.context, ink(T.fg));
+        named(body, "Why it asks", &view.context, ink(T.fg));
     }
     if !view.example.is_empty() {
-        named(&mut body, "Example", &view.example, ink(T.fg));
+        named(body, "Example", &view.example, ink(T.fg));
     }
     if !view.context.is_empty() || !view.example.is_empty() {
         body.blank();
     }
-    choices(&mut body, card, view);
+    choices(&mut parts, card, view, draft);
+    let body = &mut parts.body;
     body.blank();
     if let Some(rec) = view
         .recommended
@@ -65,35 +155,51 @@ pub(super) fn parts(app: &App, card: &NeedsCard, view: &CardView) -> Parts {
         } else {
             format!("{letter}{}: {}", rec.label, view.why)
         };
-        named(&mut body, "Recommended", &text, ink(T.fg));
+        named(body, "Recommended", &text, ink(T.fg));
     }
     if !view.evidence.is_empty() {
-        named(&mut body, "Evidence", &view.evidence, ink(T.dim));
+        named(body, "Evidence", &view.evidence, ink(T.dim));
     }
     if view.proposal.is_none() {
         let reason = match &view.judge_reason {
             Some(reason) => format!("was not sure: {reason}"),
             None => "was not sure, so the question came to you.".to_string(),
         };
-        named(&mut body, "The Judge", &reason, ink(judge));
+        named(body, "The Judge", &reason, ink(judge));
     }
-    Parts {
-        title: format!("question · {} asks at the step {}", view.agent, step(view)),
-        body,
-        foot: foot(app, card, view),
+    parts.title = title(set, &format!("Question {} of {}", i + 1, set.len()));
+    parts.foot = foot(app, card, set, view, draft);
+    parts
+}
+
+/// The answer and the reason of a draft, in words.
+fn draft_words(view: &CardView, draft: &Draft) -> (String, String) {
+    match draft {
+        Draft::Answer { reply, why } => (reply_words(view, reply), why.clone()),
+        Draft::Needless(place) => (
+            format!("needless: {}", needless_words(place)),
+            String::new(),
+        ),
     }
 }
 
-fn step(view: &CardView) -> &str {
-    if view.step.is_empty() {
-        "-"
-    } else {
-        &view.step
+/// A reply in words: the letter and the label of a choice, or the text.
+fn reply_words(view: &CardView, reply: &Reply) -> String {
+    match reply {
+        Reply::Choice(i) => view
+            .choices
+            .get(*i)
+            .map(|c| {
+                let letter = c.letter.map(|l| format!("{l}  ")).unwrap_or_default();
+                format!("{letter}{}", c.label)
+            })
+            .unwrap_or_default(),
+        Reply::Text(text) => text.clone(),
     }
 }
 
 /// A dim name and its text, wrapped from the column of the values.
-fn named(rows: &mut Rows, name: &str, text: &str, style: super::canvas::Ink) {
+fn named(rows: &mut Rows, name: &str, text: &str, style: Ink) {
     let mut first = true;
     for line in wrap(text, TEXT - VALUE as usize + 3) {
         let mut row = Vec::new();
@@ -107,14 +213,25 @@ fn named(rows: &mut Rows, name: &str, text: &str, style: super::canvas::Ink) {
 }
 
 /// The choices: the letter, the label, what it means, and the mark of the recommended one. The
-/// arrow marks the choice that Enter takes, or the choice that waits for its reason.
-fn choices(rows: &mut Rows, card: &NeedsCard, view: &CardView) {
-    let marked = match &card.input {
-        Input::Why {
-            reply: Reply::Choice(i),
-            ..
-        } => Some(*i),
-        Input::None => enter_reply(view).and_then(|r| match r {
+/// arrow marks the choice that Enter takes (the draft, else the proposal or the recommended
+/// choice), or the choice that waits for its reason.
+fn choices(parts: &mut Parts, card: &NeedsCard, view: &CardView, draft: Option<&Draft>) {
+    let marked = match (&card.input, draft) {
+        (
+            Input::Why {
+                reply: Reply::Choice(i),
+                ..
+            },
+            _,
+        ) => Some(*i),
+        (
+            Input::None,
+            Some(Draft::Answer {
+                reply: Reply::Choice(i),
+                ..
+            }),
+        ) => Some(*i),
+        (Input::None, None) => enter_reply(view).and_then(|r| match r {
             Reply::Choice(i) => Some(i),
             Reply::Text(_) => None,
         }),
@@ -156,15 +273,34 @@ fn choices(rows: &mut Rows, card: &NeedsCard, view: &CardView) {
         if view.recommended == Some(choice.n) {
             row.push((TEXT as i32 + 3 - 11, "recommended".into(), ink(T.ok)));
         }
-        rows.rows.push(row);
+        let rows = 1 + lines.len().saturating_sub(1);
+        for line in 0..rows {
+            parts.hits.push(Hit {
+                target: Target::Choice(i),
+                area: Area::Body,
+                row: parts.body.rows.len() + line,
+                x: 3,
+                w: TEXT as i32,
+            });
+        }
+        parts.body.rows.push(row);
         for line in lines.iter().skip(1) {
-            rows.rows.push(vec![(means_x, line.clone(), ink(T.dim))]);
+            parts
+                .body
+                .rows
+                .push(vec![(means_x, line.clone(), ink(T.dim))]);
         }
     }
 }
 
-/// The foot: the keys, or the line that the person types in.
-fn foot(_app: &App, card: &NeedsCard, view: &CardView) -> Rows {
+/// The foot of a question page: the keys, or the line that the person types in.
+fn foot(
+    _app: &App,
+    card: &NeedsCard,
+    set: &QuestionSet,
+    view: &CardView,
+    draft: Option<&Draft>,
+) -> Rows {
     let mut rows = Rows::default();
     match &card.input {
         Input::None => {
@@ -181,12 +317,22 @@ fn foot(_app: &App, card: &NeedsCard, view: &CardView) -> Rows {
             let taken = |c: char| view.choices.iter().any(|ch| ch.letter == Some(c));
             let words = if taken('e') { "t" } else { "e" };
             let needless = if taken('k') { "-" } else { "k" };
-            let enter = if view.proposal.is_some() {
+            let review = if taken('r') { "s" } else { "r" };
+            let enter = if let Some(Draft::Needless(_)) = draft {
+                Some("change the place")
+            } else if draft.is_some() {
+                Some("change the reason")
+            } else if view.proposal.is_some() {
                 Some("take the proposal")
             } else if view.recommended.is_some() {
                 Some("take the recommended")
             } else {
                 None
+            };
+            let numbers = match set.len() {
+                1 => None,
+                2 => Some("1 2".to_string()),
+                n => Some(format!("1-{}", n.min(9))),
             };
             let mut keys: Vec<(&str, &str)> = Vec::new();
             if !letters.is_empty() {
@@ -197,9 +343,11 @@ fn foot(_app: &App, card: &NeedsCard, view: &CardView) -> Rows {
             }
             keys.push((words, "your words"));
             keys.push((needless, "needless"));
-            if card.len() > 1 {
-                keys.push(("←→", "the others"));
+            keys.push(("←→", "the pages"));
+            if let Some(numbers) = &numbers {
+                keys.push((numbers, "a question"));
             }
+            keys.push((review, "review"));
             keys.push(("esc", "later"));
             rows.keys(&keys);
         }
@@ -210,34 +358,23 @@ fn foot(_app: &App, card: &NeedsCard, view: &CardView) -> Rows {
             rows.keys(&[("enter", "next"), ("esc", "back")]);
         }
         Input::Why { reply, line } => {
-            let answer = match reply {
-                Reply::Choice(i) => view
-                    .choices
-                    .get(*i)
-                    .map(|c| {
-                        let letter = c.letter.map(|l| format!("{l}  ")).unwrap_or_default();
-                        format!("{letter}{}", c.label)
-                    })
-                    .unwrap_or_default(),
-                Reply::Text(text) => text.clone(),
-            };
             rows.rows.push(vec![
                 (3, "Your answer".to_string(), ink(T.dim)),
-                (VALUE, answer, ink(T.fg).bold()),
+                (VALUE, reply_words(view, reply), ink(T.fg).bold()),
             ]);
             rows.rows.push(vec![
                 (3, "Why?".to_string(), ink(T.accent).bold()),
                 (
                     8,
-                    "Vision keeps the answer with its reason.".to_string(),
+                    "The reason goes with the answer when you send the form.".to_string(),
                     ink(T.dim),
                 ),
             ]);
             line_row(&mut rows, line);
             rows.blank();
             rows.keys(&[
-                ("enter", "save the answer with its why"),
-                ("tab", "save with no why"),
+                ("enter", "keep it with this why"),
+                ("tab", "keep it with no why"),
                 ("esc", "back"),
             ]);
         }
@@ -258,6 +395,144 @@ fn foot(_app: &App, card: &NeedsCard, view: &CardView) -> Rows {
         }
     }
     rows
+}
+
+/// The review page: each question in two lines with its draft and its reason, a mark for each
+/// question with no draft, and the send in the foot.
+fn review(app: &App, card: &NeedsCard, set: &QuestionSet) -> Parts {
+    let mut parts = Parts::default();
+    let whom = if set.ask_step().is_some() {
+        format!("answers.md of {}", set.ticket)
+    } else {
+        set.cards
+            .first()
+            .map_or("the agent".to_string(), |c| c.agent.clone())
+    };
+    let intro = if set.len() == 1 {
+        format!("This answer goes to {whom} when you send it. Nothing went to Vision yet.")
+    } else {
+        format!("These answers go to {whom} when you send them. Nothing went to Vision yet.")
+    };
+    parts.body.para(3, &intro, TEXT, ink(T.dim));
+    parts.body.blank();
+    let refused = refusal(app, set);
+    let row_w = TEXT as i32 - 3;
+    for (i, view) in set.cards.iter().enumerate() {
+        let selected = i == card.row;
+        let first = parts.body.rows.len();
+        parts.body.rows.push(vec![
+            (
+                1,
+                if selected { "▸" } else { " " }.to_string(),
+                ink(T.accent).bold(),
+            ),
+            (3, (i + 1).to_string(), ink(T.accent).bold()),
+            (6, cut(&view.question, row_w as usize), {
+                let style = ink(T.fg);
+                if selected {
+                    style.bold()
+                } else {
+                    style
+                }
+            }),
+        ]);
+        let (text, style) = match card.drafts.get(&view.id) {
+            Some(draft) => {
+                let (answer, why) = draft_words(view, draft);
+                let text = if why.is_empty() {
+                    answer
+                } else {
+                    format!("{answer} · {why}")
+                };
+                (text, ink(T.ok))
+            }
+            None => (
+                format!("no draft yet · press {} to answer it", i + 1),
+                ink(T.warn).bold(),
+            ),
+        };
+        parts
+            .body
+            .rows
+            .push(vec![(6, cut(&text, row_w as usize), style)]);
+        if let Some((n, reason)) = &refused {
+            if *n == i {
+                parts.body.rows.push(vec![(
+                    6,
+                    cut(&format!("refused: {reason}"), row_w as usize),
+                    ink(T.bad).bold(),
+                )]);
+            }
+        }
+        for row in first..parts.body.rows.len() {
+            parts.hits.push(Hit {
+                target: Target::Row(i),
+                area: Area::Body,
+                row,
+                x: 1,
+                w: TEXT as i32 + 2,
+            });
+        }
+    }
+    let missing = set.missing(&card.drafts);
+    let (state, style) = match missing.as_slice() {
+        [] => (
+            match set.len() {
+                1 => "The question has a draft. s sends it.".to_string(),
+                n => format!("Each of the {n} questions has a draft. s sends them in one action."),
+            },
+            ink(T.ok),
+        ),
+        list => {
+            let numbers: Vec<String> = list.iter().map(|i| (i + 1).to_string()).collect();
+            (
+                format!(
+                    "{} no draft yet: {}. The send needs a draft for each question.",
+                    match list.len() {
+                        1 => "1 question has".to_string(),
+                        n => format!("{n} questions have"),
+                    },
+                    numbers.join(", ")
+                ),
+                ink(T.warn),
+            )
+        }
+    };
+    parts.foot.para(3, &state, TEXT, style);
+    let send = match set.len() {
+        1 => "send the answer".to_string(),
+        n => format!("send the {n} answers"),
+    };
+    parts.hits.push(Hit {
+        target: Target::Send,
+        area: Area::Foot,
+        row: parts.foot.rows.len(),
+        x: 3,
+        w: (width("s") + 1 + width(&send)) as i32,
+    });
+    parts.foot.keys(&[
+        ("s", &send),
+        ("enter", "open the question"),
+        ("↑↓", "choose"),
+        ("←→", "the pages"),
+        ("esc", "later"),
+    ]);
+    parts.title = title(set, &format!("your {}", count(set.len(), "answer")));
+    parts
+}
+
+/// The question that a failed send names, with the reason, from the end of the chain of the
+/// form.
+fn refusal(app: &App, set: &QuestionSet) -> Option<(usize, String)> {
+    let chain = app.chain_of(&Owner::Need(format!("questions:{}", set.turn)))?;
+    let Some(End::Failed { text, .. }) = &chain.end else {
+        return None;
+    };
+    let i = set.named_in(text)?;
+    let reason = text
+        .split_once("was refused: ")
+        .map_or(text.as_str(), |(_, reason)| reason);
+    Some((i, reason.to_string()))
 }
 
 /// One line of input with its cursor. A long text shows the part around the cursor.

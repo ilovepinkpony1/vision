@@ -105,7 +105,9 @@ fn new_lines_keep_a_scrolled_feed_in_place() {
     let mut app = working_live((100, 20));
     key(&mut app, 3.0, Key::Up);
     let back = app.live.as_ref().unwrap().feed.back;
-    let mut batch = batches(vec![(1520, events().remove(1).1)]).remove(0);
+    let lines = vision::app::update::live::feed_lines(&app);
+    // A text of the agent in several lines: the view keeps its place by each new line.
+    let mut batch = batches(vec![(1520, events().remove(3).1)]).remove(0);
     batch.at = at(1520);
     send(
         &mut app,
@@ -115,7 +117,22 @@ fn new_lines_keep_a_scrolled_feed_in_place() {
             batch,
         },
     );
-    assert_eq!(app.live.as_ref().unwrap().feed.back, back + 1);
+    let added = vision::app::update::live::feed_lines(&app) - lines;
+    assert!(added > 1, "{added}");
+    assert_eq!(app.live.as_ref().unwrap().feed.back, back + added);
+    // A tool call adds no line, so the place stays.
+    let back = app.live.as_ref().unwrap().feed.back;
+    let mut batch = batches(vec![(1530, events().remove(1).1)]).remove(0);
+    batch.at = at(1530);
+    send(
+        &mut app,
+        3.15,
+        Msg::Stream {
+            key: "DEMO-12".into(),
+            batch,
+        },
+    );
+    assert_eq!(app.live.as_ref().unwrap().feed.back, back);
     // The events of another ticket do not reach the feed.
     let before = app.live.as_ref().unwrap().feed.len();
     send(
@@ -661,4 +678,88 @@ fn a_card_that_runs_shows_its_job_and_a_late_result_of_a_closed_card_changes_not
     assert_eq!(app.card, None);
     done(&mut app, 3.3, id, action, "");
     assert_eq!(app.card, None);
+}
+
+#[test]
+fn a_tab_of_the_activity_scrolls_by_its_own_lines_and_a_new_tab_goes_to_its_end() {
+    use vision::app::feed::Filter;
+    use vision::app::update::live::feed_lines;
+    let mut app = working_live((100, 20));
+    let all = feed_lines(&app);
+    key(&mut app, 3.0, Key::PageUp);
+    key(&mut app, 3.1, Key::PageUp);
+    let back = app.live.as_ref().unwrap().feed.back;
+    assert!(back > 0);
+    // A new tab shows the end of its own list, and follows.
+    key(&mut app, 3.2, Key::Char('2'));
+    assert_eq!(app.activity, Filter::Agents);
+    let feed = &app.live.as_ref().unwrap().feed;
+    assert!(feed.follow);
+    assert_eq!(feed.back, 0);
+    let agents = feed_lines(&app);
+    assert!(agents < all, "{agents} of {all}");
+    // A scroll in the tab stops at the first line of the tab.
+    for i in 0..20 {
+        key(&mut app, 3.3 + f64::from(i) / 100.0, Key::Up);
+    }
+    let layout = vision::app::view::live::layout::Layout::of(100, 20);
+    let most = agents.saturating_sub(layout.feed_h() as usize);
+    assert!(most > 0, "the tab has more lines than the view");
+    assert_eq!(app.live.as_ref().unwrap().feed.back, most);
+    key(&mut app, 3.6, Key::Char('G'));
+    assert!(app.live.as_ref().unwrap().feed.follow);
+}
+
+#[test]
+fn a_use_of_the_judge_names_its_principles_and_one_that_names_nothing_stays_in_the_log() {
+    use vision::app::feed::Filter;
+    use vision::app::pages::log_lines;
+    use vision::pipeline::commands::LogEntry;
+    let uses = |at: &str, principles: serde_json::Value| LogEntry {
+        at: at.into(),
+        source: "event".into(),
+        kind: "judge-uses".into(),
+        id: None,
+        text: String::new(),
+        who: "tick".into(),
+        detail: serde_json::json!({ "principles": principles }),
+    };
+    let mut app = working_live(SIZE);
+    let mut data = app.live.as_ref().unwrap().data.data.clone().unwrap();
+    data.timeline
+        .push(uses("2026-11-16T14:25:00Z", serde_json::json!([])));
+    data.timeline.push(uses(
+        "2026-11-16T14:26:00Z",
+        serde_json::json!(["P-001", "P-002"]),
+    ));
+    send(
+        &mut app,
+        2.6,
+        Msg::Ticket {
+            key: "DEMO-12".into(),
+            data: Box::new(Ok(data.clone())),
+        },
+    );
+    let feed = &app.live.as_ref().unwrap().feed;
+    let questions: Vec<String> = feed
+        .lines(80, 0, Filter::Questions)
+        .iter()
+        .map(|l| format!("{} {}", l.word, l.text))
+        .collect();
+    assert_eq!(questions, ["judge the Judge used P-001 and P-002"]);
+    assert_eq!(feed.counts()[Filter::Questions.index()], 1);
+    // The log keeps each line of the timeline, in words.
+    let (_, log) = log_lines(&data.timeline, 0);
+    let details: Vec<&str> = log
+        .iter()
+        .filter_map(|l| l.spans.last().map(|s| s.text.as_str()))
+        .filter(|t| t.starts_with("the Judge used"))
+        .collect();
+    assert_eq!(
+        details,
+        [
+            "the Judge used no principle",
+            "the Judge used P-001 and P-002"
+        ]
+    );
 }

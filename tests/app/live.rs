@@ -91,6 +91,17 @@ fn a_rule_stopped_the_ticket() {
 }
 
 #[test]
+fn the_footer_keeps_f_with_a_flag_and_a_card_at_120_columns() {
+    let mut held = resting("build");
+    held.view
+        .flags
+        .push(flag("needs-you", "the proof did not pass at 1a2b3c4d5e6f"));
+    held.needs_you = true;
+    let app = live((120, 34), vec![held], vec![card_need("DEMO-12")], events());
+    check("live_needs_flag_120x34", &app);
+}
+
+#[test]
 fn the_ticket_waits_for_ci() {
     let mut held = waiting(
         "DEMO-7",
@@ -241,10 +252,137 @@ fn a_path_with_more_steps_than_rows() {
 #[test]
 fn a_feed_that_does_not_follow() {
     let mut app = working_live(SIZE);
+    // More words of the agent than the rows of the feed.
+    let more = (0..6)
+        .map(|i| {
+            (
+                1520 + i * 5,
+                says(&format!("Part {i} of the export is done.")),
+            )
+        })
+        .collect();
+    for batch in batches(more) {
+        send(
+            &mut app,
+            2.9,
+            Msg::Stream {
+                key: "DEMO-12".into(),
+                batch,
+            },
+        );
+    }
     for i in 0..4 {
         key(&mut app, 3.0 + f64::from(i) / 10.0, Key::Up);
     }
     check("live_scrolled", &app);
+}
+
+#[test]
+fn a_tab_of_the_activity_shows_one_kind_and_stays_for_the_next_live_view() {
+    use vision::app::feed::Filter;
+    let mut app = working_live(SIZE);
+    key(&mut app, 3.0, Key::Char('2'));
+    assert_eq!(app.activity, Filter::Agents);
+    check("live_tab_agents", &app);
+    key(&mut app, 3.1, Key::Char('F'));
+    key(&mut app, 3.2, Key::Char('F'));
+    assert_eq!(
+        app.activity,
+        Filter::You,
+        "F goes back, from All to the last tab"
+    );
+    key(&mut app, 3.25, Key::Char('3'));
+    assert_eq!(app.activity, Filter::Questions);
+    check("live_tab_empty", &app);
+    // The tab stays in the model: Home, then the live view again, shows the same tab.
+    key(&mut app, 3.3, Key::Esc);
+    key(&mut app, 3.4, Key::Enter);
+    assert!(app.live.is_some());
+    assert_eq!(app.activity, Filter::Questions);
+    key(&mut app, 3.5, Key::Char('f'));
+    assert_eq!(app.activity, Filter::Steps);
+}
+
+#[test]
+fn a_message_of_the_person_is_one_line_in_the_tab_you() {
+    use vision::app::feed::{Batch, Filter, StreamLine};
+    use vision::pipeline::commands::LogEntry;
+    use vision::turn::StreamEvent;
+    let told = |seconds: i64, detail: serde_json::Value| LogEntry {
+        at: vision::util::time::rfc3339(at(seconds)),
+        source: "event".into(),
+        kind: "told".into(),
+        id: None,
+        text: String::new(),
+        who: "user".into(),
+        detail,
+    };
+    let mut app = working_live(SIZE);
+    let mut data = app.live.as_ref().unwrap().data.data.clone().unwrap();
+    data.timeline.push(told(
+        1520,
+        serde_json::json!({"message": 1, "turn": TURN, "to": "builder",
+            "text": "keep the old\nexport as it is"}),
+    ));
+    data.timeline.push(told(
+        1530,
+        serde_json::json!({"message": 2, "turn": null, "to": null, "text": "add a test for May"}),
+    ));
+    send(
+        &mut app,
+        2.6,
+        Msg::Ticket {
+            key: "DEMO-12".into(),
+            data: Box::new(Ok(data)),
+        },
+    );
+    // The session gets the first message: its line of the stream adds nothing.
+    send(
+        &mut app,
+        2.7,
+        Msg::Stream {
+            key: "DEMO-12".into(),
+            batch: Batch {
+                turn: TURN.into(),
+                events: vec![StreamLine {
+                    event: StreamEvent::User {
+                        texts: vec!["keep the old\nexport as it is".into()],
+                        tool_results: 0,
+                    },
+                    output: None,
+                }],
+                old: false,
+                at: at(1525),
+                started: Some(at(1440)),
+            },
+        },
+    );
+    let feed = &app.live.as_ref().unwrap().feed;
+    let you: Vec<String> = feed
+        .lines(80, 0, Filter::You)
+        .iter()
+        .map(|l| format!("{} {} {}", l.time, l.word, l.text))
+        .collect();
+    assert_eq!(
+        you,
+        [
+            "13:52:00 you took the ticket",
+            "14:20:00 you approved the plan",
+            "14:25:20 you told builder: keep the old export as it is",
+            "14:25:30 you told the next turn: add a test for May",
+        ]
+    );
+    let all = feed.lines(80, 0, Filter::All);
+    assert_eq!(
+        all.iter()
+            .filter(|l| l.text.contains("keep the old"))
+            .count(),
+        1,
+        "one line for one message"
+    );
+    key(&mut app, 3.0, Key::Char('7'));
+    assert_eq!(app.activity, Filter::You);
+    check("live_tab_you", &app);
 }
 
 #[test]

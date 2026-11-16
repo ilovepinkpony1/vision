@@ -25,8 +25,8 @@
  · curator   fabl│  esc close                                                               │
                  │                                                                          │last pass 0s ago
                  ╰──────────────────────────────────────────────────────────────────────────╯
-                           │                month next.                             │
-                           │ 14:25:10 tool  lookup: csv                             │
+                           │                                                        │
+                           │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
 

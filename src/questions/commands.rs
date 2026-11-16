@@ -40,7 +40,7 @@ pub struct Answered {
 }
 
 /// A card that waits for the person, or an error that says why it does not.
-fn waiting(ledger: &Ledger, id: &str) -> Result<Question> {
+pub(super) fn waiting(ledger: &Ledger, id: &str) -> Result<Question> {
     let question = Question::find(ledger, id)?;
     match question.row.state.as_str() {
         STATE_PROPOSED | STATE_ASKED => Ok(question),
@@ -55,23 +55,30 @@ fn waiting(ledger: &Ledger, id: &str) -> Result<Question> {
     }
 }
 
-fn turn_complete(ledger: &Ledger, turn: &str) -> Result<bool> {
+/// True when each card of the asking turn or batch has a final answer.
+pub(super) fn turn_complete(ledger: &Ledger, turn: &str) -> Result<bool> {
     Ok(ledger
         .questions_of_turn(turn)?
         .iter()
         .all(|r| r.state == STATE_ANSWERED || r.state == "needless"))
 }
 
-/// Records an answer of the person: a decision file with the person as the writer, the
-/// reason, and where it applies; the row; and one `human` row. When the person took the
-/// proposal of the Judge unchanged, each principle that the proposal named counts as agreed.
-pub fn answer_card(
-    ctx: &Ctx,
+/// An answer of the person to a card that waits, after the test of its reply, before anything
+/// is written.
+pub(super) struct Prepared {
+    pub(super) question: Question,
+    pub(super) answer: Answer,
+    /// For a proposal of the Judge: true when the answer is the proposal.
+    pub(super) took: Option<bool>,
+}
+
+/// Reads the card, tests the reply, and builds the answer of the person. Writes nothing.
+pub(super) fn prepare(
     ledger: &Ledger,
     memory: &Memory,
     id: &str,
     given: &PersonAnswer,
-) -> Result<Answered> {
+) -> Result<Prepared> {
     let question = waiting(ledger, id)?;
     let id = question.row.id.clone();
     if let Reply::Choice(i) = given.reply {
@@ -100,20 +107,71 @@ pub fn answer_card(
         Some("propose") => Some(took.unwrap_or(false)),
         _ => None,
     };
+    Ok(Prepared {
+        question,
+        answer,
+        took,
+    })
+}
+
+/// The `human` row of an answer of the person.
+pub(super) fn answer_human(
+    question: &Question,
+    answer: &Answer,
+    at: &str,
+    seconds: Option<i64>,
+) -> HumanRow {
+    HumanRow {
+        at: at.to_string(),
+        ticket: Some(question.row.ticket.clone()),
+        kind: "answer".into(),
+        object: question.row.id.clone(),
+        value: Some(answer.text.clone()),
+        reason: (!answer.why.is_empty()).then(|| answer.why.clone()),
+        seconds,
+    }
+}
+
+/// The `human` row of a needless mark.
+pub(super) fn needless_human(
+    question: &Question,
+    name: &str,
+    at: &str,
+    seconds: Option<i64>,
+) -> HumanRow {
+    HumanRow {
+        at: at.to_string(),
+        ticket: Some(question.row.ticket.clone()),
+        kind: "needless".into(),
+        object: question.row.id.clone(),
+        value: Some(name.into()),
+        reason: None,
+        seconds,
+    }
+}
+
+/// Records an answer of the person: a decision file with the person as the writer, the
+/// reason, and where it applies; the row; and one `human` row. When the person took the
+/// proposal of the Judge unchanged, each principle that the proposal named counts as agreed.
+pub fn answer_card(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    memory: &Memory,
+    id: &str,
+    given: &PersonAnswer,
+) -> Result<Answered> {
+    let Prepared {
+        question,
+        answer,
+        took,
+    } = prepare(ledger, memory, id, given)?;
+    let id = question.row.id.clone();
     let at = time::now_rfc3339();
     let previous = question.row.state.clone();
     // The `human` row comes with the start of the recording, before the commit of the decision
     // file: a crash between the two then leaves a row in `recording`, which a later tick ends,
     // and never a decision of the person with no `human` row.
-    let human = HumanRow {
-        at: at.clone(),
-        ticket: Some(question.row.ticket.clone()),
-        kind: "answer".into(),
-        object: id.clone(),
-        value: Some(answer.text.clone()),
-        reason: (!answer.why.is_empty()).then(|| answer.why.clone()),
-        seconds: given.seconds,
-    };
+    let human = answer_human(&question, &answer, &at, given.seconds);
     if !ledger.start_person_answer(&id, &serde_json::to_string(&answer)?, took, &at, &human)? {
         bail!("{id} got an answer from a different command meanwhile");
     }
@@ -164,15 +222,7 @@ pub fn mark_needless(
     if !ledger.set_question_needless(&id, name, &at)? {
         bail!("{id} got an answer from a different command meanwhile");
     }
-    ledger.add_human(&HumanRow {
-        at,
-        ticket: Some(question.row.ticket.clone()),
-        kind: "needless".into(),
-        object: id.clone(),
-        value: Some(name.into()),
-        reason: None,
-        seconds,
-    })?;
+    ledger.add_human(&needless_human(&question, name, &at, seconds))?;
     ledger.add_event(
         &Event::now("user", "card-needless")
             .ticket(&question.row.ticket)
@@ -187,12 +237,19 @@ pub fn mark_needless(
     })
 }
 
-/// `vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]`, or `--needless REASON`.
+/// `vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]`, `--needless REASON`, or
+/// `vision answer --file FILE` for the answers of several cards.
 pub fn answer_command(ctx: &Ctx, args: AnswerArgs) -> Result<()> {
+    if let Some(file) = &args.file {
+        return super::set::answer_file_command(ctx, file);
+    }
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
+    let Some(id) = args.id.as_deref() else {
+        bail!("give the id of a card, or --file FILE");
+    };
     let answered = if let Some(reason) = args.needless {
-        mark_needless(ctx, &ledger, &args.id, reason, None)?
+        mark_needless(ctx, &ledger, id, reason, None)?
     } else {
         let reply = match (args.choice, args.text) {
             (Some(0), _) => bail!("--choice counts from 1, as `vision needs` shows the choices"),
@@ -207,7 +264,7 @@ pub fn answer_command(ctx: &Ctx, args: AnswerArgs) -> Result<()> {
             when: args.when.unwrap_or_default(),
             seconds: None,
         };
-        answer_card(ctx, &ledger, &memory, &args.id, &given)?
+        answer_card(ctx, &ledger, &memory, id, &given)?
     };
     println!("{}", answered_line(&answered));
     Ok(())
@@ -215,19 +272,31 @@ pub fn answer_command(ctx: &Ctx, args: AnswerArgs) -> Result<()> {
 
 /// One line for people about an answer.
 pub(crate) fn answered_line(answered: &Answered) -> String {
-    let saved = match &answered.decision {
+    format!(
+        "{} {}",
+        saved_line(answered),
+        next_line(answered.turn_complete)
+    )
+}
+
+/// What an answer saved, in one sentence.
+pub(super) fn saved_line(answered: &Answered) -> String {
+    match &answered.decision {
         Some(decision) => format!("Saved the answer to {} as {decision}.", answered.id),
         None => format!(
             "Marked {} as needless. It gets no decision file.",
             answered.id
         ),
-    };
-    let next = if answered.turn_complete {
+    }
+}
+
+/// When the answers go back to the agent, in one sentence.
+pub(super) fn next_line(complete: bool) -> &'static str {
+    if complete {
         "Each card of its turn has an answer now, so the next tick sends the answers back to the agent."
     } else {
         "The answers go back to the agent when each card of its turn has one."
-    };
-    format!("{saved} {next}")
+    }
 }
 
 // ----- vision answers --------------------------------------------------------------------

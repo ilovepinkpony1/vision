@@ -70,7 +70,12 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
             app.dirty = true;
             chain::on_review_ended(app, &proposal, &result, &mut fx);
         }
-        Msg::Needs { load, items } => needs::on_needs(app, load, *items),
+        Msg::Needs { load, items } => needs::on_needs(app, load, *items, &mut fx),
+        Msg::DraftsNotKept(error) => notice(
+            app,
+            format!("Vision could not keep your drafts: {error}"),
+            Tone::Bad,
+        ),
         Msg::Checked { chain: id, facts } => chain::on_checked(app, id, *facts, &mut fx),
         Msg::Models(data) => models::on_models(app, *data, &mut fx),
         Msg::Stats { week, data } => stats::on_stats(app, week, *data, &mut fx),

@@ -15,6 +15,7 @@
 //! process of the same binary ([`worker`]).
 
 pub mod chain;
+pub mod drafts;
 pub mod feed;
 pub mod line;
 pub mod live;

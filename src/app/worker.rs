@@ -3,14 +3,19 @@
 //! as a child process of the same binary with no standard input; the worker keeps its standard
 //! output and its standard error, and sends the result to the loop. A crash of a child cannot
 //! take the app down, and no text of a child reaches the screen unless the app shows it.
+//!
+//! An action that reads a file, such as the send of a question form, gets it from the worker:
+//! the worker writes the file in the home folder, runs the child in that folder, and removes
+//! the file after the child ended.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 
-use super::msg::{ChildResult, Job, JobDone, Msg};
+use super::msg::{ChildResult, Job, JobDone, JobKind, Msg};
 use crate::paths::HOME_ENV;
+use crate::util::fs::{atomic_write, ensure_dir};
 
 /// How the worker starts a child.
 #[derive(Clone, Debug)]
@@ -32,13 +37,10 @@ pub fn spawn(config: WorkerConfig, tx: Sender<Msg>) -> std::io::Result<Sender<Jo
         .name("vision-worker".into())
         .spawn(move || {
             for job in queue {
-                let args = job.kind.args();
-                let result =
-                    std::panic::catch_unwind(|| run_child(&config, &args)).unwrap_or_else(|_| {
-                        ChildResult {
-                            error: Some("the worker stopped with an internal error".into()),
-                            ..ChildResult::default()
-                        }
+                let result = std::panic::catch_unwind(|| run_job(&config, &job.kind))
+                    .unwrap_or_else(|_| ChildResult {
+                        error: Some("the worker stopped with an internal error".into()),
+                        ..ChildResult::default()
                     });
                 let done = JobDone {
                     id: job.id,
@@ -53,14 +55,53 @@ pub fn spawn(config: WorkerConfig, tx: Sender<Msg>) -> std::io::Result<Sender<Jo
     Ok(jobs)
 }
 
+/// Runs the child of one job to its end. A job with a file to read gets it first, and runs in
+/// the home folder.
+pub fn run_job(config: &WorkerConfig, kind: &JobKind) -> ChildResult {
+    let args = kind.args();
+    let Some((path, text)) = kind.input() else {
+        return run_child(config, &args);
+    };
+    let failed = |error: String| ChildResult {
+        error: Some(error),
+        ..ChildResult::default()
+    };
+    // The path comes from the model: only a plain path inside the home folder is written.
+    let inside = Path::new(&path)
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)));
+    if !inside {
+        return failed(format!("the file {path} is not inside the home folder"));
+    }
+    let file = config.home.join(&path);
+    let written = file
+        .parent()
+        .map_or(Ok(()), |dir| ensure_dir(dir).map(|_| ()))
+        .and_then(|()| atomic_write(&file, text.as_bytes()));
+    if let Err(e) = written {
+        return failed(format!("could not write {}: {e:#}", file.display()));
+    }
+    let result = run_child_in(config, &args, Some(&config.home));
+    let _ = std::fs::remove_file(&file);
+    result
+}
+
 /// Runs one child to its end.
 pub fn run_child(config: &WorkerConfig, args: &[String]) -> ChildResult {
+    run_child_in(config, args, None)
+}
+
+/// Runs one child to its end, in the folder `dir` when it is given.
+fn run_child_in(config: &WorkerConfig, args: &[String], dir: Option<&Path>) -> ChildResult {
     let mut command = Command::new(&config.exe);
     command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
     if let Some(env) = &config.env {
         command.env_clear().envs(env.iter().map(|(k, v)| (k, v)));
     }

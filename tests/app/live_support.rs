@@ -239,7 +239,7 @@ fn tool(name: &str, input: serde_json::Value) -> StreamEvent {
     }
 }
 
-fn says(text: &str) -> StreamEvent {
+pub fn says(text: &str) -> StreamEvent {
     StreamEvent::Assistant {
         texts: vec![text.into()],
         tools: Vec::new(),

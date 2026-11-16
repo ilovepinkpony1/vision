@@ -144,6 +144,9 @@ impl Keys for TerminalKeys {
 pub struct CardView {
     pub id: String,
     pub ticket: String,
+    /// The asking id: the id of the asking turn, or the batch id `ask:<KEY>:<step>:<n>` of an
+    /// ask step. The cards of one asking id are one set.
+    pub turn: String,
     pub agent: String,
     pub step: String,
     pub state: String,
@@ -295,6 +298,7 @@ fn card_view(question: &Question) -> CardView {
     CardView {
         id: question.row.id.clone(),
         ticket: question.row.ticket.clone(),
+        turn: question.row.turn.clone(),
         agent: question.agent.clone(),
         step: question.step.clone(),
         state: question.row.state.clone(),

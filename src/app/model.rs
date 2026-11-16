@@ -474,6 +474,9 @@ pub struct App {
     pub engine: Engine,
     /// The live view, while it is open.
     pub live: Option<super::live::Live>,
+    /// The tab of the activity of the live view. It stays while the app runs, also for the
+    /// next live view.
+    pub activity: super::feed::Filter,
     /// The screen Models.
     pub models: ModelsState,
     /// The screen Stats.
@@ -510,6 +513,7 @@ impl App {
             home: HomeState::default(),
             engine: Engine::default(),
             live: None,
+            activity: super::feed::Filter::All,
             models: ModelsState::default(),
             stats: StatsState::default(),
             chain: None,

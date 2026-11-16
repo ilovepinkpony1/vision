@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use serde::Serialize;
+use serde_json::json;
 
 use crate::ctx::Ctx;
 use crate::ledger::turns::STATUS_RUNNING;
-use crate::ledger::Ledger;
+use crate::ledger::{Event, Ledger};
 use crate::paths::{TicketKey, TurnId, TurnPaths};
 use crate::turn::collect::START_GRACE_SECS;
 use crate::turn::inbox::{self, MessageFile};
@@ -216,8 +217,28 @@ pub enum Told {
 }
 
 /// Sends a message to the running turn of a ticket, or stores it for the next turn. The
-/// ledger keeps each message in `messages`.
+/// ledger keeps each message in `messages`. A message that Vision writes for the person, such
+/// as a correction, comes here: its own event is its line in the timeline.
 pub fn tell(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, text: &str, source: &str) -> Result<Told> {
+    send(ctx, ledger, key, text, source, false)
+}
+
+/// Sends a line that the person typed, as [`tell`] does, and gives it a line in the timeline
+/// of the ticket: the event `told` of the person, at the time of the row in `messages`, with
+/// the id of the row, the turn and the agent that get it (none for the next turn), and the
+/// text. The session that gets the message later adds no line.
+pub fn tell_from_person(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, text: &str) -> Result<Told> {
+    send(ctx, ledger, key, text, "user", true)
+}
+
+fn send(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &TicketKey,
+    text: &str,
+    source: &str,
+    told: bool,
+) -> Result<Told> {
     if text.trim().is_empty() {
         bail!("the message is empty. Give the text to send, such as vision tell DEMO-12 \"use the old export\"");
     }
@@ -231,27 +252,39 @@ pub fn tell(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, text: &str, source: &st
                 .and_then(crate::models::agent)
                 .is_some_and(|spec| spec.alone)
     });
+    let turn = work.as_ref().map(|running| running.id.clone());
+    // The row and its line in the timeline are one write.
+    let message_id = ledger.in_transaction(|ledger| {
+        let id = ledger.add_message(turn.as_deref(), &at, source, text)?;
+        if told {
+            let detail = json!({
+                "message": id,
+                "turn": turn,
+                "to": work.as_ref().and_then(|running| running.agent.clone()),
+                "text": text,
+            });
+            ledger.add_event(&Event {
+                at: at.clone(),
+                ..Event::now(source, "told")
+                    .ticket(key.as_str())
+                    .detail(detail)
+            })?;
+        }
+        Ok(id)
+    })?;
+    let message = MessageFile {
+        text: text.to_string(),
+        source: source.to_string(),
+        at,
+        id: Some(message_id),
+    };
     match work {
         Some(running) => {
             let id = running.turn_id()?;
-            let message_id = ledger.add_message(Some(&running.id), &at, source, text)?;
-            let message = MessageFile {
-                text: text.to_string(),
-                source: source.to_string(),
-                at,
-                id: Some(message_id),
-            };
             inbox::write(&ctx.paths.turn(key, &id).inbox, &message)?;
             Ok(Told::Running(running.id))
         }
         None => {
-            let message_id = ledger.add_message(None, &at, source, text)?;
-            let message = MessageFile {
-                text: text.to_string(),
-                source: source.to_string(),
-                at,
-                id: Some(message_id),
-            };
             inbox::write(&inbox::ticket_inbox(&ctx.paths, key), &message)?;
             Ok(Told::Stored)
         }
@@ -262,7 +295,7 @@ pub fn tell(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, text: &str, source: &st
 pub fn tell_command(ctx: &Ctx, key: &TicketKey, text: &str) -> Result<()> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
-    match tell(ctx, &ledger, key, text, "user")? {
+    match tell_from_person(ctx, &ledger, key, text)? {
         Told::Running(turn) => println!(
             "Sent to the running turn {turn} of {key}. The session gets it at its next step."
         ),

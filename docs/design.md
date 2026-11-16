@@ -67,6 +67,8 @@ $VISION_HOME/
   adapters/<name>/       private adapters. They win over the adapters of the repo.
   tickets/<KEY>/
     refine.md plan.md plan.agent.md approved-plan.md answers.md pr.md review.md notes.md
+    answer-drafts.json   the drafts of the question form of the app until the send (section 15.3)
+    answer-send.json     the answers of one send of the form, only while the send runs
     turns/<turn-id>/
       facts.json         the input of the turn
       stream.jsonl       each event line of the session
@@ -458,6 +460,7 @@ The parser reads these events and ignores each other type:
 The person can type into a running turn. A test on Claude Code 2.1.321 showed that the session takes a new input line at its next tool step.
 
 - `vision tell KEY "TEXT"` writes one message file to the inbox of the running turn. If no turn runs, it stores the text for the next turn of the ticket.
+- `vision tell` also writes the event `told` of the person, in the same transaction as the row in `messages`. So the timeline and `vision log` show each message once, at the time of its row. A message that Vision writes for the person, such as a correction, has its own event and no `told` event.
 - `vision open KEY` attaches to the running turn. It prints the events as readable lines, and it sends each line that the person types. Ctrl-C leaves the view, and the turn continues.
 - If no turn runs, `vision open KEY` pauses the ticket and starts `claude --resume <session id>` in the clone, in the terminal.
 
@@ -560,6 +563,7 @@ Each answer becomes one decision file. An answer of the Judge has the writer `ju
 vision needs [--json] [--read ID]    the cards, the approvals, and the notices that wait, one at a time
 vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]
 vision answer ID --needless code|ticket|memory|no-matter
+vision answer --file FILE            the answers of several cards: each one is recorded, or none
 vision answers [--days N]            the answers that the Judge gave alone, newest first
 vision correct ID "RIGHT ANSWER" [--why "W"]
 ```
@@ -570,6 +574,10 @@ vision correct ID "RIGHT ANSWER" [--why "W"]
 - `correct` writes a decision of the person that replaces the answer of the Judge. The old file gets the status `superseded`. If the ticket still runs, its next turn gets the correction as a message.
 - A decision with no reason is weaker. The Judge uses it only for a question with the same words and the same area.
 - `answer` writes the `human` row of an answer in the same ledger transaction that sets the question to `recording`. The commit of the decision file comes after it. If the decision file cannot be written, the row goes again. So a crash after that commit never loses the row, and the next tick ends the record. `correct` writes its mark and its `human` row in one transaction too.
+- `answer --file FILE` reads a JSON object with one entry for each card id, such as `{"Q-0001": {"choice": 2, "why": "W", "when": "C"}, "Q-0002": {"text": "T"}, "Q-0003": {"needless": "code"}}`. `choice` counts from 1. A needless entry takes no `why` and no `when`.
+- `answer --file` records each answer as `answer` does for one card: a decision file, the row of the card, one `human` row, and the event. It records each answer of the file, or none. If one card no longer waits or one answer is not valid, nothing is recorded, and the error names that card and the reason.
+- `answer --file` starts each answer in one ledger transaction, and the decision files go to the memory in one commit. If the commit fails, each card waits for the person again. A second transaction then ends each record, as for one card.
+- `needs --json` gives the asking id of each card in `turn`: the id of the asking turn, or the batch id of an ask step.
 
 ## 9. The memory
 
@@ -1277,6 +1285,8 @@ The app has three layers. The model is plain data. The update takes a message, c
 
 Each read runs in a thread, in the process, through the functions that the commands use. These are the status view, the rows of `vision pick`, the report, the timeline, the plan, the commit list, the model table, and the adapter. The cards read the questions, the operations that wait, and the proposals of the Curator in the same way. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
 
+A draft of the question form is not a change of the state. The runtime writes the drafts file at once, with the atomic write of the repo. An action that reads a file gets it from the worker. The worker writes the file in the home folder, runs the child in that folder, and removes the file after the child ends. The send of the question form runs `vision answer --file` in this way.
+
 ### 15.2 The engine
 
 The worker is one thread that runs one job at a time. A job is a pass or an action. A pass is the child `vision tick`. A pass starts at these times:
@@ -1313,7 +1323,13 @@ One state function says what happens to a ticket now, in the words of the app, a
 
 The live view shows one ticket. The path is on the left, with the time and the cost of each step, and the team is under it. NOW is in the middle, with ACTIVITY under it. The cost, the questions, the marks, the limits, and the engine are on the right. While the view is open, its data loads again each second. The count of the commits that the forge does not have loads again each 10 seconds.
 
-ACTIVITY joins two sources by time, with the newest line at the bottom. The first source is the stream files of the last six turns of the ticket: what the agent says, and each tool that it calls. A thread reads their new lines four times each second. The second source is the timeline of the ledger. A stream line holds no time, so a line that was in the file before the view opened shows no time. The feed keeps a bounded number of lines. A scroll stops the follow, and `G` goes back to the end.
+ACTIVITY joins two sources by time, with the newest line at the bottom. The first source is the stream files of the last six turns of the ticket: what the agent says, and the end of a session with an error. A thread reads their new lines four times each second. The second source is the timeline of the ledger. A stream line holds no time, so a line that was in the file before the view opened shows no time.
+
+A tool call gets no line. What the turn gets, the start of its session, and its end with a result get no line either, because the lines of the turn in the ledger say the same in words. The count of the tool calls stays in NOW, and in the log of `l`, Enter on a turn shows each of these events. The feed keeps a bounded number of items, and it counts only the items that it shows. A scroll stops the follow, and `G` goes back to the end.
+
+A row of tabs above the feed shows one kind of item, or all of them: All, Agents, Questions, Steps, Writes, Problems, and You. Each tab shows its count, and each item has exactly one kind. Agents has what an agent says, the start and the end of a turn, and the reads that Vision serves. Questions has the cards, their answers, and the Judge. A use of the Judge names the principles that its answers used, such as `the Judge used P-001 and P-002`. A use that names no principle shows only in the log. Steps has the moves between steps, the end facts that held, the documents, and the end of the ticket. Writes has the operations.
+
+Problems has a flag, a session that ended with an error, and a turn or an operation that failed. It also has an end fact that did not hold, a card that was not valid, and a notice. You has the other actions of the person and each message that the person sent, such as `told builder: keep the old export`, or `told the next turn: ...` when no turn ran. The tab stays while the app runs, also for the next live view. A change of the tab shows the end of its list. The scroll and the follow work inside the tab.
 
 These keys act on the ticket of the live view:
 
@@ -1322,17 +1338,20 @@ These keys act on the ticket of the live view:
 - `o` opens the session of the last turn in the same terminal.
 - `x` stops the ticket, and Enter starts a stopped ticket again.
 - `r` retries a ticket that waits for the person, or continues a paused ticket.
-- `l`, `p`, and `d` open a pager with the log, the plan, or the commits that the forge does not have.
+- `l`, `p`, and `d` open a pager with the log, the plan, or the commits that the forge does not have. The footer names `l` as the log and the tool calls.
+- `f` shows the next tab of ACTIVITY, and `F` shows the tab before. The digits 1 to 7 pick a tab.
+
+If the footer is too narrow, its hints change in this order until it fits: `d` and `p` go, the hint of `t` becomes `tell`, `o` and `x` go, and the hint of `l` becomes `log`. So `f` stays at each width of 100 columns or more.
 
 In the log, Enter on a turn shows the events of that turn. Esc closes a pager, and then the view.
 
-The key `n` opens the first thing that waits for the person as a card. On Home, this is the first thing of all tickets. If more than one thing waits, the title says which one this is, such as `2 of 3`. The left and right arrows go to the other ones. Esc closes the card, and the thing keeps waiting. After an answer, the next card shows, or the card closes with a notice.
+The key `n` opens the first thing that waits for the person as a card. On Home, this is the first thing of all tickets. The questions of one asking turn, or of one ask step, are one thing: the question form. If more than one thing waits, the title says which one this is, such as `2 of 3`. The left and right arrows go to the other ones. Esc closes the card, and the thing keeps waiting. After an answer, the next card shows, or the card closes with a notice.
 
-The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show `1 of N` as the other cards do. Models lists the agents that the adapter defines after those of Vision, with the source `adapter`. In the line BY AGENT of Stats, they come behind the label `adapter:`. The start card and the team list of the live view name an agent of the adapter with its model. On an act step, NOW names the write that runs or waits, such as `the write pr.open runs at the next pass`. Its last line names the verbs of the step in their order, such as `No agent works. The step runs git.push, then pr.open.` The path shows an act step as each other step.
+The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show as one question form, as the cards of a turn do. Models lists the agents that the adapter defines after those of Vision, with the source `adapter`. In the line BY AGENT of Stats, they come behind the label `adapter:`. The start card and the team list of the live view name an agent of the adapter with its model. On an act step, NOW names the write that runs or waits, such as `the write pr.open runs at the next pass`. Its last line names the verbs of the step in their order, such as `No agent works. The step runs git.push, then pr.open.` The path shows an act step as each other step.
 
 Each kind of thing has its card:
 
-- A question takes the letter of a choice. Enter takes the proposal of the Judge, or else the recommended choice. `e` opens a line for an answer in the words of the person. `k` marks a needless question and asks where its answer was. After a choice or a text, a line asks for the reason. Enter saves the answer with the reason, and Tab saves it with no reason.
+- The questions of one asking turn, or of one ask step, show as one form. The paragraphs after this list describe it.
 - A plan shows its text and its short hash. `a` approves the full hash that the card showed, and `x` stops the ticket.
 - A write in the mode `ask`, or a held diff, shows what it sends. `y` approves it. In the mode `ask`, `a` approves it and moves its verb to the mode `auto`.
 - The first write of a verb in the mode `shadow` or `hold` shows the text that the mode kept back. `y` sends it and moves the verb to the mode `ask`. `a` sends it and moves the verb to the mode `auto`. `n` leaves it.
@@ -1340,6 +1359,22 @@ Each kind of thing has its card:
 - A paused ticket takes Enter to continue.
 - A proposal of the Curator takes Enter. The app then gives the terminal to `vision memory review --proposal NAME`.
 - A notice lists the issues that a passing gate qa found and that do not block, each with its id, its severity, and its title. Enter marks it read. A notice stays until the person reads it. It never stops a ticket, never marks the ticket as one that needs the person, and comes after each other thing that waits.
+
+The question form has a page for each question, and a review page after the last one. Its title names the ticket, who asks, and the page, such as `builder asks at the step build · Question 2 of 3`. A row under the title marks each question: `✓` for a draft, `◇` for a proposal of the Judge, and `·` for an open question. A question page shows the question and the draft of the person with its reason. Under them are the proposal of the Judge, why the agent asks, the example, the choices, the recommendation, and the evidence. The form opens on the first question with no draft, or else on the review page.
+
+A key of a question page keeps only a draft, and nothing goes to Vision before the send. A letter takes that choice. Enter takes the draft, else the proposal of the Judge, else the recommended choice. `e` or `t` opens a line for an answer in the words of the person. `k` or `-` marks a needless question and asks where its answer was.
+
+After a choice or a text, a line asks for the reason. Enter keeps the draft with the reason, and Tab keeps it with no reason. A line opens with the old text of the draft. After a draft, the form shows the next question with no draft, or else the review page.
+
+The left and right arrows go through the pages. Past the two ends of a form, they go to the thing before or after it. A form that the arrows reach from the right opens on its review page. A digit opens the question with that number, and `r` or `s` opens the review page.
+
+The review page lists each question in two lines, with its draft and its reason, and marks each question with no draft. The up and down arrows choose a row, and Enter opens its question. `s` sends the form. The send needs a draft for each question. If a question has none, a notice names it, and nothing is sent.
+
+The send is one action: `vision answer --file` with the draft of each question (section 8.4). Each answer is recorded, or none. If Vision refuses an answer, the review page marks that question with the reason, and each draft stays. After the send, the form goes away. A notice says who gets the answers: the asking agent at its next pass, or `answers.md` for an ask step.
+
+The drafts stay in `tickets/<KEY>/answer-drafts.json`, in the format of `vision answer --file`. The app writes the file after each change of a draft, so the drafts survive a close of the form and a restart of the app. The send removes the drafts of its questions. If the Judge or another command answers a question of the form, the question leaves the form with a note, and its draft goes.
+
+The view places each part that a click can hit in the same code that draws it. These parts are a tab of the question row, a choice, a row of the review page, and the send.
 
 A key of a card can start a chain. A chain is a list of steps that run one after the other. A step is a command, a pass of the engine, or a check. A check reads the ledger and the configuration while no job runs, and no job starts during the read. The card shows each step with its mark. If a step fails, the chain stops, and the card says why and what is true for the ticket now. If the person quits the app, the rest of the chain does not run.
 

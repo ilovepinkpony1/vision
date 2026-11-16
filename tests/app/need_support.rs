@@ -7,18 +7,24 @@ use serde_json::json;
 use vision::app::chain::{Check, CheckFacts, OpFacts};
 use vision::app::model::{App, Card};
 use vision::app::msg::{ChildResult, Effect, JobDone, JobKind, Key, Msg};
-use vision::app::needs::{FlagItem, NeedItem, NeedsCard, PlanItem, ProposalItem, WriteItem};
+use vision::app::needs::{
+    FlagItem, NeedItem, NeedsCard, PlanItem, ProposalItem, QuestionSet, WriteItem,
+};
 use vision::ledger::notices::{NoticeIssue, NoticeRow};
 use vision::pipeline::PlanView;
 use vision::questions::{CardView, ChoiceView, ProposalView};
 
 use super::support::*;
 
+/// The asking turn of the sample questions.
+pub const ASKING: &str = "20261116T140000Z-DEMO-12-build-1";
+
 /// A question of builder with two choices. With `judged`, the Judge proposed the first one.
 pub fn question(judged: bool) -> CardView {
     CardView {
         id: "Q-0002".into(),
         ticket: "DEMO-12".into(),
+        turn: ASKING.into(),
         agent: "builder".into(),
         step: "build".into(),
         state: "asked".into(),
@@ -51,6 +57,67 @@ pub fn question(judged: bool) -> CardView {
         judge_reason: (!judged).then(|| "No decision of the memory covers the order of the columns.".to_string()),
         command: String::new(),
     }
+}
+
+/// The form of these questions of one asking turn, with no saved draft.
+pub fn form(cards: Vec<CardView>) -> NeedItem {
+    let first = cards.first().cloned().unwrap_or_default();
+    NeedItem::Questions(QuestionSet {
+        turn: first.turn,
+        ticket: first.ticket,
+        cards,
+        saved: Default::default(),
+        gone: Vec::new(),
+    })
+}
+
+/// The form of the one sample question.
+pub fn one(judged: bool) -> NeedItem {
+    form(vec![question(judged)])
+}
+
+/// Three questions of one turn of builder: the sample question, a question with three choices
+/// and no recommendation, and a question that the Judge proposed an answer to.
+pub fn three() -> Vec<CardView> {
+    let first = question(false);
+    let mut second = question(false);
+    second.id = "Q-0003".into();
+    second.question = "Must the file have a header row?".into();
+    second.context = "Some tools read the first row as data.".into();
+    second.example = "date,client,total on the first row.".into();
+    second.choices = vec![
+        ChoiceView {
+            n: 1,
+            letter: Some('a'),
+            label: "A header row".into(),
+            means: "the first row names the columns".into(),
+        },
+        ChoiceView {
+            n: 2,
+            letter: Some('b'),
+            label: "No header".into(),
+            means: "the first row is data".into(),
+        },
+        ChoiceView {
+            n: 3,
+            letter: Some('c'),
+            label: "A setting".into(),
+            means: "the person chooses on each export".into(),
+        },
+    ];
+    second.recommended = None;
+    second.why = String::new();
+    second.judge_reason = Some("No decision covers the header.".into());
+    let mut third = question(true);
+    third.id = "Q-0004".into();
+    third.question = "Must the total row stay at the end of the file?".into();
+    third.proposal = Some(ProposalView {
+        answer: "Keep the order".into(),
+        choice: Some(1),
+        reason: "D-0004 keeps the order of the screen.".into(),
+        sources: vec!["D-0004".into()],
+    });
+    vec![first, second, third]
 }
 
 pub const PLAN_HASH: &str = "3f2a1b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081";
@@ -266,6 +333,8 @@ pub fn type_text(app: &mut App, at: f64, text: &str) {
 #[derive(Debug, Default)]
 pub struct Driven {
     pub actions: Vec<Vec<String>>,
+    /// The text of the file that each action with a file reads, such as the answers of a send.
+    pub inputs: Vec<String>,
     pub checks: Vec<Check>,
     pub passes: usize,
     /// The other effects, such as the session of a take over.
@@ -299,6 +368,9 @@ pub fn drive(
                         let args = action.args();
                         let failed = fail.is_some_and(|f| args[0] == f);
                         out.actions.push(args);
+                        if let Some((_, text)) = action.input() {
+                            out.inputs.push(text);
+                        }
                         if failed {
                             ChildResult {
                                 code: Some(1),
@@ -332,7 +404,10 @@ pub fn drive(
                     },
                 )
             }
-            Effect::LoadLocal | Effect::LoadNeeds(_) | Effect::LoadTicket(_) => Vec::new(),
+            Effect::LoadLocal
+            | Effect::LoadNeeds(_)
+            | Effect::LoadTicket(_)
+            | Effect::SaveDrafts { .. } => Vec::new(),
             other => {
                 out.other.push(other);
                 Vec::new()

@@ -318,7 +318,7 @@ pub fn open(ctx: &Ctx, key: &TicketKey) -> Result<()> {
                 if line.trim().is_empty() {
                     continue;
                 }
-                match control::tell(&ctx, &ledger, &ticket, line.trim_end(), "user") {
+                match control::tell_from_person(&ctx, &ledger, &ticket, line.trim_end()) {
                     Ok(Told::Running(_)) => eprintln!("(sent)"),
                     Ok(Told::Stored) => {
                         eprintln!("(the turn ended, so it waits for the next turn)")

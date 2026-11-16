@@ -331,10 +331,7 @@ fn the_needs_card() {
         unreachable!()
     };
     plan.ticket = "DEMO-20".into();
-    let items = vec![
-        NeedItem::Question(super::need_support::question(true)),
-        NeedItem::Plan(plan),
-    ];
+    let items = vec![super::need_support::one(true), NeedItem::Plan(plan)];
     send(
         &mut app,
         2.1,

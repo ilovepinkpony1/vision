@@ -115,23 +115,29 @@ fn a_ticket_that_needs_the_person_gets_a_box_in_the_warning_color() {
 }
 
 #[test]
-fn each_word_of_the_activity_has_its_color() {
+fn each_word_of_the_activity_has_its_color_and_the_tab_that_shows_has_the_accent() {
     let buf = render(&working_live(SIZE));
     let word = |needle: &str| {
         let (x, y) = find(&buf, needle);
         (fg(&buf, (x, y)), bold(&buf, (x, y)))
     };
-    assert_eq!(word("read  src/report"), (T.info.color(), true));
-    assert_eq!(word("edit  src/report"), (T.accent.color(), true));
-    assert_eq!(word("run   python3"), (T.ok.color(), true));
+    assert_eq!(word("step  moves"), (T.info.color(), true));
+    assert_eq!(word("turn  builder starts"), (T.primary.color(), true));
+    assert_eq!(word("says  The export"), (T.fg.color(), true));
     assert_eq!(word("you   approved"), (T.primary.color(), true));
-    // The words of the agent are bright; the text of a tool call is dim; the time is faint.
+    // The words of the agent are bright; each other text is dim; the time is faint.
     let (x, y) = find(&buf, "The export writes");
     assert_eq!(fg(&buf, (x, y)), T.fg.color());
-    let (x, y) = find(&buf, "src/report/export.py");
+    let (x, y) = find(&buf, "moves from plan");
     assert_eq!(fg(&buf, (x, y)), T.dim.color());
-    let (x, y) = find(&buf, "14:24:05");
+    let (x, y) = find(&buf, "14:24:20");
     assert_eq!(fg(&buf, (x, y)), T.faint.color());
+    // The tab that shows has the accent behind it, and each other tab is dim.
+    let all = find(&buf, "All ");
+    assert_eq!(buf[all].bg, T.accent.color());
+    assert!(bold(&buf, all));
+    let agents = find(&buf, "Agents ");
+    assert_eq!(fg(&buf, agents), T.dim.color());
 }
 
 #[test]

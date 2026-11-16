@@ -124,6 +124,16 @@ pub fn count(n: usize, noun: &str) -> String {
     }
 }
 
+/// A list in words: `a`, `a and b`, or `a, b, and c`.
+pub fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
+}
+
 /// The text of a failed command for people: each line without the word `error:` that a
 /// command puts in front, and with no empty line at the ends.
 pub fn tidy(text: &str) -> String {
@@ -170,5 +180,18 @@ mod tests {
         assert_eq!(wrap("one two three", 7), ["one two", "three"]);
         assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
         assert_eq!(wrap("a\nb", 10), ["a b"]);
+    }
+
+    #[test]
+    fn a_list_in_words_joins_with_and() {
+        let list =
+            |items: &[&str]| join_and(&items.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(list(&[]), "");
+        assert_eq!(list(&["P-001"]), "P-001");
+        assert_eq!(list(&["P-001", "P-002"]), "P-001 and P-002");
+        assert_eq!(
+            list(&["P-001", "P-002", "P-003"]),
+            "P-001, P-002, and P-003"
+        );
     }
 }

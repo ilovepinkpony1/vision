@@ -246,3 +246,52 @@ fn a_program_that_does_not_start_gives_a_reason() {
         result.failure()
     );
 }
+
+#[test]
+fn an_action_with_a_file_gets_it_in_the_home_folder_and_the_file_goes_after() {
+    use vision::app::needs::{Draft, Reply};
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let exe = dir.path().join("vision");
+    std::fs::write(&exe, "#!/bin/sh\necho \"in $(pwd -P)\"\ncat \"$3\"\n").unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = WorkerConfig {
+        exe,
+        home: home.clone(),
+        env: Some(vec![(
+            "PATH".into(),
+            std::env::var_os("PATH").unwrap_or_default(),
+        )]),
+    };
+    let action = Action::AnswerSet {
+        ticket: "DEMO-12".into(),
+        answers: vec![(
+            "Q-0002".into(),
+            Draft::Answer {
+                reply: Reply::Choice(1),
+                why: "People compare".into(),
+            },
+        )],
+    };
+    assert_eq!(
+        action.args(),
+        ["answer", "--file", "tickets/DEMO-12/answer-send.json"]
+    );
+    let result = worker::run_job(&config, &JobKind::Action(action));
+    assert!(result.ok(), "{result:?}");
+    let real = home.canonicalize().unwrap();
+    assert!(
+        result
+            .stdout
+            .starts_with(&format!("in {}\n", real.display())),
+        "{}",
+        result.stdout
+    );
+    assert!(result.stdout.contains("\"choice\": 2"), "{}", result.stdout);
+    assert!(result.stdout.contains("\"why\": \"People compare\""));
+    assert!(
+        !home.join("tickets/DEMO-12/answer-send.json").exists(),
+        "the file goes after the command"
+    );
+}

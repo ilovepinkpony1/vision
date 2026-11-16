@@ -82,6 +82,7 @@ pub(super) fn approval(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts
         title: format!("the write {} waits for your approval", item.verb),
         body,
         foot,
+        ..Parts::default()
     }
 }
 
@@ -141,6 +142,7 @@ pub(super) fn first_write(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Pa
         title: format!("the first write of {}", item.verb),
         body,
         foot,
+        ..Parts::default()
     }
 }
 

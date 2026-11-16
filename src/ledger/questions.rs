@@ -416,6 +416,26 @@ impl Ledger {
         )? == 1)
     }
 
+    /// Undoes [`Ledger::set_question_needless`] when the set of answers that marked it failed
+    /// after the mark: the row gets back its state, its flag, and its time, as `row` had them,
+    /// and the `human` row of the mark goes.
+    pub fn undo_question_needless(&self, row: &QuestionRow, human: &HumanRow) -> Result<()> {
+        self.in_transaction(|ledger| {
+            let undone = ledger.conn().execute(
+                "UPDATE questions SET state = ?2, flag = ?3, answered = ?4 WHERE id = ?1 AND state = ?5",
+                params![row.id, row.state, row.flag, row.answered, STATE_NEEDLESS],
+            )?;
+            if undone == 1 {
+                ledger.conn().execute(
+                    "DELETE FROM human WHERE id = (SELECT max(id) FROM human
+                     WHERE object = ?1 AND kind = ?2 AND at = ?3)",
+                    params![row.id, human.kind, human.at],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     /// Records the first time that the person saw the card.
     pub fn set_question_shown(&self, id: &str, at: &str) -> Result<()> {
         self.conn().execute(

@@ -9,7 +9,8 @@
 //! - [`outcome`] reads the outcome of a turn: status, reason, result object, session, cost,
 //!   usage, and limits.
 //! - [`running_turns`], [`kill_turn`], and [`kill_all`] control the running turns, and
-//!   [`tell`] sends a message to one.
+//!   [`tell`] sends a message to one. [`tell_from_person`] sends a line that the person typed
+//!   and gives it a line in the timeline of the ticket.
 //! - [`collect_ended_turns`] and [`start_turn`] are the tick hooks.
 //! - [`resolve_plugins`] gives the plugin folders of `claude.plugins` that each work turn
 //!   loads and reads, and [`find_plugins`] the plugins in one folder, for `vision doctor`.
@@ -39,7 +40,9 @@ use crate::tick::{Pass, TurnStart};
 
 pub use codex::ran_on_codex;
 pub use collect::{collect, outcome, Collected, TurnOutcome, TurnStatus, CONTINUE};
-pub use control::{kill_all, kill_turn, running_turn_of, running_turns, tell, RunningTurn, Told};
+pub use control::{
+    kill_all, kill_turn, running_turn_of, running_turns, tell, tell_from_person, RunningTurn, Told,
+};
 pub use inbox::MessageFile;
 pub use launch::{
     first_message, launch, prepare, refusal, request_of, resume, set_vision_bin, start_supervisor,

@@ -7,22 +7,22 @@
  ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  ⠦ 6:00 · 5 tool calls             │ commits    none to push
  ✓ plan            9m $0.88│                                              │ QUESTIONS
  ✓ plan-ready      2m      │ ACTIVITY ─────────────────────────────────── │ to you                0
- ⠦ build               6:00│ 14:05:31 step  moves from plan to plan-ready │ by memory             1
- ○ review                  │ 14:20:00 you   approved the plan             │ by the Judge          0
- ○ open-pr                 │ 14:20:01 step  moves from plan-ready to bui… │ MARKS
- ○ ci                      │ 14:24:00 turn  builder starts a turn at the… │ plan          3f2a1b4 ✓
- ○ fix-ci                  │ 14:24:01 start the session starts with clau… │ proof                 -
- ○ ready                   │ 14:24:05 read  src/report/export.py          │ CI                    -
-   ↓ 10 more               │ 14:24:12 find  "def export_month" in src     │ PR                    -
-                           │ 14:24:20 says  The export writes each row by │ LIMITS
- TEAM                      │                hand. I add a CSV writer and  │ 5h ━━━━━━━━━━ 31% of 60
- ✓ scout     fable-5-2 high│                keep the order of the columns │    resets at 18:00
- ● builder   opus-5-5 xhigh│                that the plan names.          │ 7d ━━━━━━━━━━ 71% of 85
- · reviewer  opus-5-5 max  │ 14:24:35 edit  src/report/export.py          │ ENGINE
- · tester    opus-5-5 high │ 14:24:50 run   python3 -m unittest tests/te… │ ● on   last pass 2s ago
- · shepherd  opus-5-5 high │ 14:25:03 says  3 tests pass. I add a test    │
- · judge     fable-5-2 high│                for an empty month next.      │
- · curator   fable-5-2 high│ 14:25:10 tool  lookup: csv                   │
+ ⠦ build               6:00│ All 13  Agents 7  Questions 0  Steps 3     › │ by memory             1
+ ○ review                  │ 13:56:14 turn  the turn of scout ended: it … │ by the Judge          0
+ ○ open-pr                 │ 13:56:15 write tracker.describe is confirmed │ MARKS
+ ○ ci                      │ 13:56:16 step  moves from refine to plan     │ plan          3f2a1b4 ✓
+ ○ fix-ci                  │ 13:56:30 turn  builder starts a turn at the… │ proof                 -
+ ○ ready                   │ 14:05:30 turn  the turn of builder ended: i… │ CI                    -
+   ↓ 10 more               │ 14:05:31 step  moves from plan to plan-ready │ PR                    -
+                           │ 14:20:00 you   approved the plan             │ LIMITS
+ TEAM                      │ 14:20:01 step  moves from plan-ready to bui… │ 5h ━━━━━━━━━━ 31% of 60
+ ✓ scout     fable-5-2 high│ 14:24:00 turn  builder starts a turn at the… │    resets at 18:00
+ ● builder   opus-5-5 xhigh│ 14:24:20 says  The export writes each row by │ 7d ━━━━━━━━━━ 71% of 85
+ · reviewer  opus-5-5 max  │                hand. I add a CSV writer and  │ ENGINE
+ · tester    opus-5-5 high │                keep the order of the columns │ ● on   last pass 2s ago
+ · shepherd  opus-5-5 high │                that the plan names.          │
+ · judge     fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test    │
+ · curator   fable-5-2 high│                for an empty month next.      │
 ────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
 

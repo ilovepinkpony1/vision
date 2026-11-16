@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO╭─ DEMO-12 · builder asks at the step build · your 3 answers ──────────────────────────────╮   38m │
+ │       │                                                                                          │       │
+ │       │  1 ✓ draft   2 · open   3 ✓ draft    review                                              │       │
+ │   DEMO│                                                                                          │2h 10m │
+ │       │  These answers go to builder when you send them. Nothing went to Vision yet.             │       │
+ ╰───────│                                                                                          │───────╯
+         │  1  Must the export keep the order of the columns?                                       │
+  READY T│     b  Sort by name · People compare the file with the table                             │n start
+ ╭───────│▸ 2  Must the file have a header row?                                                     │───────╮
+ │   DEMO│     no draft yet · press 2 to answer it                                                  │ To Do │
+ │   DEMO│  3  Must the total row stay at the end of the file?                                      │equest │
+ ╰───────│     a  Keep the order                                                                    │───────╯
+         │                                                                                          │
+         │  1 question has no draft yet: 2. The send needs a draft for each question.               │
+         │  s send the 3 answers    enter open the question    ↑↓ choose    ←→ the pages            │
+         │  esc later                                                                               │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

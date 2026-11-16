@@ -1,7 +1,8 @@
 //! A text snapshot of each card of the things that wait, in each of its states, at 110 by 32,
-//! and the largest cards also at 100 by 28: the question (idle, with and without a proposal of
-//! the Judge, the line of the words, the line of the reason, the question of a needless card,
-//! its chain while it runs and after it failed), the plan (also after it changed), a write that
+//! and the largest cards also at 100 by 28: the question form (idle, with and without a
+//! proposal of the Judge, the line of the words, the line of the reason, the question of a
+//! needless card, a page with a draft, the review page, its send while it runs and after a
+//! refusal), the plan (also after it changed), a write that
 //! waits, the first write (also while its chain runs), a rule that stopped a ticket, a paused
 //! ticket, a proposal of the Curator, a notice of a gate, and the card while it loads or after
 //! its load failed.
@@ -38,21 +39,21 @@ fn check_of(effects: &[Effect]) -> u64 {
 }
 
 #[test]
-fn the_question_card_with_a_proposal_of_the_judge() {
-    let items = vec![NeedItem::Question(question(true)), plan_item(false)];
+fn the_question_form_with_a_proposal_of_the_judge() {
+    let items = vec![one(true), plan_item(false)];
     check("need_question", &open_with(SIZE, items.clone()));
     check("need_question_100x28", &open_with(SMALL, items));
 }
 
 #[test]
-fn the_question_card_without_a_proposal() {
-    let app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+fn the_question_form_without_a_proposal() {
+    let app = open_with(SIZE, vec![one(false)]);
     check("need_question_no_judge", &app);
 }
 
 #[test]
-fn the_question_card_with_its_lines() {
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+fn the_question_form_with_its_lines() {
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('e'));
     type_text(&mut app, 3.1, "Keep the order, and put the total last");
     check("need_question_words", &app);
@@ -60,21 +61,41 @@ fn the_question_card_with_its_lines() {
     type_text(&mut app, 3.3, "The team reads the file next to the table");
     check("need_question_why_text", &app);
 
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('b'));
     check("need_question_why", &app);
 
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(false))]);
+    let mut app = open_with(SIZE, vec![one(false)]);
     key(&mut app, 3.0, Key::Char('k'));
     check("need_question_needless", &app);
 }
 
 #[test]
-fn the_question_card_while_its_answer_runs_and_after_it_failed() {
-    let mut app = open_with(SIZE, vec![NeedItem::Question(question(true))]);
+fn the_form_of_three_questions_on_a_page_with_a_draft_and_on_its_review_page() {
+    let mut app = open_with(SIZE, vec![form(three())]);
+    check("need_form_question", &app);
+    key(&mut app, 3.0, Key::Char('b'));
+    type_text(&mut app, 3.1, "People compare the file with the table");
+    key(&mut app, 3.2, Key::Enter);
+    // The form goes to the next question with no draft; the first one shows its draft.
+    key(&mut app, 3.3, Key::Left);
+    check("need_form_draft", &app);
+    key(&mut app, 3.4, Key::Char('3'));
+    key(&mut app, 3.5, Key::Enter);
+    key(&mut app, 3.6, Key::Tab);
+    check("need_form_review", &app);
+    let mut small = open_with(SMALL, vec![form(three())]);
+    key(&mut small, 3.0, Key::Char('r'));
+    check("need_form_review_100x28", &small);
+}
+
+#[test]
+fn the_question_form_while_its_send_runs_and_after_a_refusal() {
+    let mut app = open_with(SIZE, vec![one(true)]);
     key(&mut app, 3.0, Key::Enter);
-    let fx = key(&mut app, 3.1, Key::Tab);
-    let job = jobs(&fx).pop().expect("the answer runs");
+    key(&mut app, 3.1, Key::Tab);
+    let fx = key(&mut app, 3.2, Key::Char('s'));
+    let job = jobs(&fx).pop().expect("the send runs");
     send(&mut app, 3.5, Msg::Tick);
     check("need_question_runs", &app);
     send(
@@ -85,7 +106,7 @@ fn the_question_card_while_its_answer_runs_and_after_it_failed() {
             kind: job.kind.clone(),
             result: ChildResult {
                 code: Some(1),
-                stderr: "error: the card Q-0002 is already answered\n".into(),
+                stderr: "error: no answer was recorded, because the answer to Q-0002 was refused: Q-0002 already has an answer\n".into(),
                 ..ChildResult::default()
             },
         }),

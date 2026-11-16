@@ -866,7 +866,19 @@ fn cut(text: &str, max: usize) -> String {
     }
 }
 
-/// The timeline of one ticket, oldest first.
+/// Whom a message of the person went to, from the detail of its event `told`: the agent of
+/// the running turn, `the running turn` for a turn with no agent, or `the next turn`.
+pub fn told_to(detail: &Value) -> String {
+    let text = |key: &str| detail.get(key).and_then(Value::as_str);
+    match (text("to"), text("turn")) {
+        (Some(agent), _) if !agent.trim().is_empty() => agent.trim().to_string(),
+        (_, Some(_)) => "the running turn".to_string(),
+        _ => "the next turn".to_string(),
+    }
+}
+
+/// The timeline of one ticket, oldest first. A message that the person sent with `vision tell`
+/// is the event `told`.
 pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
     let mut out = Vec::new();
     for e in ledger.events_of_ticket(key.as_str())? {
@@ -883,6 +895,12 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
             "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
             "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
             "kind" => format!("{} kind {}", e.actor, field("kind")),
+            "told" => format!(
+                "{} told {}: {}",
+                e.actor,
+                told_to(&detail),
+                cut(field("text"), 240)
+            ),
             _ => format!(
                 "{} {}{}",
                 e.actor,
@@ -1715,5 +1733,20 @@ mod report_tests {
             ["cr-codex", "adapter", "1", "turn", "$0.00"],
             "{text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+
+    #[test]
+    fn a_message_of_the_person_names_whom_it_went_to() {
+        let to = |detail: Value| told_to(&detail);
+        assert_eq!(to(json!({"to": "scout", "turn": "t1"})), "scout");
+        assert_eq!(to(json!({"to": null, "turn": "t1"})), "the running turn");
+        assert_eq!(to(json!({"to": " ", "turn": "t1"})), "the running turn");
+        assert_eq!(to(json!({"to": null, "turn": null})), "the next turn");
+        assert_eq!(to(Value::Null), "the next turn");
     }
 }

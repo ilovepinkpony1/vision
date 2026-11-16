@@ -357,7 +357,7 @@ pub enum QuestionsCommand {
         read: Option<String>,
     },
 
-    /// Answer a card, or mark it as needless
+    /// Answer a card, mark it as needless, or answer several cards from a file
     #[command(display_order = 23)]
     Answer(AnswerArgs),
 
@@ -397,12 +397,14 @@ impl QuestionsCommand {
     }
 }
 
-/// `vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]`, or `--needless SOURCE`.
+/// `vision answer ID --choice N | --text "T" [--why "W"] [--when "C"]`, `--needless SOURCE`, or
+/// `vision answer --file FILE` for the answers of several cards in one transaction.
 #[derive(Debug, Args)]
-#[command(group(ArgGroup::new("reply").required(true).args(["choice", "text", "needless"])))]
+#[command(group(ArgGroup::new("reply").required(true).args(["choice", "text", "needless", "file"])))]
 pub struct AnswerArgs {
     /// The id of the card
-    pub id: String,
+    #[arg(required_unless_present = "file")]
+    pub id: Option<String>,
     /// The number of a choice, as `vision needs` shows it
     #[arg(long, value_name = "N")]
     pub choice: Option<u32>,
@@ -418,6 +420,15 @@ pub struct AnswerArgs {
     /// Where the decision applies
     #[arg(long, value_name = "C", conflicts_with = "needless")]
     pub when: Option<String>,
+    /// A JSON file with the answers of several cards, such as
+    /// {"Q-0001": {"choice": 2, "why": "W"}, "Q-0002": {"needless": "code"}}. Each answer is
+    /// recorded, or none
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["id", "choice", "text", "needless", "why", "when"]
+    )]
+    pub file: Option<std::path::PathBuf>,
 }
 
 /// Where the answer to a needless card already was.

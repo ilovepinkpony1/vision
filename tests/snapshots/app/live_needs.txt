@@ -7,18 +7,18 @@
  ○ build                   │ │ The Judge could not answer it from the memory.     │ │ commits    none to push
  ○ review                  │ ╰────────────────────────────────────────────────────╯ │
  ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
- ○ ci                      │ 13:52:00 you   took the ticket                         │ to you                1
- ○ fix-ci                  │ 13:52:04 turn  scout starts a turn at the step refine… │ by memory             1
- ○ ready                   │ 13:56:14 turn  the turn of scout ended: it gave its r… │ by the Judge          0
- ○ comments                │ 13:56:15 write tracker.describe is confirmed           │
- ○ ci-review               │ 13:56:16 step  moves from refine to plan               │ MARKS
- ○ ready-to-merge          │ 13:56:30 turn  builder starts a turn at the step plan… │ plan      3f2a1b4 waits
- ○ done                    │ 14:05:30 turn  the turn of builder ended: it gave its… │ proof                 -
-                           │ 14:05:31 step  moves from plan to plan-ready           │ CI                    -
- TEAM                      │ 14:20:00 you   approved the plan                       │ PR                    -
- ✓ scout     fable-5-2 high│ 14:20:01 step  moves from plan-ready to build          │
- ✓ builder   opus-5-5 xhigh│ 14:24:00 turn  builder starts a turn at the step buil… │ LIMITS
- · reviewer  opus-5-5 max  │                                                        │ 5h ━━━━━━━━━━ 31% of 60
+ ○ ci                      │ All 11  Agents 5  Questions 0  Steps 3  Writes 1     › │ to you                1
+ ○ fix-ci                  │ 13:52:00 you   took the ticket                         │ by memory             1
+ ○ ready                   │ 13:52:04 turn  scout starts a turn at the step refine… │ by the Judge          0
+ ○ comments                │ 13:56:14 turn  the turn of scout ended: it gave its r… │
+ ○ ci-review               │ 13:56:15 write tracker.describe is confirmed           │ MARKS
+ ○ ready-to-merge          │ 13:56:16 step  moves from refine to plan               │ plan      3f2a1b4 waits
+ ○ done                    │ 13:56:30 turn  builder starts a turn at the step plan… │ proof                 -
+                           │ 14:05:30 turn  the turn of builder ended: it gave its… │ CI                    -
+ TEAM                      │ 14:05:31 step  moves from plan to plan-ready           │ PR                    -
+ ✓ scout     fable-5-2 high│ 14:20:00 you   approved the plan                       │
+ ✓ builder   opus-5-5 xhigh│ 14:20:01 step  moves from plan-ready to build          │ LIMITS
+ · reviewer  opus-5-5 max  │ 14:24:00 turn  builder starts a turn at the step buil… │ 5h ━━━━━━━━━━ 31% of 60
  · tester    opus-5-5 high │                                                        │    resets at 18:00
  · shepherd  opus-5-5 high │                                                        │ 7d ━━━━━━━━━━ 71% of 85
  ✓ judge     fable-5-2 high│                                                        │
@@ -28,5 +28,5 @@
                            │                                                        │
                            │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- n needs (1)   t tell the next turn   o open session   x stop   esc home   l log   p plan   ? keys
+ n needs (1)   t tell   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
 

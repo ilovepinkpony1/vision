@@ -23,10 +23,10 @@
  · shepherd  opus│  o try again    esc close                                                │━━━━━━ 71% of 85
  · judge     fabl│                                                                          │
  · curator   fabl╰──────────────────────────────────────────────────────────────────────────╯
-                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 0s ago
-                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
-                           │                month next.                             │
-                           │ 14:25:10 tool  lookup: csv                             │
+                           │                month next.                             │ ● on   last pass 0s ago
+                           │                ▌                                       │
+                           │                                                        │
+                           │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
 

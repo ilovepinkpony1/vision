@@ -1,12 +1,13 @@
 //! The middle of the live view: NOW, the state of the ticket in the words of the app, and
-//! ACTIVITY, the feed with the newest line at the bottom.
+//! ACTIVITY, the feed with the newest line at the bottom, under a row of tabs that show one
+//! kind of line with the count of each kind.
 //!
 //! NOW draws an agent or the Judge with its small head in its color and moving eyes, the model
 //! and the effort, a spinner, the running time, the tool calls, and the output tokens. A ticket
 //! that needs the person gets a box in the warning color with a badge and the key. Each other
 //! state gets the resting head and its lines.
 
-use super::layout::{Layout, FEED_TEXT_DX, FEED_Y};
+use super::layout::{Layout, ACTIVITY_Y, FEED_TEXT_DX, FEED_Y, TABS_Y};
 use crate::app::live::{Live, TicketData};
 use crate::app::model::App;
 use crate::app::now::{mmss, Kind, Now};
@@ -148,27 +149,45 @@ fn thousands(n: i64) -> String {
 pub fn feed(app: &App, c: &mut Canvas, l: &Layout, live: &Live, now: &Now) {
     let x = l.mid_x();
     let w = l.mid_w();
-    c.put(x, FEED_Y - 1, "ACTIVITY", ink(T.dim).bold());
+    c.put(x, ACTIVITY_Y, "ACTIVITY", ink(T.dim).bold());
     c.put(
         x + 9,
-        FEED_Y - 1,
+        ACTIVITY_Y,
         &"─".repeat((w - 9).max(0) as usize),
         ink(T.line),
     );
     let feed = &live.feed;
     if !feed.follow {
         let mark = format!(" ▲ {} below · G goes to the end ", feed.back);
-        c.right(x + w - 1, FEED_Y - 1, &mark, ink(T.accent));
+        c.right(x + w - 1, ACTIVITY_Y, &mark, ink(T.accent));
     }
-    let lines = feed.lines(l.feed_text_w(), app.clock.offset_seconds);
+    let tabs = l.tabs(&feed.counts(), app.activity);
+    if tabs.left {
+        c.put(x, TABS_Y, "‹", ink(T.dim));
+    }
+    for (filter, tx, text) in &tabs.tabs {
+        let style = if *filter == app.activity {
+            ink(T.bg).on(T.accent).bold()
+        } else {
+            ink(T.dim)
+        };
+        c.put(*tx, TABS_Y, text, style);
+    }
+    if tabs.right {
+        c.put(x + w - 1, TABS_Y, "›", ink(T.dim));
+    }
+    let lines = feed.lines(l.feed_text_w(), app.clock.offset_seconds, app.activity);
     let height = l.feed_h() as usize;
     if lines.is_empty() {
-        c.put(
-            x,
-            FEED_Y,
-            "No event yet. Each step of the work shows here.",
-            ink(T.dim),
-        );
+        let text = if feed.is_empty() {
+            "No event yet. Each step of the work shows here.".to_string()
+        } else {
+            format!(
+                "{}: no line yet. f shows the next tab.",
+                app.activity.label()
+            )
+        };
+        c.put(x, FEED_Y, &cut(&text, w as usize), ink(T.dim));
         return;
     }
     let end = lines.len().saturating_sub(feed.back.min(lines.len()));

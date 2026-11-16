@@ -11,6 +11,8 @@
 //! - [`needs`] gives the cards that wait for the person, for the snapshot, and [`card_views`]
 //!   gives each of them with its whole card as data, for the app.
 //! - [`run`] is `vision needs`, `answer`, `answers`, and `correct`.
+//! - [`set::answer_set`] records the answers of several cards in one transaction, each answer
+//!   or none, for `vision answer --file` and the send of the question form of the app.
 //! - [`replay`] replays the last answers of the person with a Judge turn against a memory
 //!   folder, for the Curator and for `vision model eval`. It writes nothing.
 //! - [`rules::rule`] is the pure function of the rules in code (section 8.3), and
@@ -28,6 +30,7 @@ mod record;
 pub mod replay;
 mod resume;
 pub mod rules;
+pub mod set;
 mod tick;
 mod view;
 
@@ -53,6 +56,7 @@ pub use replay::{
     ReplayReport, ReplayStarted,
 };
 pub use rules::{Entry, Outcome, Ruling};
+pub use set::{answer_set, SetAnswer, SetReply};
 pub use tick::tick;
 pub use view::{card_views, CardView, ChoiceView, ProposalView};
 

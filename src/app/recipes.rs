@@ -8,13 +8,12 @@
 //! the card showed.
 
 use super::chain::{commit_text, Chain, Check, Owner, Step, Work};
-use super::msg::{Action, Given, Handoff};
-use super::needs::{FlagItem, PlanItem, ProposalItem, WriteItem};
+use super::msg::{Action, Handoff};
+use super::needs::{Draft, FlagItem, PlanItem, ProposalItem, QuestionSet, WriteItem};
 use crate::config::Mode;
 use crate::executor::{commit_arg, promoted, LADDER};
 use crate::ledger::notices::NoticeRow;
 use crate::pipeline::SHORT_HASH;
-use crate::questions::CardView;
 
 /// The words of a place of a needless card.
 pub fn needless_words(place: &str) -> &'static str {
@@ -26,48 +25,47 @@ pub fn needless_words(place: &str) -> &'static str {
     }
 }
 
-/// `vision answer`: a choice, a text, or a needless card.
-pub fn answer(id: u64, card: &CardView, given: Given, why: &str) -> Chain {
-    let q = &card.id;
-    let (label, done) = match &given {
-        Given::Needless(place) => (
-            format!("mark {q} as needless"),
-            format!(
-                "Marked {q} as needless: {}. {} decides it itself.",
-                needless_words(place),
-                card.agent
-            ),
-        ),
-        _ if why.trim().is_empty() => (
-            format!("save your answer to {q}"),
-            format!(
-                "Saved your answer to {q}. {} gets it when each question of its turn has an answer.",
-                card.agent
-            ),
+/// The send of a question form: `vision answer --file` with the draft of each question, so
+/// that each answer is recorded, or none. The notice says who gets the answers.
+pub fn answer_set(id: u64, set: &QuestionSet, answers: Vec<(String, Draft)>) -> Chain {
+    let key = &set.ticket;
+    let ids: Vec<&str> = answers.iter().map(|(id, _)| id.as_str()).collect();
+    let (label, sent) = match ids.as_slice() {
+        [one] => (
+            format!("send your answer to {one}"),
+            format!("Sent your answer to {one}."),
         ),
         _ => (
-            format!("save your answer to {q} with its reason"),
-            format!(
-                "Saved your answer to {q} with its reason. {} gets it when each question of its turn has an answer.",
-                card.agent
-            ),
+            format!("send your {} answers", ids.len()),
+            format!("Sent your {} answers.", ids.len()),
         ),
     };
-    let action = Action::Answer {
-        id: q.clone(),
-        given,
-        why: why.trim().to_string(),
+    let gets = if set.ask_step().is_some() {
+        let it = if ids.len() == 1 { "It goes" } else { "They go" };
+        format!("{it} to answers.md at the next pass, and {key} moves on.")
+    } else {
+        let agent = set.cards.first().map_or("The agent", |c| c.agent.as_str());
+        let it = if ids.len() == 1 { "it" } else { "them" };
+        format!("{agent} gets {it} at the next pass.")
+    };
+    let waits = match ids.as_slice() {
+        [_] => "Nothing was recorded, and your draft stays.",
+        _ => "Nothing was recorded, and your drafts stay.",
+    };
+    let action = Action::AnswerSet {
+        ticket: key.clone(),
+        answers,
     };
     Chain::new(
         id,
-        Owner::Need(format!("question:{q}")),
+        Owner::Need(format!("questions:{}", set.turn)),
         vec![Step::new(
             Work::Act(action),
             label,
-            "Vision keeps your answer.",
+            "Vision keeps your answers.",
         )],
-        format!("{q} still waits for your answer."),
-        done,
+        waits,
+        format!("{sent} {gets}"),
     )
 }
 

@@ -1,0 +1,34 @@
+ ◆ VISION ▸ DEMO-12  Export the report of the month as…               engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                              │ TICKET
+ ✓ refine          4m $0.21│ ╭──────────────────────────────────────────────────────────────╮ │ cost              $1.03
+ ✓ plan            9m $0.88│ │  needs you  2 things wait for you                    n needs │ │ time                38m
+ ✓ plan-ready      2m      │ │ 1 question, the proof did not pass at 1a2b3c4d5e6f           │ │ turns                 3
+ ◉ build                you│ │ Press n to see each one.                                     │ │ commits    none to push
+ ○ review                  │ ╰──────────────────────────────────────────────────────────────╯ │
+ ○ open-pr                 │ ACTIVITY ─────────────────────────────────────────────────────── │ QUESTIONS
+ ○ ci                      │ All 13  Agents 7  Questions 0  Steps 3  Writes 1  Problems 0   › │ to you                1
+ ○ fix-ci                  │ 13:52:00 you   took the ticket                                   │ by memory             1
+ ○ ready                   │ 13:52:04 turn  scout starts a turn at the step refine · claude-… │ by the Judge          0
+ ○ comments                │ 13:56:14 turn  the turn of scout ended: it gave its result · $0… │
+ ○ ci-review               │ 13:56:15 write tracker.describe is confirmed                     │ MARKS
+ ○ ready-to-merge          │ 13:56:16 step  moves from refine to plan                         │ plan          3f2a1b4 ✓
+ ○ done                    │ 13:56:30 turn  builder starts a turn at the step plan · claude-… │ proof                 -
+                           │ 14:05:30 turn  the turn of builder ended: it gave its result · … │ CI                    -
+ TEAM                      │ 14:05:31 step  moves from plan to plan-ready                     │ PR                    -
+ ✓ scout     fable-5-2 high│ 14:20:00 you   approved the plan                                 │
+ ✓ builder   opus-5-5 xhigh│ 14:20:01 step  moves from plan-ready to build                    │ LIMITS
+ · reviewer  opus-5-5 max  │ 14:24:00 turn  builder starts a turn at the step build · claude… │ 5h ━━━━━━━━━━ 31% of 60
+ · tester    opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I add a CSV   │    resets at 18:00
+ · shepherd  opus-5-5 high │                writer and keep the order of the columns that the │ 7d ━━━━━━━━━━ 71% of 85
+ · judge     fable-5-2 high│                plan names.                                       │
+ · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty month     │ ENGINE
+                           │                next.                                             │ ● on   last pass 2s ago
+                           │                                                                  │
+                           │                                                                  │
+                           │                                                                  │
+                           │                                                                  │
+                           │                                                                  │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ r retry   n needs (1)   t tell   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
+

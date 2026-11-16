@@ -300,6 +300,7 @@ fn action_done(
         Action::Tell { key, .. } => super::tell::told(app, key, result),
         // A chain runs these and shows their end on its card.
         Action::Answer { .. }
+        | Action::AnswerSet { .. }
         | Action::ApprovePlan { .. }
         | Action::Approve { .. }
         | Action::Promote { .. }

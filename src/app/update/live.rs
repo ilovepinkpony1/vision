@@ -5,19 +5,21 @@
 //! `o` opens the session, `l` the log, `p` the plan, `d` the commits that the forge does not
 //! have, `x` stops the ticket, and `r` retries it when it waits for the person with a flag or
 //! is paused. Enter on a stopped ticket opens the resume card. The arrows, `k`, `j`, PageUp,
-//! and PageDown scroll the activity; `G` and End go back to its end. `?` shows the keys, and
-//! `q` quits as on Home.
+//! and PageDown scroll the activity; `G` and End go back to its end. `f` shows the next kind of
+//! activity, `F` the kind before, and the digits 1 to 7 pick a tab; a change of the tab goes to
+//! the end of its list. `?` shows the keys, and `q` quits as on Home.
 //!
 //! While the view is open, its data loads again each second, and a thread follows the stream
 //! files of the ticket.
 
 use std::time::Duration;
 
+use super::super::feed::{Filter, FILTERS};
 use super::super::live::{Live, TicketData};
 use super::super::model::{
     App, Card, OpenCard, ResumeCard, RetryCard, Run, Screen, StopCard, Tone,
 };
-use super::super::moments::moment;
+use super::super::moments::{in_feed, moment};
 use super::super::msg::{Effect, Key};
 use super::super::now::Kind;
 use super::super::pager::{Pager, PagerKind};
@@ -60,15 +62,23 @@ pub fn timer(app: &mut App, fx: &mut Vec<Effect>) {
     }
 }
 
-/// The lines of the activity at the size of the window.
+/// The lines of the activity of the tab that shows, at the size of the window.
 pub fn feed_lines(app: &App) -> usize {
     let Some(live) = &app.live else {
         return 0;
     };
     let layout = Layout::of(i32::from(app.size.0), i32::from(app.size.1));
     live.feed
-        .lines(layout.feed_text_w(), app.clock.offset_seconds)
+        .lines(layout.feed_text_w(), app.clock.offset_seconds, app.activity)
         .len()
+}
+
+/// Shows another tab of the activity, from the end of its list.
+fn filter(app: &mut App, to: Filter) {
+    app.activity = to;
+    if let Some(live) = app.live.as_mut() {
+        live.feed.end();
+    }
 }
 
 pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
@@ -83,6 +93,7 @@ pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
             let moments: Vec<_> = data
                 .timeline
                 .iter()
+                .filter(|entry| in_feed(entry))
                 .map(|entry| (vtime::parse_rfc3339(&entry.at).ok(), moment(entry)))
                 .collect();
             let changed = live.feed.set_moments(&moments);
@@ -147,6 +158,12 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             if let Some(live) = app.live.as_mut() {
                 live.feed.end();
             }
+        }
+        Key::Char('f') => filter(app, app.activity.next()),
+        Key::Char('F') => filter(app, app.activity.back()),
+        Key::Char(c @ '1'..='7') => {
+            let n = c.to_digit(10).map_or(1, |n| n as usize);
+            filter(app, FILTERS[n - 1]);
         }
         Key::Char('n') => {
             let key = live.key.clone();

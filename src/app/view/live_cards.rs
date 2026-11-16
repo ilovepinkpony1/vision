@@ -272,12 +272,17 @@ pub fn help(c: &mut Canvas) {
         ("t", "tell the agent something"),
         ("o", "open the session and type into it yourself"),
         ("l  p  d", "the log, the plan, the commits to push"),
+        ("", "Enter on a turn of the log shows its tool calls"),
         ("x", "stop the ticket"),
         ("r", "start the step again, or continue"),
         ("enter", "start a stopped ticket again"),
         ("↑↓  j k", "scroll the activity"),
         ("pgup pgdn", "scroll the activity by a page"),
         ("G  end", "back to the end of the activity"),
+        (
+            "f  F  1-7",
+            "the next tab of the activity, the one before, a tab",
+        ),
         ("?", "this list of keys"),
         ("q", "quit"),
     ];

@@ -22,11 +22,11 @@
  · tester    opus│                                                                          │ts at 18:00
  · shepherd  opus╰──────────────────────────────────────────────────────────────────────────╯━━━━━━ 71% of 85
  · judge     fable-5-2 high│                the columns that the plan names.        │
- · curator   fable-5-2 high│ 14:24:35 edit  src/report/export.py                    │ ENGINE
-                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 3s ago
-                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
-                           │                month next.                             │
-                           │ 14:25:10 tool  lookup: csv                             │
+ · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │ ENGINE
+                           │                month next.                             │ ● on   last pass 3s ago
+                           │                                                        │
+                           │                                                        │
+                           │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
 

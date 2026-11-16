@@ -1,24 +1,35 @@
-//! The activity of the live view: a feed with the newest line at the bottom. It joins two
-//! sources by time: the events of the stream files of the turns of the ticket (what the agent
-//! says and each tool that it calls), and the timeline of the ticket from the ledger (a turn
-//! that started or ended, an answer of the Judge, an operation, a flag, an action of the
-//! person).
+//! The activity of the live view: a feed of human words with the newest line at the bottom. It
+//! joins two sources by time: the stream files of the turns of the ticket (what the agent says,
+//! and the end of a session with an error), and the timeline of the ticket from the ledger (a
+//! turn that started or ended, a question and its answer, the Judge, an operation, a move
+//! between steps, an end fact, a flag, a notice, an action of the person).
+//!
+//! A tool call of the agent gets no line: only its count stays, in NOW and in the numbers of its
+//! turn. What the turn gets, the start of the session, and its end with a result get no line
+//! either, because the lines of the turn in the ledger say the same in words. The events of one
+//! turn, with all of these, stay in the log of the ticket.
+//!
+//! Each item has one kind, a [`Filter`], that [`filter_of`] gives. The tabs above the feed show
+//! one kind, or all of them.
 //!
 //! The stream has no time in its lines. A line that the reader sees while the view is open
 //! gets the time of that read. A line that was in the file before has no known time: it sorts
-//! after the start of its turn, in its order, and it shows no time, except the first one (the
-//! start of the turn) and the last one (the time of the file).
+//! after the start of its turn, in its order, and it shows no time. Only a line of the last
+//! event of the file shows the time of the file.
 //!
-//! The feed keeps a bounded number of items. While it follows, the newest line is at the
-//! bottom; a scroll stops the follow, and `back` counts the lines under the view.
+//! The feed keeps a bounded number of items, and it counts only the items that it shows. While
+//! it follows, the newest line is at the bottom; a scroll stops the follow, and `back` counts the
+//! lines of the filtered list under the view.
 
 use std::collections::BTreeMap;
 
+use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::model::Hue;
 use super::moments::Moment;
 use super::text::{cut, wrap};
+use crate::pipeline::commands::LogEntry;
 use crate::turn::{tool_summary, StreamEvent};
 
 /// The items of the stream files that the feed keeps.
@@ -51,6 +62,125 @@ pub struct Batch {
     pub started: Option<OffsetDateTime>,
 }
 
+/// The kind of an item of the activity, for the tabs above the feed. Each item has exactly one
+/// kind; `All` shows each item.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Filter {
+    #[default]
+    All,
+    /// What an agent says, the start and the end of its turns, and the reads that Vision serves
+    /// for a turn.
+    Agents,
+    /// The questions of the agents, the Judge, and the answers.
+    Questions,
+    /// The moves between the steps, the end facts that held, the documents, and the end of
+    /// the ticket.
+    Steps,
+    /// The operations: what Vision sends to the tracker and the forge.
+    Writes,
+    /// A flag, a session that ended with an error, a turn or an operation that failed, an end
+    /// fact that did not hold, a card that was not valid, and a notice of a gate.
+    Problems,
+    /// The actions of the person.
+    You,
+}
+
+/// The filters in the order of the tabs.
+pub const FILTERS: [Filter; 7] = [
+    Filter::All,
+    Filter::Agents,
+    Filter::Questions,
+    Filter::Steps,
+    Filter::Writes,
+    Filter::Problems,
+    Filter::You,
+];
+
+impl Filter {
+    /// The name of the tab.
+    pub fn label(self) -> &'static str {
+        match self {
+            Filter::All => "All",
+            Filter::Agents => "Agents",
+            Filter::Questions => "Questions",
+            Filter::Steps => "Steps",
+            Filter::Writes => "Writes",
+            Filter::Problems => "Problems",
+            Filter::You => "You",
+        }
+    }
+
+    /// The place of the tab, from 0.
+    pub fn index(self) -> usize {
+        FILTERS.iter().position(|f| *f == self).unwrap_or(0)
+    }
+
+    /// The next tab, after the last one the first.
+    pub fn next(self) -> Filter {
+        FILTERS[(self.index() + 1) % FILTERS.len()]
+    }
+
+    /// The tab before, before the first one the last.
+    pub fn back(self) -> Filter {
+        FILTERS[(self.index() + FILTERS.len() - 1) % FILTERS.len()]
+    }
+
+    /// True when an item of the kind `kind` shows under this filter.
+    pub fn shows(self, kind: Filter) -> bool {
+        self == Filter::All || self == kind
+    }
+}
+
+/// What an item of the feed comes from, for [`filter_of`].
+#[derive(Clone, Copy, Debug)]
+pub enum Origin<'a> {
+    /// A text of a stream file by its word: `says`, `gets`, `start`, or `ends`, and true for
+    /// an end with an error.
+    Stream { word: &'a str, error: bool },
+    /// A line of the timeline of the ledger.
+    Ledger(&'a LogEntry),
+}
+
+/// The kind of an item: each item of the feed has exactly one.
+pub fn filter_of(origin: Origin<'_>) -> Filter {
+    let entry = match origin {
+        Origin::Stream { error: true, .. } => return Filter::Problems,
+        Origin::Stream { .. } => return Filter::Agents,
+        Origin::Ledger(entry) => entry,
+    };
+    let text = |key: &str| entry.detail.get(key).and_then(Value::as_str);
+    match entry.source.as_str() {
+        "turn" => {
+            let failed = entry.kind == "ended"
+                && (text("status") == Some("failed")
+                    || text("end_fact").is_some_and(|f| f.starts_with("failed:")));
+            if failed {
+                Filter::Problems
+            } else if entry.who == "judge" {
+                Filter::Questions
+            } else {
+                Filter::Agents
+            }
+        }
+        "card" => Filter::Questions,
+        "operation" => match entry.kind.as_str() {
+            "failed" | "uncertain" => Filter::Problems,
+            _ => Filter::Writes,
+        },
+        _ if entry.who == "user" => Filter::You,
+        _ => match entry.kind.as_str() {
+            "judge-started" | "judge-applied" | "judge-uses" | "questions-intake"
+            | "questions-resumed" | "ask" | "ask-answered" => Filter::Questions,
+            "questions-invalid" | "flag" | "flag-cleared" | "notice" => Filter::Problems,
+            "end-fact" if entry.detail.get("held").and_then(Value::as_bool) != Some(true) => {
+                Filter::Problems
+            }
+            "requests-served" | "read" | "fallback" => Filter::Agents,
+            _ => Filter::Steps,
+        },
+    }
+}
+
 /// One item of the feed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
@@ -64,6 +194,8 @@ pub struct Item {
     pub text: String,
     /// True for a text of the agent, which wraps. Each other item is cut to one line.
     pub wraps: bool,
+    /// The kind of the item, for the tabs.
+    pub filter: Filter,
 }
 
 /// The numbers of one turn that the stream gives.
@@ -73,8 +205,6 @@ pub struct TurnStats {
     pub tools: usize,
     /// The output tokens of each message, by its id.
     outputs: BTreeMap<String, i64>,
-    /// True after the first message of the agent in the stream of the turn.
-    spoke: bool,
 }
 
 impl TurnStats {
@@ -144,6 +274,16 @@ impl Feed {
         self.len() == 0
     }
 
+    /// The number of items of each kind, in the order of [`FILTERS`]: `All` counts each item.
+    pub fn counts(&self) -> [usize; 7] {
+        let mut out = [0; 7];
+        for item in self.stream.iter().chain(&self.ledger) {
+            out[0] += 1;
+            out[item.filter.index()] += 1;
+        }
+        out
+    }
+
     /// Replaces the items of the ledger. Gives true when they changed.
     pub fn set_moments(&mut self, moments: &[(Option<OffsetDateTime>, Moment)]) -> bool {
         let start = moments.len().saturating_sub(KEEP_LEDGER);
@@ -157,6 +297,7 @@ impl Feed {
                 hue: m.hue.clone(),
                 text: m.text.clone(),
                 wraps: false,
+                filter: m.filter,
             })
             .collect();
         if items == self.ledger {
@@ -167,42 +308,32 @@ impl Feed {
     }
 
     /// Adds the events of one read of a stream file. Gives the number of items that it added.
+    /// Only the words of the agent and the end of a session with an error add an item. A tool
+    /// call only counts in the numbers of its turn. Each other event goes before the bound, so
+    /// that a long turn does not push the words of the agent out.
     pub fn add(&mut self, batch: &Batch) -> usize {
         let stats = self.stats.entry(batch.turn.clone()).or_default();
         let base = batch.started.map_or(nanos(batch.at), nanos);
+        let last = batch.events.len().saturating_sub(1);
         let mut added = Vec::new();
-        for line in &batch.events {
-            // What the turn gets before the agent says anything is the text that starts the
-            // turn. It names files of the turn folder, so it takes one line. The pager of the
-            // turn shows it in full.
-            let prompt = matches!(line.event, StreamEvent::User { .. }) && !stats.spoke;
+        for (index, line) in batch.events.iter().enumerate() {
             if let StreamEvent::Assistant { tools, .. } = &line.event {
                 stats.tools += tools.iter().filter(|t| counts(&t.name)).count();
-                stats.spoke = true;
             }
             if let Some((id, n)) = &line.output {
                 stats.outputs.insert(id.clone(), *n);
             }
-            for (word, hue, text, wraps) in words_of(&line.event) {
-                added.push((
-                    word,
-                    hue,
-                    text,
-                    wraps && !prompt,
-                    matches!(line.event, StreamEvent::Init { .. }),
-                ));
+            let error = matches!(&line.event, StreamEvent::Result(r) if r.is_error);
+            for (word, hue, text, wraps) in feed_texts(&line.event) {
+                let filter = filter_of(Origin::Stream { word: &word, error });
+                added.push((word, hue, text, wraps, index == last, filter));
             }
         }
         let count = added.len();
-        for (i, (word, hue, text, wraps, init)) in added.into_iter().enumerate() {
+        for (i, (word, hue, text, wraps, of_last, filter)) in added.into_iter().enumerate() {
             let (order, at) = if batch.old {
-                let shown = if init {
-                    batch.started
-                } else if i + 1 == count {
-                    Some(batch.at)
-                } else {
-                    None
-                };
+                // The time of the file is the time of its last event only.
+                let shown = (of_last && i + 1 == count).then_some(batch.at);
                 (base + (i as i128 + 1) * 1_000_000, shown)
             } else {
                 (nanos(batch.at), Some(batch.at))
@@ -215,6 +346,7 @@ impl Feed {
                 hue,
                 text,
                 wraps,
+                filter,
             });
         }
         if self.stream.windows(2).any(|w| w[0].order > w[1].order) {
@@ -225,10 +357,10 @@ impl Feed {
         count
     }
 
-    /// The lines of the feed for a text column of `width` cells, oldest first.
-    pub fn lines(&self, width: usize, offset_seconds: i32) -> Vec<FeedLine> {
+    /// The lines of the items of the filter for a text column of `width` cells, oldest first.
+    pub fn lines(&self, width: usize, offset_seconds: i32, filter: Filter) -> Vec<FeedLine> {
         let mut out = Vec::new();
-        for item in self.items() {
+        for item in self.items().into_iter().filter(|i| filter.shows(i.filter)) {
             let time = item.at.map_or(String::new(), |at| {
                 let local = at + time::Duration::seconds(i64::from(offset_seconds));
                 format!(
@@ -352,8 +484,21 @@ fn call_summary(call: &crate::turn::ToolCall) -> String {
     }
 }
 
-/// The items of one event: the word, its color, the text, and whether it wraps.
-pub fn words_of(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
+/// The items of one event that the activity shows: what the agent says, and the end of a
+/// session with an error. What the turn gets, the start of the session, and its end with a
+/// result show only in the events of the turn: the lines of the turn in the ledger say the
+/// same in words.
+fn feed_texts(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
+    match event {
+        StreamEvent::Assistant { .. } => texts_of(event),
+        StreamEvent::Result(result) if result.is_error => texts_of(event),
+        _ => Vec::new(),
+    }
+}
+
+/// The texts of one event for the events of a turn, each as its word, its color, its text, and
+/// whether it wraps: what the agent says or gets, the start of the session, and its end.
+pub fn texts_of(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
     match event {
         StreamEvent::Init { model, .. } => vec![(
             "start".into(),
@@ -365,38 +510,11 @@ pub fn words_of(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
             false,
         )],
         StreamEvent::RateLimit { .. } => Vec::new(),
-        StreamEvent::Assistant { texts, tools } => {
-            let mut out: Vec<(String, Hue, String, bool)> = texts
-                .iter()
-                .filter(|t| !t.trim().is_empty())
-                .map(|t| ("says".to_string(), Hue::Fg, t.clone(), true))
-                .collect();
-            for call in tools.iter().filter(|t| counts(&t.name)) {
-                let summary = call_summary(call);
-                let item = match tool_word(&call.name) {
-                    Some((word, hue)) => {
-                        let text = if summary.is_empty() {
-                            call.name.clone()
-                        } else {
-                            summary
-                        };
-                        (word.to_string(), hue, text, false)
-                    }
-                    // A tool with no word of its own shows its name in the text.
-                    None => {
-                        let name = short_name(&call.name);
-                        let text = if summary.is_empty() {
-                            name.to_string()
-                        } else {
-                            format!("{name}: {summary}")
-                        };
-                        ("tool".to_string(), Hue::Dim, text, false)
-                    }
-                };
-                out.push(item);
-            }
-            out
-        }
+        StreamEvent::Assistant { texts, .. } => texts
+            .iter()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| ("says".to_string(), Hue::Fg, t.clone(), true))
+            .collect(),
         StreamEvent::User { texts, .. } => texts
             .iter()
             .filter(|t| !t.trim().is_empty())
@@ -422,6 +540,280 @@ pub fn words_of(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
                 }
             };
             vec![("ends".into(), Hue::Primary, text, true)]
+        }
+    }
+}
+
+/// The tool calls of one event, each as its word (`read`, `find`, `edit`, `run`, `web`,
+/// `task`, `todo`, or `tool`), its color, and its text.
+pub fn tools_of(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
+    let StreamEvent::Assistant { tools, .. } = event else {
+        return Vec::new();
+    };
+    tools
+        .iter()
+        .filter(|t| counts(&t.name))
+        .map(|call| {
+            let summary = call_summary(call);
+            match tool_word(&call.name) {
+                Some((word, hue)) => {
+                    let text = if summary.is_empty() {
+                        call.name.clone()
+                    } else {
+                        summary
+                    };
+                    (word.to_string(), hue, text, false)
+                }
+                // A tool with no word of its own shows its name in the text.
+                None => {
+                    let name = short_name(&call.name);
+                    let text = if summary.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{name}: {summary}")
+                    };
+                    ("tool".to_string(), Hue::Dim, text, false)
+                }
+            }
+        })
+        .collect()
+}
+
+/// Each item of one event with its tool calls after its texts, for the events of one turn.
+pub fn words_of(event: &StreamEvent) -> Vec<(String, Hue, String, bool)> {
+    let mut out = texts_of(event);
+    out.extend(tools_of(event));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entry(source: &str, kind: &str, who: &str, detail: Value) -> LogEntry {
+        LogEntry {
+            at: "2026-11-16T14:00:00Z".into(),
+            source: source.into(),
+            kind: kind.into(),
+            id: None,
+            text: String::new(),
+            who: who.into(),
+            detail,
+        }
+    }
+
+    fn of(source: &str, kind: &str, who: &str, detail: Value) -> Filter {
+        filter_of(Origin::Ledger(&entry(source, kind, who, detail)))
+    }
+
+    #[test]
+    fn each_kind_of_item_has_one_tab() {
+        for word in ["says", "gets", "start", "ends"] {
+            assert_eq!(
+                filter_of(Origin::Stream { word, error: false }),
+                Filter::Agents,
+                "{word}"
+            );
+        }
+        assert_eq!(
+            filter_of(Origin::Stream {
+                word: "ends",
+                error: true
+            }),
+            Filter::Problems
+        );
+        let null = Value::Null;
+        let cases = [
+            ("turn", "started", "builder", null.clone(), Filter::Agents),
+            ("turn", "started", "judge", null.clone(), Filter::Questions),
+            (
+                "turn",
+                "ended",
+                "builder",
+                json!({"status": "done", "end_fact": "held"}),
+                Filter::Agents,
+            ),
+            (
+                "turn",
+                "ended",
+                "builder",
+                json!({"status": "failed"}),
+                Filter::Problems,
+            ),
+            (
+                "turn",
+                "ended",
+                "builder",
+                json!({"status": "done", "end_fact": "failed:commits"}),
+                Filter::Problems,
+            ),
+            (
+                "turn",
+                "ended",
+                "judge",
+                json!({"status": "done"}),
+                Filter::Questions,
+            ),
+            ("card", "asked", "builder", null.clone(), Filter::Questions),
+            (
+                "card",
+                "answered",
+                "builder",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "card",
+                "needless",
+                "builder",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "operation",
+                "confirmed",
+                "vision",
+                null.clone(),
+                Filter::Writes,
+            ),
+            (
+                "operation",
+                "pending",
+                "vision",
+                null.clone(),
+                Filter::Writes,
+            ),
+            (
+                "operation",
+                "failed",
+                "vision",
+                null.clone(),
+                Filter::Problems,
+            ),
+            (
+                "operation",
+                "uncertain",
+                "vision",
+                null.clone(),
+                Filter::Problems,
+            ),
+            ("event", "take", "user", null.clone(), Filter::You),
+            ("event", "stop", "user", null.clone(), Filter::You),
+            ("event", "retry", "user", null.clone(), Filter::You),
+            ("event", "pause", "user", null.clone(), Filter::You),
+            ("event", "human", "user", null.clone(), Filter::You),
+            ("event", "card-answered", "user", null.clone(), Filter::You),
+            ("event", "card-needless", "user", null.clone(), Filter::You),
+            ("event", "told", "user", null.clone(), Filter::You),
+            ("event", "correct", "user", null.clone(), Filter::You),
+            ("event", "notice-read", "user", null.clone(), Filter::You),
+            (
+                "event",
+                "judge-started",
+                "tick",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "event",
+                "judge-applied",
+                "tick",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "event",
+                "judge-uses",
+                "tick",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "event",
+                "questions-intake",
+                "tick",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "event",
+                "questions-resumed",
+                "tick",
+                null.clone(),
+                Filter::Questions,
+            ),
+            ("event", "ask", "tick", null.clone(), Filter::Questions),
+            (
+                "event",
+                "ask-answered",
+                "tick",
+                null.clone(),
+                Filter::Questions,
+            ),
+            (
+                "event",
+                "questions-invalid",
+                "tick",
+                null.clone(),
+                Filter::Problems,
+            ),
+            ("event", "flag", "tick", null.clone(), Filter::Problems),
+            (
+                "event",
+                "flag-cleared",
+                "tick",
+                null.clone(),
+                Filter::Problems,
+            ),
+            ("event", "notice", "tick", null.clone(), Filter::Problems),
+            (
+                "event",
+                "end-fact",
+                "tick",
+                json!({"held": true}),
+                Filter::Steps,
+            ),
+            (
+                "event",
+                "end-fact",
+                "tick",
+                json!({"fact": "gate:cr:cr.md"}),
+                Filter::Problems,
+            ),
+            (
+                "event",
+                "requests-served",
+                "tick",
+                null.clone(),
+                Filter::Agents,
+            ),
+            ("event", "read", "executor", null.clone(), Filter::Agents),
+            ("event", "fallback", "tick", null.clone(), Filter::Agents),
+            ("event", "step", "tick", null.clone(), Filter::Steps),
+            ("event", "visit", "tick", null.clone(), Filter::Steps),
+            ("event", "skipped", "tick", null.clone(), Filter::Steps),
+            ("event", "documents", "tick", null.clone(), Filter::Steps),
+            ("event", "check", "tick", null.clone(), Filter::Steps),
+            ("event", "kind", "tick", null.clone(), Filter::Steps),
+            ("event", "extra-round", "tick", null.clone(), Filter::Steps),
+            ("event", "escape-check", "tick", null.clone(), Filter::Steps),
+            ("event", "ended", "tick", null.clone(), Filter::Steps),
+        ];
+        for (source, kind, who, detail, want) in cases {
+            assert_eq!(of(source, kind, who, detail), want, "{source} {kind} {who}");
+        }
+    }
+
+    #[test]
+    fn the_tabs_go_round_and_all_shows_each_kind() {
+        assert_eq!(Filter::All.next(), Filter::Agents);
+        assert_eq!(Filter::You.next(), Filter::All);
+        assert_eq!(Filter::All.back(), Filter::You);
+        assert_eq!(Filter::Steps.index(), 3);
+        for kind in FILTERS {
+            assert!(Filter::All.shows(kind));
+            assert_eq!(Filter::Writes.shows(kind), kind == Filter::Writes);
         }
     }
 }

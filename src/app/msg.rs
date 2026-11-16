@@ -1,14 +1,14 @@
 //! The messages that reach the update, and the effects that it gives back for the runtime to
 //! run. A message is a key, a tick of the clock, a change of the window, or the result of a
 //! background thread. An effect starts a load, hands a job to the worker, gives the terminal to
-//! a child, or leaves.
+//! a child, writes the drafts file of a question form, or leaves.
 
 use super::chain::{Check, CheckFacts};
 use super::feed::{Batch, StreamLine};
 use super::live::TicketData;
 use super::model::{Local, Setup, SetupError, StartInfo};
 use super::model_table::ModelLine;
-use super::needs::NeedItem;
+use super::needs::{Draft, NeedItem};
 use super::picture::Picture;
 use super::stats::StatsData;
 use crate::pipeline::commands::PickRow;
@@ -117,6 +117,8 @@ pub enum Msg {
     Picture(Box<Option<Picture>>),
     /// The worker ended a job.
     JobDone(JobDone),
+    /// A write of a drafts file failed: why.
+    DraftsNotKept(String),
     /// The process got SIGTERM or SIGHUP. Only the runtime reads it.
     Signal(i32),
 }
@@ -155,6 +157,18 @@ pub enum Effect {
     },
     /// Read `loader.ans` of the home folder.
     LoadPicture,
+    /// Write the drafts of the question forms of a ticket in place of its drafts file. The
+    /// runtime writes it at once, so that a later send or a later load reads the same drafts.
+    SaveDrafts {
+        ticket: String,
+        drafts: Vec<(String, Draft)>,
+    },
+    /// Remove the drafts of these questions from the drafts file of a ticket, such as after
+    /// the send of their set.
+    DropDrafts {
+        ticket: String,
+        ids: Vec<String>,
+    },
     /// Start the worker thread. The update asks for it once.
     StartWorker,
     /// Hand a job to the worker. The update hands over one job at a time.
@@ -198,6 +212,13 @@ pub enum Action {
         given: Given,
         /// The reason of the person. Empty for none.
         why: String,
+    },
+    /// `vision answer --file FILE`: the answers of one question form, each one or none. FILE is
+    /// in the folder of the ticket: the worker writes it before the command runs and removes it
+    /// after, and the command runs in the home folder, so the path of its arguments finds it.
+    AnswerSet {
+        ticket: String,
+        answers: Vec<(String, Draft)>,
     },
     /// `vision approve-plan KEY HASH`.
     ApprovePlan { key: String, hash: String },
@@ -265,6 +286,9 @@ impl Action {
                 }
                 args
             }
+            Action::AnswerSet { ticket, .. } => {
+                vec!["answer".into(), "--file".into(), send_path(ticket)]
+            }
             Action::ApprovePlan { key, hash } => {
                 vec!["approve-plan".into(), key.clone(), hash.clone()]
             }
@@ -309,12 +333,31 @@ impl Action {
             Action::Retry { key } => format!("The retry of {key}"),
             Action::Tell { key, .. } => format!("The message to {key}"),
             Action::Answer { id, .. } => format!("The answer to {id}"),
+            Action::AnswerSet { ticket, .. } => format!("The send of the answers of {ticket}"),
             Action::ApprovePlan { key, .. } => format!("The approval of the plan of {key}"),
             Action::Approve { key, verb, .. } => format!("The approval of {verb} of {key}"),
             Action::Promote { verb } => format!("The promote of {verb}"),
             Action::ModelSet { agent, .. } => format!("The pin of the model of {agent}"),
             Action::ModelReset { agent } => format!("The reset of the model of {agent}"),
             Action::ReadNotice { id } => format!("The read of the notice {id}"),
+        }
+    }
+}
+
+/// The file of the send of a question form, as a path in the home folder.
+fn send_path(ticket: &str) -> String {
+    format!("tickets/{ticket}/{}", super::drafts::SEND_FILE)
+}
+
+impl Action {
+    /// The file that the command reads: its path in the home folder and its text. The worker
+    /// writes it before the command runs in the home folder, and removes it after.
+    pub fn input(&self) -> Option<(String, String)> {
+        match self {
+            Action::AnswerSet { ticket, answers } => {
+                Some((send_path(ticket), super::drafts::text(answers)))
+            }
+            _ => None,
         }
     }
 }
@@ -347,6 +390,14 @@ impl JobKind {
         match self {
             JobKind::Pass => vec!["tick".into()],
             JobKind::Action(action) => action.args(),
+        }
+    }
+
+    /// The file that the child reads, as [`Action::input`] gives it.
+    pub fn input(&self) -> Option<(String, String)> {
+        match self {
+            JobKind::Pass => None,
+            JobKind::Action(action) => action.input(),
         }
     }
 }

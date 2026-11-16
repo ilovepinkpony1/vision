@@ -553,6 +553,49 @@ impl Memory {
         self.decision(id)
     }
 
+    /// Adds several decisions of one writer in one commit, such as the answers of one form of
+    /// the app: each one gets the next free id in the order of the list, and a failure leaves
+    /// none of them. An empty list writes nothing.
+    pub fn add_decisions(&self, news: &[NewDecision]) -> Result<Vec<Decision>> {
+        let Some(first) = news.first() else {
+            return Ok(Vec::new());
+        };
+        for new in news {
+            check_new_decision(new)?;
+            if new.by != first.by {
+                bail!(
+                    "the decisions of one commit have one writer, not {} and {}",
+                    first.by,
+                    new.by
+                );
+            }
+        }
+        let _lock = self.lock()?;
+        self.check_main()?;
+        let start = self.next_decision()?.number();
+        let mut ids = Vec::new();
+        let mut changes = Vec::new();
+        for (i, new) in news.iter().enumerate() {
+            let number = u32::try_from(i)
+                .ok()
+                .and_then(|i| start.checked_add(i))
+                .and_then(DecisionId::new)
+                .context("no free decision id")?;
+            changes.push(Change::write(number.path(), new.render(number, None, None)));
+            ids.push(number);
+        }
+        self.check_changes(&changes)?;
+        let message = match ids.as_slice() {
+            [one] => format!("Add {one}: {}", short(&first.question, 60)),
+            many => {
+                let names: Vec<String> = many.iter().map(ToString::to_string).collect();
+                format!("Add {}: {} answers", names.join(", "), many.len())
+            }
+        };
+        self.write_commit(&changes, &message, &first.by)?;
+        ids.into_iter().map(|id| self.decision(id)).collect()
+    }
+
     /// Replaces an active decision with a new one, in one commit: the old file gets the
     /// status `superseded`, and the new one names it in `supersedes`.
     pub fn supersede(&self, old: DecisionId, new: &NewDecision) -> Result<Decision> {
@@ -1188,7 +1231,8 @@ pub(crate) fn author_of(writer: &Writer) -> (String, String) {
     (writer.name().to_string(), writer.email())
 }
 
-fn check_new_decision(new: &NewDecision) -> Result<()> {
+/// The test of a new decision: it has a question and an answer, and its basis fits its writer.
+pub(crate) fn check_new_decision(new: &NewDecision) -> Result<()> {
     if new.question.trim().is_empty() {
         bail!("a decision needs the question");
     }

@@ -66,6 +66,7 @@ pub(super) fn plan(app: &App, _card: &NeedsCard, item: &PlanItem) -> Parts {
         ),
         body,
         foot,
+        ..Parts::default()
     }
 }
 
@@ -123,6 +124,7 @@ pub(super) fn flag(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
         title: "a rule stopped the ticket".into(),
         body,
         foot,
+        ..Parts::default()
     }
 }
 
@@ -154,6 +156,7 @@ pub(super) fn paused(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
         title: "you took over its session".into(),
         body,
         foot,
+        ..Parts::default()
     }
 }
 
@@ -193,6 +196,7 @@ pub(super) fn proposal(_app: &App, _card: &NeedsCard, item: &ProposalItem) -> Pa
         title: format!("a proposal of the Curator · {}", item.name),
         body,
         foot,
+        ..Parts::default()
     }
 }
 
@@ -259,5 +263,6 @@ pub(super) fn notice(_app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
         title: format!("a notice · {}", item.name()),
         body,
         foot,
+        ..Parts::default()
     }
 }

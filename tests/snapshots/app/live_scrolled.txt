@@ -6,27 +6,27 @@
  ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
  ⠦ build               6:00│   ▀▀▀▀▀▀▀  ⠦ 6:00 · 5 tool calls                       │ commits    none to push
  ○ review                  │                                                        │
- ○ open-pr                 │ ACTIVITY ────────────── ▲ 2 below · G goes to the end  │ QUESTIONS
- ○ ci                      │ 13:52:00 you   took the ticket                         │ to you                0
- ○ fix-ci                  │ 13:52:04 turn  scout starts a turn at the step refine… │ by memory             1
- ○ ready                   │ 13:56:14 turn  the turn of scout ended: it gave its r… │ by the Judge          0
- ○ comments                │ 13:56:15 write tracker.describe is confirmed           │
- ○ ci-review               │ 13:56:16 step  moves from refine to plan               │ MARKS
- ○ ready-to-merge          │ 13:56:30 turn  builder starts a turn at the step plan… │ plan          3f2a1b4 ✓
- ○ done                    │ 14:05:30 turn  the turn of builder ended: it gave its… │ proof                 -
-                           │ 14:05:31 step  moves from plan to plan-ready           │ CI                    -
- TEAM                      │ 14:20:00 you   approved the plan                       │ PR                    -
- ✓ scout     fable-5-2 high│ 14:20:01 step  moves from plan-ready to build          │
- ● builder   opus-5-5 xhigh│ 14:24:00 turn  builder starts a turn at the step buil… │ LIMITS
- · reviewer  opus-5-5 max  │ 14:24:01 start the session starts with claude-opus-5-5 │ 5h ━━━━━━━━━━ 31% of 60
- · tester    opus-5-5 high │ 14:24:05 read  src/report/export.py                    │    resets at 18:00
- · shepherd  opus-5-5 high │ 14:24:12 find  "def export_month" in src               │ 7d ━━━━━━━━━━ 71% of 85
- · judge     fable-5-2 high│ 14:24:20 says  The export writes each row by hand. I   │
- · curator   fable-5-2 high│                add a CSV writer and keep the order of  │ ENGINE
-                           │                the columns that the plan names.        │ ● on   last pass 3s ago
-                           │ 14:24:35 edit  src/report/export.py                    │
-                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │
-                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
+ ○ open-pr                 │ ACTIVITY ────────────── ▲ 3 below · G goes to the end  │ QUESTIONS
+ ○ ci                      │ All 19  Agents 13  Questions 0  Steps 3  Writes 1    › │ to you                0
+ ○ fix-ci                  │ 13:52:00 you   took the ticket                         │ by memory             1
+ ○ ready                   │ 13:52:04 turn  scout starts a turn at the step refine… │ by the Judge          0
+ ○ comments                │ 13:56:14 turn  the turn of scout ended: it gave its r… │
+ ○ ci-review               │ 13:56:15 write tracker.describe is confirmed           │ MARKS
+ ○ ready-to-merge          │ 13:56:16 step  moves from refine to plan               │ plan          3f2a1b4 ✓
+ ○ done                    │ 13:56:30 turn  builder starts a turn at the step plan… │ proof                 -
+                           │ 14:05:30 turn  the turn of builder ended: it gave its… │ CI                    -
+ TEAM                      │ 14:05:31 step  moves from plan to plan-ready           │ PR                    -
+ ✓ scout     fable-5-2 high│ 14:20:00 you   approved the plan                       │
+ ● builder   opus-5-5 xhigh│ 14:20:01 step  moves from plan-ready to build          │ LIMITS
+ · reviewer  opus-5-5 max  │ 14:24:00 turn  builder starts a turn at the step buil… │ 5h ━━━━━━━━━━ 31% of 60
+ · tester    opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I   │    resets at 18:00
+ · shepherd  opus-5-5 high │                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
+ · judge     fable-5-2 high│                the columns that the plan names.        │
+ · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │ ENGINE
+                           │                month next.                             │ ● on   last pass 3s ago
+                           │ 14:25:20 says  Part 0 of the export is done.           │
+                           │ 14:25:25 says  Part 1 of the export is done.           │
+                           │ 14:25:30 says  Part 2 of the export is done.           │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
 

@@ -3,30 +3,30 @@
  PATH                      │ NOW                                                    │ TICKET
  ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
  ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
- ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
- ⠸ build            ╭─ Keys ─────────────────────────────────────────────────────────────╮its    none to push
- ○ review           │                                                                    │
- ○ open-pr          │  esc          back to Home                                         │TIONS
- ○ ci               │  n            answer what waits for this ticket                    │ou                0
- ○ fix-ci           │  t            tell the agent something                             │emory             1
- ○ ready            │  o            open the session and type into it yourself           │he Judge          0
- ○ comments         │  l  p  d      the log, the plan, the commits to push               │
+ ✓ plan-ready      2╭─ Keys ─────────────────────────────────────────────────────────────╮s                 3
+ ⠸ build            │                                                                    │its    none to push
+ ○ review           │  esc          back to Home                                         │
+ ○ open-pr          │  n            answer what waits for this ticket                    │TIONS
+ ○ ci               │  t            tell the agent something                             │ou                0
+ ○ fix-ci           │  o            open the session and type into it yourself           │emory             1
+ ○ ready            │  l  p  d      the log, the plan, the commits to push               │he Judge          0
+ ○ comments         │               Enter on a turn of the log shows its tool calls      │
  ○ ci-review        │  x            stop the ticket                                      │S
  ○ ready-to-merge   │  r            start the step again, or continue                    │          3f2a1b4 ✓
  ○ done             │  enter        start a stopped ticket again                         │f                 -
                     │  ↑↓  j k      scroll the activity                                  │                  -
  TEAM               │  pgup pgdn    scroll the activity by a page                        │                  -
  ✓ scout     fable-5│  G  end       back to the end of the activity                      │
- ● builder   opus-5-│  ?            this list of keys                                    │TS
- · reviewer  opus-5-│  q            quit                                                 │━━━━━━━━━ 31% of 60
- · tester    opus-5-│                                                                    │esets at 18:00
- · shepherd  opus-5-│  esc closes this list                                              │━━━━━━━━━ 71% of 85
- · judge     fable-5│                                                                    │
- · curator   fable-5╰────────────────────────────────────────────────────────────────────╯NE
-                           │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 2s ago
-                           │ 14:25:03 says  3 tests pass. I add a test for an empty │
-                           │                month next.                             │
-                           │ 14:25:10 tool  lookup: csv                             │
+ ● builder   opus-5-│  f  F  1-7    the next tab of the activity, the one before, a tab  │TS
+ · reviewer  opus-5-│  ?            this list of keys                                    │━━━━━━━━━ 31% of 60
+ · tester    opus-5-│  q            quit                                                 │esets at 18:00
+ · shepherd  opus-5-│                                                                    │━━━━━━━━━ 71% of 85
+ · judge     fable-5│  esc closes this list                                              │
+ · curator   fable-5│                                                                    │NE
+                    ╰────────────────────────────────────────────────────────────────────╯   last pass 2s ago
+                           │                                                        │
+                           │                                                        │
+                           │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log   p plan   d commits   ? keys
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
 

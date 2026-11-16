@@ -1,10 +1,12 @@
 //! The words of the timeline of a ticket: each line of the ledger (a turn that started or
-//! ended, a card and its answer, an operation, a flag, an action of the person) as who did it,
-//! a short word, and a plain text. The activity feed and the log pager both use them. The text
-//! is data from the ledger: the view takes each control character out before it reaches a cell.
+//! ended, a card and its answer, an operation, a flag, an action or a message of the person)
+//! as who did it, a short word, a plain text, and its kind for the tabs of the activity. The
+//! activity feed and the log pager both use them. The text is data from the ledger: the view
+//! takes each control character out before it reaches a cell.
 
 use serde_json::Value;
 
+use super::feed::{filter_of, Filter, Origin};
 use super::model::Hue;
 use crate::pipeline::commands::LogEntry;
 
@@ -21,10 +23,36 @@ pub struct Moment {
     pub text: String,
     /// The turn of the line, for Enter in the log.
     pub turn: Option<String>,
+    /// The kind of the line, for the tabs of the activity.
+    pub filter: Filter,
 }
 
 fn s<'a>(detail: &'a Value, key: &str) -> Option<&'a str> {
     detail.get(key).and_then(Value::as_str)
+}
+
+/// The principles that a use of the Judge names, such as `P-001`.
+fn principles_of(detail: &Value) -> Vec<String> {
+    detail
+        .get("principles")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// True for a line of the timeline that the activity shows: each line, except a use of the
+/// Judge that names no principle. The log keeps each line.
+pub fn in_feed(entry: &LogEntry) -> bool {
+    !(entry.source == "event"
+        && entry.kind == "judge-uses"
+        && principles_of(&entry.detail).is_empty())
 }
 
 /// The color of who did it.
@@ -39,6 +67,12 @@ pub fn who_hue(who: &str) -> Hue {
 
 /// The words of one line of the timeline.
 pub fn moment(entry: &LogEntry) -> Moment {
+    let mut m = words(entry);
+    m.filter = filter_of(Origin::Ledger(entry));
+    m
+}
+
+fn words(entry: &LogEntry) -> Moment {
     let d = &entry.detail;
     let make = |who: &str, word: &str, hue: Hue, what: &str, text: String| Moment {
         who: who.to_string(),
@@ -47,6 +81,7 @@ pub fn moment(entry: &LogEntry) -> Moment {
         what: what.to_string(),
         text,
         turn: None,
+        filter: Filter::All,
     };
     match entry.source.as_str() {
         "turn" => {
@@ -159,6 +194,7 @@ fn card(entry: &LogEntry, d: &Value) -> Moment {
             what: "asks".into(),
             text: question,
             turn: None,
+            filter: Filter::All,
         };
     }
     let answer = s(d, "answer").unwrap_or("").to_string();
@@ -205,6 +241,7 @@ fn card(entry: &LogEntry, d: &Value) -> Moment {
         what: entry.kind.clone(),
         text,
         turn: None,
+        filter: Filter::All,
     }
 }
 
@@ -241,6 +278,20 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
             "marked a question as needless".to_string(),
         ),
         "correct" => ("you", Hue::Primary, "corrected an answer".to_string()),
+        // A message of the person in its own words, on one line.
+        "told" => (
+            "you",
+            Hue::Primary,
+            format!(
+                "told {}: {}",
+                crate::pipeline::commands::told_to(d),
+                s(d, "text")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        ),
         "step" => (
             "step",
             Hue::Info,
@@ -270,11 +321,35 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
             Hue::Info,
             "the limit allows a turn again".to_string(),
         ),
-        "end-fact" => (
+        "end-fact" if d.get("held").and_then(Value::as_bool) == Some(true) => (
             "check",
             Hue::Ok,
-            "tested the end facts of the turn".to_string(),
+            "the end facts of the turn held".to_string(),
         ),
+        "end-fact" => {
+            let fact = s(d, "fact").unwrap_or("of the turn");
+            let text = match s(d, "found").filter(|f| !f.is_empty()) {
+                Some(found) => format!("the end fact {fact} did not hold: {found}"),
+                None => format!("the end fact {fact} did not hold"),
+            };
+            ("check", Hue::Bad, text)
+        }
+        "notice" => {
+            let issues = n("issues") as usize;
+            let what = match s(d, "why") {
+                Some(_) => crate::app::text::count(issues, "finding"),
+                None => crate::app::text::count(issues, "issue"),
+            };
+            (
+                "gate",
+                Hue::Warn,
+                format!(
+                    "the notice {} waits for you: {what} of {} that do not block",
+                    s(d, "notice").unwrap_or("-"),
+                    s(d, "doc").unwrap_or("the gate")
+                ),
+            )
+        }
         "documents" => (
             "docs",
             Hue::Dim,
@@ -296,6 +371,14 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
             Hue::Agent("judge".into()),
             "gave its answers".to_string(),
         ),
+        "judge-uses" => (
+            "judge",
+            Hue::Agent("judge".into()),
+            match principles_of(d).as_slice() {
+                [] => "the Judge used no principle".to_string(),
+                ids => format!("the Judge used {}", crate::app::text::join_and(ids)),
+            },
+        ),
         "questions-intake" => (
             "asks",
             Hue::Warn,
@@ -309,8 +392,10 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
             Hue::Primary,
             "the answers go back to the agent".to_string(),
         ),
+        // The word of a tool call `read` stays for the events of a turn: a read of Vision for
+        // a turn is a fetch.
         "requests-served" => (
-            "read",
+            "fetch",
             Hue::Info,
             format!(
                 "served {} for the turn",
@@ -318,7 +403,7 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
             ),
         ),
         "read" => (
-            "read",
+            "fetch",
             Hue::Info,
             format!("read {}", s(d, "verb").unwrap_or("a fact")),
         ),
@@ -339,11 +424,13 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
     };
     let what = match kind {
         "human" => "approve",
+        "notice" => "gate",
         "card-answered" => "answer",
         "card-needless" => "needless",
+        "told" => "tell",
         "flag-cleared" => "flag",
         "end-fact" => "check",
-        "judge-started" | "judge-applied" => "judge",
+        "judge-started" | "judge-applied" | "judge-uses" => "judge",
         "questions-intake" => "asks",
         "questions-resumed" => "resume",
         "requests-served" => "read",
@@ -357,5 +444,6 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
         what: what.to_string(),
         text,
         turn: None,
+        filter: Filter::All,
     }
 }

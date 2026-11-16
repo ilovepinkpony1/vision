@@ -2,30 +2,30 @@
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
-         ╭─ DEMO-12 · question · builder asks at the step build ────────────────────────────────────╮
-  IN PROG│                                                                                          │is open
- ╭───────│  Must the export keep the order of the columns?                                          │───────╮
- │ ▸ DEMO│                                                                                          │   38m │
- │       │  The Judge     proposes a Keep the order                                                 │       │
- │       │                D-0004 says that each export keeps the order of the screen.               │       │
- │   DEMO│  Its sources   D-0004                                                                    │2h 10m │
- │       │                                                                                          │       │
- ╰───────│  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │───────╯
-         │  Example       The table shows date, client, total. The file can keep that order or      │
-  READY T│                sort the columns by name.                                                 │n start
- ╭───────│                                                                                          │───────╮
- │   DEMO│  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │ To Do │
- │   DEMO│                       order                                                              │equest │
- ╰───────│    b  Sort by name    the file sorts the columns by their names                          │───────╯
-         │                                                                                          │
-         │  Recommended   a Keep the order: People compare the file with the table.                 │
-         │  Evidence      src/export.py:42                                                          │
-         │                                                                                          │
-         │  ⠇ save your answer to Q-0002                                                            │
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
+ │       ╭─ DEMO-12 · builder asks at the step build · your 1 answer ───────────────────────────────╮       │
+ │   DEMO│                                                                                          │2h 10m │
+ │       │  1 ✓ draft    review                                                                     │       │
+ ╰───────│                                                                                          │───────╯
+         │  This answer goes to builder when you send it. Nothing went to Vision yet.               │
+  READY T│                                                                                          │n start
+ ╭───────│▸ 1  Must the export keep the order of the columns?                                       │───────╮
+ │   DEMO│     a  Keep the order                                                                    │ To Do │
+ │   DEMO│                                                                                          │equest │
+ ╰───────│  ⠇ send your answer to Q-0002                                                            │───────╯
          │                                                                                          │
          │  esc close this card; the action goes on                                                 │
          │                                                                                          │
-  THIS WE╰──────────────────────────────────────────────────────────────────────────────────────────╯
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
  ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit

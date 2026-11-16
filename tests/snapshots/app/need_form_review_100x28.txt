@@ -1,0 +1,28 @@
+ ◆ VISION                                         engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?    n needs
+
+  IN╭─ DEMO-12 · builder asks at the step build · your 3 answers ──────────────────────────────╮en
+ ╭──│                                                                                          │──╮
+ │ ▸│  1 · open   2 · open   3 ◇ proposed    review                                            │m │
+ │  │                                                                                          │  │
+ │  │  These answers go to builder when you send them. Nothing went to Vision yet.             │  │
+ │  │                                                                                          │m │
+ │  │▸ 1  Must the export keep the order of the columns?                                       │  │
+ ╰──│     no draft yet · press 1 to answer it                                                  │──╯
+    │  2  Must the file have a header row?                                                     │
+  RE│     no draft yet · press 2 to answer it                                                  │rt
+ ╭──│  3  Must the total row stay at the end of the file?                                      │──╮
+ │  │     no draft yet · press 3 to answer it                                                  │o │
+ │  │                                                                                          │t │
+ ╰──│  3 questions have no draft yet: 1, 2, 3. The send needs a draft for each question.       │──╯
+    │  s send the 3 answers    enter open the question    ↑↓ choose    ←→ the pages            │
+    │  esc later                                                                               │
+    │                                                                                          │
+    ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   q quit
+

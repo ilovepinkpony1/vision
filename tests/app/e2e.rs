@@ -236,13 +236,19 @@ fn the_live_view_follows_a_running_turn_and_tells_it_something() {
     assert_eq!(data.view.step.as_deref(), Some("refine"));
     assert!(data.team.iter().any(|m| m.agent == "scout"));
 
-    // The feed gets the events of the stream file of the turn.
+    // The feed gets the words of the stream file of the turn. Its tool call gets no line, and
+    // only counts in the numbers of the turn.
     assert!(
         rt.run_until(LIMIT, |app| feed_has(app, "I read the ticket now.")
-            && feed_has(app, "README.md")),
+            && app.live.as_ref().is_some_and(|l| l
+                .feed
+                .stats
+                .values()
+                .any(|s| s.tools >= 1))),
         "the feed never got the stream: {:?}",
         rt.app.live.as_ref().map(|l| l.feed.items().len())
     );
+    assert!(!feed_has(&rt.app, "README.md"), "a tool call has no line");
 
     // `t` sends a text into the running turn.
     rt.handle(Msg::Key(Key::Char('t')));

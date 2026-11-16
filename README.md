@@ -108,13 +108,14 @@ The live view shows the path of the ticket, what happens now, and the work of th
 - `o` opens the session of the last turn in this terminal. The ticket pauses. While a turn runs, `o` on its card stops the turn first. Press Enter afterwards to continue the ticket.
 - `x` stops the ticket. Enter starts a stopped ticket again.
 - `r` retries a ticket that waits for you.
-- `l` shows the log, `p` shows the plan, and `d` shows the commits that the forge does not have yet.
+- `l` shows the log, `p` shows the plan, and `d` shows the commits that the forge does not have yet. In the log, Enter on a turn shows its tool calls.
+- The activity shows only the words of the agents and of Vision, with no line for a tool call. `f` and `F` switch its tab (All, Agents, Questions, Steps, Writes, Problems, You), and the digits 1 to 7 pick one.
 - The arrows scroll the activity, and `G` goes back to its end.
 - Esc goes back to Home.
 
 Each thing that waits for you has its card:
 
-- A question takes the letter of a choice, your own words with `e`, or `k` for a question that was needless. Then type a reason, or press Tab to skip it.
+- The questions of one turn come as one form. A question takes the letter of a choice, your own words with `e`, or `k` for a question that was needless. Then type a reason, or press Tab to skip it. Each answer is only a draft: the arrows and the digits move between the questions, so you can change any draft. The review page lists your drafts, and `s` sends them all at once.
 - A plan takes `a` to approve it.
 - A write that waits takes `y` to approve it.
 - The first write of a verb in the mode `shadow` takes `y` or `a`. `y` sends it, and Vision asks you each time for that verb. `a` sends it, and Vision never asks again for that verb.

@@ -24,7 +24,7 @@ use super::tail::{self, Follow};
 use super::terminal::InputControl;
 use super::view::theme::ColorMode;
 use super::worker::{self, WorkerConfig};
-use super::{load, load_needs, load_screens, load_ticket, picture, update, view};
+use super::{drafts, load, load_needs, load_screens, load_ticket, picture, update, view};
 use crate::paths::Paths;
 
 /// The wait for a message while a part of the screen moves.
@@ -299,6 +299,18 @@ impl Runtime {
                         move || Msg::Picture(Box::new(picture::read(&home))),
                         |_| Msg::Picture(Box::new(None)),
                     );
+                }
+                // A drafts file is small: the write runs at once, so that the next send or the
+                // next load reads what the person typed.
+                Effect::SaveDrafts { ticket, drafts } => {
+                    if let Err(e) = drafts::save(&self.paths, &ticket, &drafts) {
+                        let _ = self.tx.send(Msg::DraftsNotKept(format!("{e:#}")));
+                    }
+                }
+                Effect::DropDrafts { ticket, ids } => {
+                    if let Err(e) = drafts::drop(&self.paths, &ticket, &ids) {
+                        let _ = self.tx.send(Msg::DraftsNotKept(format!("{e:#}")));
+                    }
                 }
                 Effect::StartWorker => {
                     if self.jobs.is_none() {

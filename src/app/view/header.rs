@@ -107,15 +107,8 @@ fn limit(c: &mut Canvas, r: i32, label: &str, view: &LimitView) -> i32 {
 /// narrow, the keys before the last one go away from the end, so that `q quit` stays.
 pub fn keys(c: &mut Canvas, list: &[(&str, &str)]) {
     let y = c.h - 2;
-    let wide = |list: &[(&str, &str)]| -> i32 {
-        list.iter()
-            .map(|(k, l)| width(k) as i32 + 1 + width(l) as i32 + 3)
-            .sum::<i32>()
-            - 3
-            + 1
-    };
     let mut list = list.to_vec();
-    while list.len() > 1 && wide(&list) > c.w - 1 {
+    while list.len() > 1 && keys_width(&list) > c.w - 1 {
         list.remove(list.len() - 2);
     }
     let mut x = 1;
@@ -123,6 +116,16 @@ pub fn keys(c: &mut Canvas, list: &[(&str, &str)]) {
         x = c.put(x, y, key, ink(T.fg).bold());
         x = c.put(x + 1, y, label, ink(T.dim)) + 3;
     }
+}
+
+/// The cells that [`keys`] needs for a list, from the first column of the row. The row fits
+/// when it is at most the width of the window less one.
+pub fn keys_width(list: &[(&str, &str)]) -> i32 {
+    list.iter()
+        .map(|(k, l)| width(k) as i32 + 1 + width(l) as i32 + 3)
+        .sum::<i32>()
+        - 3
+        + 1
 }
 
 /// The strip of dots of the path: the passed steps, the current one, and the coming ones. Gives

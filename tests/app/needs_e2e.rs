@@ -2,8 +2,10 @@
 //! fake `claude`, through the real loaders and the worker with the built binary. The engine of
 //! the app is paused, so only the ticks of the test and the passes of a chain move a ticket.
 //!
-//! - A question: its card answers it with a reason, the ledger keeps the reason, and the ticket
-//!   goes on.
+//! - A question: its form keeps a draft with a reason, the send records it, the ledger keeps
+//!   the reason, and the ticket goes on.
+//! - A form of three questions: two drafts, a restart of the app that keeps them, a change of
+//!   the first draft, the review page, the third answer, and one send of the three answers.
 //! - The plan: the card approves the hash that it showed; a plan that changed on disk is not
 //!   approved.
 //! - The first write of a verb in the mode shadow: `y` and `a`, with the same rows in the
@@ -105,6 +107,13 @@ fn shown(app: &App) -> NeedItem {
     match &app.card {
         Some(Card::Need(card)) => card.item().cloned().expect("an item"),
         other => panic!("no card of the needs: {other:?}"),
+    }
+}
+
+/// Types a text, one key at a time.
+fn type_keys(rt: &mut Runtime, text: &str) {
+    for c in text.chars() {
+        rt.handle(Msg::Key(Key::Char(c)));
     }
 }
 
@@ -314,12 +323,14 @@ fn question_world() -> World {
 }
 
 #[test]
-fn a_question_answered_through_its_card_reaches_the_ledger_and_the_ticket_goes_on() {
+fn a_question_answered_through_its_form_reaches_the_ledger_and_the_ticket_goes_on() {
     let world = question_world();
     let mut rt = start(&world);
-    let NeedItem::Question(view) = open_need(&mut rt) else {
-        panic!("not a question: {:?}", shown(&rt.app));
+    let NeedItem::Questions(set) = open_need(&mut rt) else {
+        panic!("not a form: {:?}", shown(&rt.app));
     };
+    assert_eq!(set.cards.len(), 1);
+    let view = &set.cards[0];
     assert_eq!(view.id, "Q-0001");
     assert_eq!(view.question, "Must the README name subtract?");
     assert_eq!(
@@ -327,16 +338,15 @@ fn a_question_answered_through_its_card_reaches_the_ledger_and_the_ticket_goes_o
         Some("No decision covers the README.")
     );
     rt.handle(Msg::Key(Key::Char('a')));
-    for c in "People read the README".chars() {
-        rt.handle(Msg::Key(Key::Char(c)));
-    }
+    type_keys(&mut rt, "People read the README");
     rt.handle(Msg::Key(Key::Enter));
+    // A set of one question: the draft, then the review page, then the send.
+    rt.handle(Msg::Key(Key::Char('s')));
     wait_chain(&mut rt);
     assert_eq!(rt.app.chain, None, "{:?}", rt.app.notice);
-    assert!(
-        notice(&rt.app).starts_with("Saved your answer to Q-0001 with its reason."),
-        "{}",
-        notice(&rt.app)
+    assert_eq!(
+        notice(&rt.app),
+        "Sent your answer to Q-0001. scout gets it at the next pass."
     );
     assert_eq!(rt.app.card, None);
 
@@ -364,6 +374,210 @@ fn a_question_answered_through_its_card_reaches_the_ledger_and_the_ticket_goes_o
     );
 
     // The ticket goes on: the turn gets the answer, and the plan step comes.
+    world.tick_to("plan");
+    assert_eq!(world.turns_of("refine"), 2);
+    world.settle();
+}
+
+// ----- A form of three questions ---------------------------------------------------------
+
+/// A world where scout asks three questions, and the Judge sends each one to the person.
+fn three_questions_world() -> World {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.scenario(
+        "scout",
+        "refine",
+        json!([
+            ends_with(
+                json!({"kind": "questions", "summary": "Three questions.", "questions": [
+                    card("Must the README name subtract?"),
+                    card("Must subtract take floats?"),
+                    card("Must the help text show an example?")
+                ]})
+            ),
+            ends_with(result(
+                "Refined.",
+                &[
+                    ("refine.md", "Research."),
+                    ("description.md", "Add subtract(a, b).")
+                ]
+            ))
+        ]),
+    );
+    let ask = |card: &str| {
+        json!({"card": card, "outcome": "ask", "basis": "none", "sources": [], "sure": false,
+               "choice": null, "topics": [], "reason": "No decision covers it."})
+    };
+    world.scenario(
+        "judge",
+        "",
+        json!([[{"do": "init"}, {"do": "result", "structured_output": {"answers": [
+            ask("Q-0001"), ask("Q-0002"), ask("Q-0003")
+        ]}, "cost": 0.05}]]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the three cards for the person", LIMIT, |w| {
+        let status = w.run(&["status", "--json"]).json();
+        status["needs"]
+            .as_array()
+            .is_some_and(|n| n.iter().filter(|n| n["kind"] == "card").count() == 3)
+    });
+    world
+}
+
+/// The open card of the needs.
+fn needs_card(app: &App) -> &vision::app::needs::NeedsCard {
+    match &app.card {
+        Some(Card::Need(card)) => card,
+        other => panic!("no card of the needs: {other:?}"),
+    }
+}
+
+#[test]
+fn a_form_of_three_questions_keeps_its_drafts_and_sends_each_answer_with_its_reason() {
+    use vision::app::needs::{Draft, Input, Reply};
+    let world = three_questions_world();
+    let drafts_file = world
+        .vision
+        .join("tickets")
+        .join(KEY)
+        .join("answer-drafts.json");
+    let mut rt = start(&world);
+    let NeedItem::Questions(set) = open_need(&mut rt) else {
+        panic!("not a form: {:?}", shown(&rt.app));
+    };
+    let ids: Vec<&str> = set.cards.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["Q-0001", "Q-0002", "Q-0003"]);
+
+    // Answer two questions: each draft goes to the drafts file, and nothing to the ledger.
+    rt.handle(Msg::Key(Key::Char('a')));
+    type_keys(&mut rt, "People read the README");
+    rt.handle(Msg::Key(Key::Enter));
+    assert_eq!(needs_card(&rt.app).page, 1);
+    rt.handle(Msg::Key(Key::Char('b')));
+    type_keys(&mut rt, "Integers are enough");
+    rt.handle(Msg::Key(Key::Enter));
+    assert_eq!(needs_card(&rt.app).page, 2);
+    let text = std::fs::read_to_string(&drafts_file).unwrap();
+    assert!(text.contains("Q-0001") && text.contains("Q-0002"), "{text}");
+    assert!(!text.contains("Q-0003"), "{text}");
+    assert!(rows(&world).human.is_empty(), "nothing goes to Vision yet");
+
+    // Close the form and leave the app: a new app shows the same drafts.
+    rt.handle(Msg::Key(Key::Esc));
+    drop(rt);
+    let mut rt = start(&world);
+    let NeedItem::Questions(_) = open_need(&mut rt) else {
+        panic!("not a form: {:?}", shown(&rt.app));
+    };
+    let card = needs_card(&rt.app);
+    assert_eq!(
+        card.page, 2,
+        "the form opens on the first question with no draft"
+    );
+    assert_eq!(
+        card.drafts.get("Q-0001"),
+        Some(&Draft::Answer {
+            reply: Reply::Choice(0),
+            why: "People read the README".into()
+        })
+    );
+    assert_eq!(
+        card.drafts.get("Q-0002"),
+        Some(&Draft::Answer {
+            reply: Reply::Choice(1),
+            why: "Integers are enough".into()
+        })
+    );
+
+    // Go back and change the first: the line of the reason opens with the old text.
+    rt.handle(Msg::Key(Key::Left));
+    rt.handle(Msg::Key(Key::Left));
+    assert_eq!(needs_card(&rt.app).page, 0);
+    rt.handle(Msg::Key(Key::Char('b')));
+    match &needs_card(&rt.app).input {
+        Input::Why { line, .. } => assert_eq!(line.text(), "People read the README"),
+        other => panic!("not the line of the reason: {other:?}"),
+    }
+    for _ in "People read the README".chars() {
+        rt.handle(Msg::Key(Key::Backspace));
+    }
+    type_keys(&mut rt, "The README stays short");
+    rt.handle(Msg::Key(Key::Enter));
+    assert_eq!(
+        needs_card(&rt.app).page,
+        2,
+        "the next question with no draft"
+    );
+
+    // The review marks the third question; Enter on its row opens it.
+    rt.handle(Msg::Key(Key::Char('r')));
+    let card = needs_card(&rt.app);
+    assert!(card.reviewing());
+    assert_eq!(card.row, 2);
+    rt.handle(Msg::Key(Key::Enter));
+    assert_eq!(needs_card(&rt.app).page, 2);
+    rt.handle(Msg::Key(Key::Char('a')));
+    type_keys(&mut rt, "Examples help");
+    rt.handle(Msg::Key(Key::Enter));
+    assert!(needs_card(&rt.app).reviewing());
+
+    // The send records the three answers in one action.
+    rt.handle(Msg::Key(Key::Char('s')));
+    wait_chain(&mut rt);
+    assert_eq!(rt.app.chain, None, "{:?}", rt.app.notice);
+    assert_eq!(
+        notice(&rt.app),
+        "Sent your 3 answers. scout gets them at the next pass."
+    );
+    assert_eq!(rt.app.card, None);
+    assert!(
+        !drafts_file.exists(),
+        "the send removes the drafts of its set"
+    );
+    let human: Vec<(String, String, Option<String>, Option<String>)> = rows(&world)
+        .human
+        .into_iter()
+        .map(|h| (h.1, h.2, h.3, h.4))
+        .collect();
+    assert_eq!(
+        human,
+        [
+            (
+                "answer".into(),
+                "Q-0001".into(),
+                Some("No".into()),
+                Some("The README stays short".into())
+            ),
+            (
+                "answer".into(),
+                "Q-0002".into(),
+                Some("No".into()),
+                Some("Integers are enough".into())
+            ),
+            (
+                "answer".into(),
+                "Q-0003".into(),
+                Some("Yes".into()),
+                Some("Examples help".into())
+            ),
+        ]
+    );
+    let answered = rows(&world)
+        .events
+        .iter()
+        .filter(|(actor, kind)| actor == "user" && kind == "card-answered")
+        .count();
+    assert_eq!(answered, 3);
+    let ledger = world.ctx().ledger().unwrap();
+    for id in ["Q-0001", "Q-0002", "Q-0003"] {
+        let row = ledger.question(id).unwrap().unwrap();
+        assert_eq!(row.state, "answered", "{id}");
+        assert!(row.decision.is_some(), "{id}");
+    }
+
+    // The ticket goes on: the turn gets the answers, and the plan step comes.
     world.tick_to("plan");
     assert_eq!(world.turns_of("refine"), 2);
     world.settle();
