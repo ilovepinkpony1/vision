@@ -1136,16 +1136,20 @@ fn select_one(
                 return fall_back(ctx, ledger, adapter, ticket, &step, &why, false).and_then(one)
             }
             Next::Request { list, index } => {
-                let entries = match list {
-                    List::After => &step.after,
-                    List::Start => &step.start,
+                let entries: &[Entry] = match (list, &step.kind) {
+                    (List::After, _) => &step.after,
+                    (List::Start, _) => &step.start,
+                    (List::Run, StepKind::Act(act)) => &act.run,
+                    (List::Run, _) => &[],
                 };
                 let Some(entry) = entries.get(index) else {
                     return Ok(Vec::new());
                 };
+                // An operation of `after` names the turn whose end facts held. A `start` verb
+                // and a verb of an act step follow a rule of the step, and no turn.
                 let turn = match list {
                     List::After => last_turn_id(ledger, ticket, &step)?,
-                    List::Start => None,
+                    List::Start | List::Run => None,
                 };
                 return request_action(ctx, ticket, entry, turn).map(|a| vec![a]);
             }
@@ -1609,6 +1613,11 @@ pub(crate) fn gather(
                 .and_then(|t| time::parse_rfc3339(t).ok())
                 .map(|since| time::seconds_between(since, now)),
             until: opens_later(&visit, now).map(time::local_hm),
+        },
+        // The verbs of `run` at the commit of now: the same lookup as the `after` verbs of a
+        // turn step, with no turn.
+        StepKind::Act(act) => KindFacts::Act {
+            run: op_facts(ctx, ledger, ticket, &act.run, None)?,
         },
         StepKind::End => KindFacts::End {
             finished: ticket.counts.finished.is_some(),

@@ -91,7 +91,9 @@ pub(super) fn flag(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
         foot.keys(&[("enter", "start it again"), ("esc", "later")]);
     } else {
         let agent = item.agent.as_deref().unwrap_or("its agent");
-        let retry = if item.held {
+        let retry = if item.act {
+            format!("r runs the writes of the step {step} again. The step runs no turn, so no agent starts.")
+        } else if item.held {
             format!("r runs the writes of the step {step} again. The turn of the step already gave a result that held, so no new turn starts.")
         } else {
             format!("r starts the step {step} again with a new turn of {agent}. Its message says why the step stopped.")

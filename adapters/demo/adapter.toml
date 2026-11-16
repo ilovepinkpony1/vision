@@ -15,17 +15,25 @@
 #
 # The path of a ticket:
 #
-#   refine -> plan -> plan-ready -> build -> review -> ci
+#   refine -> plan -> plan-ready -> build -> review -> open-pr -> ci
+#   build:     the commits stay in the clone. Nothing leaves the machine before the review.
+#   open-pr:   an act step, with no turn: git.push pushes the branch, then pr.open opens the
+#              pull request with pr.md
 #   ci:        green -> ready, red -> fix-ci -> ci
 #   ready:     the team marks the pull request ready -> comments
 #   comments -> ci-review: a commit of the Shepherd goes through CI again before the merge;
 #              green -> ready-to-merge, red -> fix-ci
 #   ready-to-merge: merged -> done
 #
+# The steps after open-pr push their own commits: fix-ci and comments name git.push in after.
+#
 # Each loop goes through a turn step with a cap: fix-ci (ci_fix) and comments (comments). Each
 # wait step names the values that mean "not yet" in `wait`, and its `limit` in seconds: any
 # other value, or a longer wait, needs the person. At a commit where CI already ran, ci.run of
 # ci-review is the operation of that commit, so it runs no second time.
+#
+# Each write verb is in the mode auto, so no write waits for the person. `vision demote VERB`
+# moves a verb down the ladder, such as to the mode ask.
 
 name = "demo"
 branch = "vision/{key}"
@@ -63,7 +71,6 @@ agent = "builder"
 turn = "worker"
 reads = ["approved-plan.md", "refine.md", "answers.md"]
 expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
-after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "review"
 
 [[step]]
@@ -74,9 +81,14 @@ turn = "worker"
 before = ["job:second-review"]
 reads = ["approved-plan.md", "second-review.md"]
 expects = ["clean", "doc:review.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
-after = ["git.push"]
 findings = "review"
 cap = "review_rounds"
+next = "open-pr"
+
+[[step]]
+id = "open-pr"
+kind = "act"
+run = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "ci"
 
 [[step]]
@@ -161,7 +173,7 @@ leaves = true
 mode = "auto"
 
 [verbs."review.reply"]
-mode = "ask"
+mode = "auto"
 leaves = true
 
 [verbs."tracker.issue"]

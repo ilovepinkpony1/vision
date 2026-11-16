@@ -4,10 +4,14 @@
 //! `vision take DEMO-12` and then `vision tick` in a loop carry the ticket from the tracker to a
 //! merged pull request, through each step of the `adapter.toml` of the repo, whose calls the
 //! built-in adapter of the binary answers (`scripts = "builtin:jira-github"`). The test plays
-//! the person (it approves the plan and the operations in the mode ask) and the team (it marks
-//! the pull request ready, reviews, comments, approves, and merges with the control calls of the
-//! world). The toy project and its tests are shell scripts, so no part of the path needs Python
-//! (the fake `claude` is a separate program).
+//! the person (it approves the plan; each write verb is in the mode auto, so no write waits for
+//! an approval) and the team (it marks the pull request ready, reviews, comments, approves, and
+//! merges with the control calls of the world). The toy project and its tests are shell
+//! scripts, so no part of the path needs Python (the fake `claude` is a separate program).
+//!
+//! The order: the build, the review, and the local QA with its fix run first, and nothing
+//! leaves the machine. Only then the act step open-pr pushes the branch and opens the pull
+//! request, and CI runs.
 //!
 //! Nothing here reaches the network: each address of `[adapter]` points at the fake server, and
 //! git pushes to a local bare repo.
@@ -369,25 +373,61 @@ http_timeout = 20
         eprintln!("the step {step} after {:?}", started.elapsed());
     }
 
-    /// Ticks until an operation of `verb` waits for the person, then approves it with the
-    /// exact command of `vision needs`. Gives the commit of the approval.
-    fn approve(&self, verb: &str) -> String {
-        self.tick_until(&format!("the approval of {verb}"), |p| {
-            p.needs()
-                .iter()
-                .any(|n| n["kind"] == "operation" && n["id"].as_str().unwrap().starts_with(verb))
-        });
-        let need = self
-            .needs()
-            .into_iter()
-            .find(|n| n["kind"] == "operation")
+    /// The commit of the branch of the ticket on the remote, or `None` before the first push.
+    fn remote_branch(&self) -> Option<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.remote)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{BRANCH}"),
+            ])
+            .output()
             .unwrap();
-        let id = need["id"].as_str().unwrap().to_string();
-        let (named, commit) = id.split_once(' ').unwrap();
-        assert_eq!(named, verb, "{need}");
-        let run = self.run(&["approve", KEY, verb, commit]);
-        assert_eq!(run.code, 0, "{run:#?}");
-        commit.to_string()
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// The operations of one verb of the ticket, as (state, commit), oldest first.
+    fn operations(&self, verb: &str) -> Vec<(String, String)> {
+        self.ledger()
+            .operations_of(KEY, Some(verb))
+            .unwrap()
+            .into_iter()
+            .map(|o| {
+                let call: Value = serde_json::from_str(&o.args).unwrap();
+                (o.state, call["head"].as_str().unwrap_or("").to_string())
+            })
+            .collect()
+    }
+
+    /// Asserts that nothing left the machine yet: no push, no pull request, and no operation
+    /// of git.push or pr.open.
+    fn assert_nothing_left(&self, when: &str) {
+        assert_eq!(
+            self.remote_branch(),
+            None,
+            "{when}: the branch is on the remote"
+        );
+        assert_eq!(
+            self.server.state()["pulls"],
+            json!({}),
+            "{when}: a pull request is open"
+        );
+        for verb in ["git.push", "pr.open"] {
+            assert!(
+                self.operations(verb).is_empty(),
+                "{when}: an operation of {verb}"
+            );
+        }
+        assert!(
+            self.needs().iter().all(|n| n["kind"] != "operation"),
+            "{when}: a write waits for an approval"
+        );
     }
 
     fn scenario(&self, agent: &str, step: &str, turns: Value) {
@@ -642,30 +682,19 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     let hash = plan_hash_of(&plan.stdout);
     p.run(&["approve-plan", KEY, &hash]).expect_code(0);
 
-    // build: tracker.move waits for the person, then the build, the proof, the push, and the
-    // draft pull request.
-    let moved_at = p.approve("tracker.move");
-    assert_eq!(
-        moved_at, base,
-        "the move waits at the commit of its first request"
-    );
-    assert_eq!(p.server.state()["issues"][KEY]["status"], "In Progress");
+    // build: tracker.move runs in the mode auto before the turn, then the build and the
+    // proof. The commit stays in the clone.
     p.tick_to("review");
+    assert_eq!(p.server.state()["issues"][KEY]["status"], "In Progress");
+    assert_eq!(
+        p.operations("tracker.move"),
+        [("confirmed".to_string(), base.clone())],
+        "the move ran with no approval, before the build"
+    );
     let built = p.head();
     assert_ne!(built, base);
-    assert_eq!(
-        git(&p.remote, &["rev-parse", &format!("refs/heads/{BRANCH}")]),
-        built,
-        "the branch is on the remote"
-    );
-    let pull = p.server.state()["pulls"]["7"].clone();
-    assert_eq!(pull["title"], "Add subtract to the calculator");
-    assert_eq!(pull["draft"], true);
-    assert_eq!(
-        pull["base"]["ref"], "main",
-        "the base branch comes from base_ref"
-    );
-    assert_eq!(p.row().unwrap().pr, Some(7));
+    p.assert_nothing_left("after the build");
+    assert_eq!(p.row().unwrap().pr, None);
     assert!(
         p.doc("proof.txt").unwrap().contains("test_subtract.sh"),
         "the proof ran the new test"
@@ -685,7 +714,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     );
 
     // review: no second reviewer is set, so the review turn gets null for its document.
-    p.tick_to("ci");
+    p.tick_to("qa");
+    p.assert_nothing_left("after the review");
     assert!(p.doc("second-review.md").is_none());
     let review_facts = p.facts_of_step("review");
     assert_eq!(review_facts["documents"]["second-review.md"], Value::Null);
@@ -712,6 +742,71 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .unwrap()
         .contains("args: run"));
 
+    // qa: one bug on the local app. Its fix goes through the review again, then QA with no
+    // bug. The fix stays in the clone too.
+    p.tick_to("fix-qa");
+    assert!(
+        p.doc("app-local.json").unwrap().contains("/health"),
+        "app-start ran before QA"
+    );
+    p.tick_to("review");
+    let qa_fixed = p.head();
+    assert_ne!(qa_fixed, built);
+    p.assert_nothing_left("after the fix of QA");
+    p.tick_to("qa");
+    p.assert_nothing_left("before the second QA");
+
+    // open-pr: the second QA holds with no bug, and only now the push and the pull request.
+    p.tick_to("open-pr");
+    p.assert_nothing_left("at the entry of open-pr");
+    let qa_turns: Vec<Option<String>> = p
+        .ledger()
+        .turns_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.step.as_deref() == Some("qa"))
+        .map(|t| t.end_fact)
+        .collect();
+    assert_eq!(
+        qa_turns,
+        [Some("held".to_string()), Some("held".to_string())]
+    );
+    p.tick_to("ci");
+    assert_eq!(
+        p.operations("git.push"),
+        [("confirmed".to_string(), qa_fixed.clone())]
+    );
+    assert_eq!(
+        p.operations("pr.open"),
+        [("confirmed".to_string(), qa_fixed.clone())]
+    );
+    let ops: Vec<String> = p
+        .ledger()
+        .operations_of(KEY, None)
+        .unwrap()
+        .into_iter()
+        .map(|o| o.verb)
+        .filter(|v| v == "git.push" || v == "pr.open")
+        .collect();
+    assert_eq!(
+        ops,
+        ["git.push", "pr.open"],
+        "the push, then the pull request"
+    );
+    assert_eq!(
+        p.remote_branch().as_deref(),
+        Some(qa_fixed.as_str()),
+        "the reviewed and tested head is on the remote"
+    );
+    let pull = p.server.state()["pulls"]["7"].clone();
+    assert_eq!(pull["title"], "Add subtract to the calculator");
+    assert_eq!(pull["draft"], true);
+    assert_eq!(
+        pull["base"]["ref"], "main",
+        "the base branch comes from base_ref"
+    );
+    assert_eq!(p.row().unwrap().pr, Some(7));
+
     // ci: the first run is red; the failed jobs run once more, still red; fix-ci fixes it.
     p.tick_to("fix-ci");
     // The job ci-log runs before the first turn of the step.
@@ -729,9 +824,9 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         "ci-rerun ran the failed jobs again"
     );
     assert_eq!(runs[0]["conclusion"], "failure");
-    p.tick_to("qa");
+    p.tick_to("ready");
     let fixed = p.head();
-    assert_ne!(fixed, built);
+    assert_ne!(fixed, qa_fixed);
     let checks: Vec<(String, String)> = p
         .ledger()
         .checks_of(KEY, None)
@@ -743,32 +838,33 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     assert_eq!(
         checks,
         [
-            (built.clone(), "red".to_string()),
+            (qa_fixed.clone(), "red".to_string()),
             (fixed.clone(), "green".to_string())
         ]
     );
-
-    // qa: one bug and its fix, which goes through CI, then QA with no bug.
-    p.tick_to("fix-qa");
-    assert!(
-        p.doc("app-local.json").unwrap().contains("/health"),
-        "app-start ran before QA"
+    assert_eq!(
+        p.remote_branch().as_deref(),
+        Some(fixed.as_str()),
+        "fix-ci pushes its own commit"
     );
-    p.tick_to("ci");
-    p.tick_to("qa");
-    let qa_fixed = p.head();
-    assert_ne!(qa_fixed, fixed);
-    p.tick_until("the step ready", |p| p.step().as_deref() == Some("ready"));
     let findings = p.ledger().findings_of(KEY).unwrap();
     let rows: Vec<(&str, &str)> = findings
         .iter()
         .map(|f| (f.source.as_str(), f.verdict.as_str()))
         .collect();
-    assert_eq!(rows, [("review", "rejected"), ("qa", "kept")]);
+    assert_eq!(
+        rows,
+        [
+            ("review", "rejected"),
+            ("qa", "kept"),
+            ("review", "rejected")
+        ]
+    );
 
-    // ready: tracker.move waits for the person; the person marks the pull request ready.
-    p.approve("tracker.move");
-    assert_eq!(p.server.state()["issues"][KEY]["status"], "In Review");
+    // ready: tracker.move runs in the mode auto; the person marks the pull request ready.
+    p.tick_until("the move to In Review", |p| {
+        p.server.state()["issues"][KEY]["status"] == "In Review"
+    });
     p.tick();
     assert_eq!(p.step().as_deref(), Some("ready"), "the draft waits");
     p.server.team("ready", json!({"number": 7}));
@@ -807,11 +903,16 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         [(501, "inline"), (601, "review"), (701, "conversation")]
     );
 
-    // The Shepherd round: a fix, then the replies and the new review request after approve.
-    let reply_at = p.approve("review.reply");
+    // The Shepherd round: a fix, then its push, the replies, and the new review request, each
+    // in the mode auto.
+    p.tick_to("ci-review");
     let shepherd = p.head();
-    assert_eq!(reply_at, shepherd);
-    assert_ne!(shepherd, qa_fixed);
+    assert_ne!(shepherd, fixed);
+    assert_eq!(
+        p.operations("review.reply"),
+        [("confirmed".to_string(), shepherd.clone())]
+    );
+    assert_eq!(p.remote_branch().as_deref(), Some(shepherd.as_str()));
     let state = p.server.state();
     let inline: Vec<&Value> = state["comments"]["7"]
         .as_array()
@@ -835,7 +936,6 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             "> Can the calculator also divide?\n\nDivision belongs to a different ticket.\n\n<!-- vision-reply conversation 701 -->"
         ]
     );
-    p.approve("review.rerequest");
     assert_eq!(
         p.server.state()["pulls"]["7"]["requested_reviewers"],
         json!([{"login": "lead"}])
@@ -855,9 +955,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     );
 
     // A new CI run of the commit of the comments, then the approval and the merge.
-    p.tick_to("ci-review");
     p.tick_to("in-review");
-    assert_eq!(p.server.state()["runs"].as_array().unwrap().len(), 4);
+    assert_eq!(p.server.state()["runs"].as_array().unwrap().len(), 3);
     p.tick();
     assert_eq!(
         p.step().as_deref(),
@@ -919,14 +1018,15 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             "plan-ready",
             "build",
             "review",
+            "qa",
+            "fix-qa",
+            "review",
+            "qa",
+            "open-pr",
             "ci",
             "ci-rerun",
             "fix-ci",
             "ci",
-            "qa",
-            "fix-qa",
-            "ci",
-            "qa",
             "ready",
             "in-review",
             "comments",
@@ -949,8 +1049,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         by_verb,
         BTreeMap::from([
             ("ci.rerun", 1),
-            ("ci.run", 4),
-            ("git.push", 4),
+            ("ci.run", 3),
+            ("git.push", 3),
             ("pr.open", 1),
             ("review.reply", 1),
             ("review.rerequest", 1),
@@ -970,7 +1070,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             ),
             (
                 "POST /repos/acme/widgets/actions/workflows/ci.yml/dispatches".to_string(),
-                4
+                3
             ),
             ("POST /repos/acme/widgets/issues/7/comments".to_string(), 2),
             ("POST /repos/acme/widgets/pulls".to_string(), 1),
@@ -997,7 +1097,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .iter()
         .map(|r| r["head_sha"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(dispatched.len(), 4, "one run for each commit");
+    assert_eq!(dispatched.len(), 3, "one run for each commit");
     let requests = p.server.requests();
     for r in &requests {
         let path = r["path"].as_str().unwrap();
@@ -1075,8 +1175,8 @@ fn shadow_adapter() -> String {
     let steps = doc["step"].as_array_of_tables_mut().unwrap();
     steps.retain(|step| !matches!(step["id"].as_str(), Some("qa" | "fix-qa")));
     for step in steps.iter_mut() {
-        if matches!(step["id"].as_str(), Some("ci" | "ci-rerun")) {
-            step["on"]["green"] = toml_edit::value("ready");
+        if step["id"].as_str() == Some("review") {
+            step["next"] = toml_edit::value("open-pr");
         }
     }
     let verbs = doc["verbs"].as_table_mut().unwrap();
@@ -1112,7 +1212,7 @@ fn a_private_adapter_with_the_built_in_scripts_keeps_each_write_in_shadow() {
     let text = check.to_string();
     assert!(
         text.contains(&p.vision.join("adapters/jira-github").display().to_string())
-            && text.contains("14 steps")
+            && text.contains("15 steps")
             && text.contains("with the built-in scripts builtin:jira-github"),
         "{text}"
     );

@@ -9,6 +9,7 @@ use serde::Serialize;
 use super::decide::OpFact;
 use super::machine::{op_facts, visit_turns, Ticket};
 use super::state::{clear_command, NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT};
+use crate::adapter::StepKind;
 use crate::ctx::Ctx;
 use crate::executor::{self, short, Outcome};
 use crate::ledger::notices::NoticeRow;
@@ -34,7 +35,7 @@ pub struct TicketView {
     /// taken before the ledger kept titles.
     pub title: Option<String>,
     pub step: Option<String>,
-    /// The kind of the step: turn, job, human, wait, ask, check, or end.
+    /// The kind of the step: turn, job, human, wait, ask, check, act, or end.
     pub kind: Option<String>,
     /// The kind of the ticket, a kind of `[kinds]` of the adapter, such as `bug`.
     pub ticket_kind: Option<String>,
@@ -365,6 +366,11 @@ fn now_line(
             return Ok(text);
         }
     }
+    if visit.kind == "act" && !judging {
+        if let Some(text) = act_text(ctx, ledger, ticket, &visit) {
+            return Ok(text);
+        }
+    }
     if !needs.is_empty() {
         let list: Vec<String> = needs.iter().map(|(k, n)| format!("{n} {k}")).collect();
         return Ok(format!(
@@ -480,6 +486,26 @@ fn turn_after_text(
     Some(entries_text(&facts).unwrap_or_else(|| {
         "its turn and its after verbs are done, so the next tick moves it to the next step".into()
     }))
+}
+
+/// The line of an act step: the first verb of `run` that is not confirmed, with its state, or
+/// the move to the next step. `None` when the adapter cannot be read.
+fn act_text(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    visit: &super::state::Visit,
+) -> Option<String> {
+    let adapter = crate::adapter::load(ctx).ok()?;
+    let StepKind::Act(act) = &adapter.step(&visit.step)?.kind else {
+        return None;
+    };
+    let facts = op_facts(ctx, ledger, ticket, &act.run, None).ok()?;
+    Some(
+        entries_text(&facts).unwrap_or_else(|| {
+            "its verbs are done, so the next tick moves it to the next step".into()
+        }),
+    )
 }
 
 /// The first entry of a list that is not confirmed, as a line of the column NOW: such as

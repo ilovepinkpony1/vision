@@ -124,6 +124,8 @@ pub struct RetryCard {
     pub paused: bool,
     /// The turn of the step held its end facts, so the retry runs its writes again.
     pub held: bool,
+    /// The step is an act step: it runs no turn, so the retry runs its writes again.
+    pub act: bool,
     /// Why a rule stopped the ticket.
     pub reason: Option<String>,
     pub run: Run,

@@ -6,23 +6,23 @@
  ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
  ⠸ build               6:00│   ▀▀▀▀▀▀▀  ⠸ 6:00 · 5 tool calls                       │ commits    none to push
  ○ review                  │                                                        │
- ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
- ○ fix-ci        ╭─ The session of DEMO-12 ─────────────────────────────────────────────────╮               0
- ○ ready         │                                                                          │ry             1
- ○ comments      │  builder works now.                                                      │Judge          0
- ○ ci-review     │                                                                          │
- ○ ready-to-merge│  Press t to send builder a message: it reads your text at its next       │
- ○ done          │  tool step. Press o to stop the turn of builder and open its session     │       3f2a1b4 ✓
-                 │  here: the turn that runs ends and is lost, and its session keeps        │               -
- TEAM            │  what the agent did so far. Press x to stop the ticket and its turn.     │               -
- ✓ scout     fabl│                                                                          │               -
- ● builder   opus│  t tell    x stop    esc close                                           │
- · reviewer  opus│  o stop the turn of builder and open its session                         │
- · tester    opus│                                                                          │━━━━━━ 31% of 60
- · shepherd  opus╰──────────────────────────────────────────────────────────────────────────╯ts at 18:00
- · judge     fable-5-2 high│                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
- · curator   fable-5-2 high│                the columns that the plan names.        │
-                           │ 14:24:35 edit  src/report/export.py                    │ ENGINE
+ ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ ci            ╭─ The session of DEMO-12 ─────────────────────────────────────────────────╮               0
+ ○ fix-ci        │                                                                          │ry             1
+ ○ ready         │  builder works now.                                                      │Judge          0
+ ○ comments      │                                                                          │
+ ○ ci-review     │  Press t to send builder a message: it reads your text at its next       │
+ ○ ready-to-merge│  tool step. Press o to stop the turn of builder and open its session     │       3f2a1b4 ✓
+ ○ done          │  here: the turn that runs ends and is lost, and its session keeps        │               -
+                 │  what the agent did so far. Press x to stop the ticket and its turn.     │               -
+ TEAM            │                                                                          │               -
+ ✓ scout     fabl│  t tell    x stop    esc close                                           │
+ ● builder   opus│  o stop the turn of builder and open its session                         │
+ · reviewer  opus│                                                                          │━━━━━━ 31% of 60
+ · tester    opus╰──────────────────────────────────────────────────────────────────────────╯ts at 18:00
+ · shepherd  opus-5-5 high │                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
+ · judge     fable-5-2 high│                the columns that the plan names.        │
+ · curator   fable-5-2 high│ 14:24:35 edit  src/report/export.py                    │ ENGINE
                            │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 2s ago
                            │ 14:25:03 says  3 tests pass. I add a test for an empty │
                            │                month next.                             │

@@ -495,6 +495,86 @@ fn cases() -> Vec<Case> {
         ..case("a write that waits is not ready", v, f)
     });
 
+    // An act step runs no agent: the line names the write that runs or waits, and the step
+    // names its writes in their order.
+    let (v, mut f) = base("act", "open-pr");
+    f.run = vec!["git.push".into(), "pr.open".into()];
+    f.entry = Some(EntryFact {
+        label: "git.push".into(),
+        before: false,
+        state: EntryState::Next,
+    });
+    out.push(Case {
+        kind: Kind::Next,
+        tone: Tone::Wait,
+        short: "the write git.push runs at the next pass",
+        title: "the write git.push runs at the next pass",
+        lines: &[
+            "The next pass starts within a minute.",
+            "No agent works. The step runs git.push, then pr.open.",
+        ],
+        ready: true,
+        ..case("an act step and its first write", v, f)
+    });
+
+    let (v, mut f) = base("act", "open-pr");
+    f.run = vec!["git.push".into(), "pr.open".into()];
+    f.entry = Some(EntryFact {
+        label: "pr.open".into(),
+        before: false,
+        state: EntryState::Waits,
+    });
+    out.push(Case {
+        pass: Pass::Runs,
+        kind: Kind::Next,
+        tone: Tone::Wait,
+        short: "the write pr.open waits for your approval",
+        title: "the write pr.open waits for your approval",
+        lines: &[
+            "A pass runs now.",
+            "No agent works. The step runs git.push, then pr.open.",
+        ],
+        ..case("a write of an act step that waits is not ready", v, f)
+    });
+
+    let (v, mut f) = base("act", "open-pr");
+    f.run = vec!["git.push".into()];
+    out.push(Case {
+        kind: Kind::Next,
+        tone: Tone::Wait,
+        short: "the next pass moves it to its next step",
+        title: "the next pass moves it to its next step",
+        lines: &[
+            "The next pass starts within a minute.",
+            "No agent works. The step runs git.push.",
+        ],
+        ready: true,
+        ..case("an act step with each write done", v, f)
+    });
+
+    // The mode shadow kept a write of an act step back, and the pass set the flag.
+    let (mut v, mut f) = base("act", "open-pr");
+    v.flags
+        .push(flag("needs-you", "pr.open is in the mode shadow"));
+    f.run = vec!["git.push".into(), "pr.open".into()];
+    f.first_write = Some("pr.open".into());
+    out.push(Case {
+        needs: vec![need(
+            NeedKind::Flag,
+            "needs-you",
+            "needs-you at the step open-pr: pr.open is in the mode shadow",
+        )],
+        kind: Kind::Needs,
+        tone: Tone::Need,
+        short: "needs you: the first write pr.open",
+        title: "the first write pr.open waits for you",
+        lines: &[
+            "The mode of pr.open kept it back, so nothing was sent.",
+            "Press n to read the write, and decide.",
+        ],
+        ..case("the first write of an act step", v, f)
+    });
+
     // The mode shadow kept the write back, and no pass set the flag yet: the next pass does.
     let (v, mut f) = base("turn", "refine");
     f.agent = Some("scout".into());

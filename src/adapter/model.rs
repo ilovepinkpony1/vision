@@ -293,6 +293,9 @@ pub enum StepKind {
     Ask(AskStep),
     /// A line of a document decides where the ticket goes.
     Check(CheckStep),
+    /// The verbs of `run` run in order, as the `after` verbs of a turn step whose end facts
+    /// hold.
+    Act(ActStep),
     End,
 }
 
@@ -305,9 +308,19 @@ impl StepKind {
             StepKind::Wait(_) => "wait",
             StepKind::Ask(_) => "ask",
             StepKind::Check(_) => "check",
+            StepKind::Act(_) => "act",
             StepKind::End => "end",
         }
     }
+}
+
+/// An act step: it runs no turn. When a ticket enters it, the verbs of `run` run in order, and
+/// the ticket moves to `next` when each one is confirmed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActStep {
+    /// The verbs, each one a name or a table with arguments, as an entry of `after`. Each one
+    /// is a verb that changes the outside: never a job and never a read verb.
+    pub run: Vec<Entry>,
 }
 
 /// A turn step: one agent works in a session, or the members of `team` work in parallel.
@@ -1675,12 +1688,16 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
         ],
         "ask" => &["docs", "on", "cap", "when"],
         "check" => &["doc", "line", "stop_line", "next", "fail", "cap", "when"],
+        "act" => ACT_KEYS,
         _ => &[],
     }
 }
 
+/// The keys of an act step, next to `id` and `kind`.
+const ACT_KEYS: &[&str] = &["run", "next", "cap", "when"];
+
 /// The step kinds that the loader knows.
-const STEP_KINDS: [&str; 7] = ["turn", "job", "human", "wait", "ask", "check", "end"];
+const STEP_KINDS: [&str; 8] = ["turn", "job", "human", "wait", "ask", "check", "act", "end"];
 
 fn parse_steps(value: Option<toml::Value>, problems: &mut Problems) -> Vec<Step> {
     let Some(value) = value else {
@@ -1738,7 +1755,7 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
     let Some(kind) = string(table.remove("kind"), &at, problems) else {
         problems.add(
             &at,
-            "it has no kind. Use turn, job, human, wait, ask, check, or end",
+            "it has no kind. Use turn, job, human, wait, ask, check, act, or end",
         );
         return None;
     };
@@ -1746,7 +1763,7 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         problems.add(
             &at,
             format!(
-                "the kind `{kind}` is not known. Use turn, job, human, wait, ask, check, or end"
+                "the kind `{kind}` is not known. Use turn, job, human, wait, ask, check, act, or end"
             ),
         );
         return None;
@@ -1762,6 +1779,10 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         let why = match (kind.as_str(), key.as_str()) {
             ("end", "when") => "the end step has no when: a ticket always ends there".to_string(),
             ("wait", "when") => "a wait step has no when: it has no next to skip to".to_string(),
+            ("act", _) => format!(
+                "the key `{key}` does not belong to an act step. Its keys: {}",
+                ACT_KEYS.join(", ")
+            ),
             ("job" | "human" | "check" | "end", "on") => format!(
                 "a {kind} step has no on: only a turn step moves by on (its findings, or its commits), and a wait step and an ask step by their values"
             ),
@@ -1915,6 +1936,7 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
             StepKind::Human(HumanStep { action })
         }
         "wait" => StepKind::Wait(wait_step(&mut table, &at, problems)),
+        "act" => StepKind::Act(act_step(&mut table, &at, problems)),
         _ => StepKind::End,
     };
     let on = match &kind {
@@ -2493,6 +2515,40 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems, rounds: u32) 
     }
 }
 
+/// `run` of an act step: one entry or more, each one a verb in the form of an entry of `after`.
+/// A job is refused: a job step or `before` runs a job. The verbs themselves are tested
+/// against `[verbs]` with the other links of the file.
+fn act_step(table: &mut Table, at: &str, problems: &mut Problems) -> ActStep {
+    let here = format!("{at} run");
+    let value = table.remove("run");
+    let missing = value.is_none();
+    let empty = matches!(&value, Some(toml::Value::Array(items)) if items.is_empty());
+    let run = entries(value, &here, problems);
+    if missing {
+        problems.add(
+            at,
+            "an act step names the verbs that it runs in run, such as run = [\"git.push\", { verb = \"pr.open\", args = { text = \"{doc:pr.md}\" } }]",
+        );
+    } else if empty {
+        problems.add(
+            at,
+            "run of an act step names one verb or more, such as run = [\"git.push\"], not an empty list",
+        );
+    }
+    for entry in &run {
+        if entry.kind == EntryKind::Job {
+            problems.add(
+                &here,
+                format!(
+                    "`{}` is a job, and an act step runs only verbs. A job step or before of a turn step runs a job",
+                    entry.label()
+                ),
+            );
+        }
+    }
+    ActStep { run }
+}
+
 fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
     let watch = string(table.remove("watch"), at, problems).unwrap_or_default();
     let valid_watch = !watch.is_empty()
@@ -2617,6 +2673,21 @@ fn check_links(adapter: &Adapter, problems: &mut Problems) {
         ] {
             for entry in entries {
                 check_entry(adapter, entry, &format!("{at} {list}"), problems);
+            }
+        }
+        if let StepKind::Act(act) = &step.kind {
+            let here = format!("{at} run");
+            for entry in act.run.iter().filter(|e| e.kind == EntryKind::Verb) {
+                check_entry(adapter, entry, &here, problems);
+                if adapter.verbs.get(&entry.name).is_some_and(|v| v.read) {
+                    problems.add(
+                        &here,
+                        format!(
+                            "`{}` is a read verb: it changes nothing outside, so an act step does not run it. A turn asks for it with a result of the kind requests",
+                            entry.name
+                        ),
+                    );
+                }
             }
         }
         for expect in &step.expects {
@@ -3993,11 +4064,142 @@ url = "http://localhost:3000"
         let lead = adapter.step("review").unwrap();
         assert_eq!(lead.next, None);
         assert_eq!(lead.on[COMMITS], "review-lanes");
-        assert_eq!(lead.on[NONE], "ci");
+        assert_eq!(lead.on[NONE], "open-pr");
         assert!(lead
             .expects
             .iter()
             .any(|e| matches!(e, Expect::Gate(g) if g.doc == "cr.md")));
+        // Nothing leaves the machine before the review: the build and the lead push nothing,
+        // and the act step open-pr pushes the branch and opens the pull request.
+        assert!(adapter.step("build").unwrap().after.is_empty());
+        assert!(lead.after.is_empty());
+        let open = adapter.step("open-pr").unwrap();
+        let StepKind::Act(act) = &open.kind else {
+            panic!("open-pr is an act step: {open:?}");
+        };
+        let run: Vec<String> = act.run.iter().map(Entry::label).collect();
+        assert_eq!(run, ["git.push", "pr.open"]);
+        assert_eq!(act.run[1].args["text"], "{doc:pr.md}");
+        assert_eq!(open.next.as_deref(), Some("ci"));
+    }
+
+    #[test]
+    fn an_act_step_runs_verbs_in_order_and_moves_to_next() {
+        let act = "[[step]]\nid = \"open-pr\"\nkind = \"act\"\nrun = [\"git.push\", { verb = \"deploy\", args = { env = \"staging\", text = \"{doc:pr.md}\" } }]\ncap = 2\nwhen = [\"wide\"]\nnext = \"ci\"\n\n";
+        let text = format!(
+            "{}\n[width]\ndoc = \"plan.md\"\n",
+            with(
+                "[[step]]\nid = \"ci\"",
+                &format!("{act}[[step]]\nid = \"ci\"")
+            )
+        );
+        let adapter = parse(&text).unwrap();
+        let step = adapter.step("open-pr").unwrap();
+        assert_eq!(step.kind.name(), "act");
+        let StepKind::Act(spec) = &step.kind else {
+            panic!("open-pr is an act step: {step:?}");
+        };
+        let labels: Vec<String> = spec.run.iter().map(Entry::label).collect();
+        assert_eq!(labels, ["git.push", "deploy"]);
+        assert_eq!(spec.run[1].kind, EntryKind::Verb);
+        assert_eq!(spec.run[1].args["env"], "staging");
+        assert_eq!(spec.run[1].args["text"], "{doc:pr.md}");
+        assert_eq!(step.next.as_deref(), Some("ci"));
+        assert_eq!(step.cap.as_deref(), Some("2"));
+        assert_eq!(step.when, ["wide"]);
+        assert!(step.after.is_empty() && step.before.is_empty() && step.start.is_empty());
+        assert!(step.on.is_empty() && step.expects.is_empty());
+    }
+
+    #[test]
+    fn the_loader_refuses_a_wrong_act_step() {
+        let good =
+            "[[step]]\nid = \"open-pr\"\nkind = \"act\"\nrun = [\"git.push\"]\nnext = \"ci\"\n\n";
+        let act = |body: &str| {
+            with(
+                "[[step]]\nid = \"ci\"",
+                &format!(
+                    "[[step]]\nid = \"open-pr\"\nkind = \"act\"\n{body}\n\n[[step]]\nid = \"ci\""
+                ),
+            )
+        };
+        parse(&with(
+            "[[step]]\nid = \"ci\"",
+            &format!("{good}[[step]]\nid = \"ci\""),
+        ))
+        .unwrap();
+        let cases: Vec<(String, &str)> = vec![
+            (
+                act("run = [\"git.push\"]\nagent = \"builder\"\nnext = \"ci\""),
+                "step `open-pr`: the key `agent` does not belong to an act step. Its keys: run, next, cap, when",
+            ),
+            (
+                act("run = [\"git.push\"]\nafter = [\"git.push\"]\nnext = \"ci\""),
+                "step `open-pr`: the key `after` does not belong to an act step",
+            ),
+            (
+                act("run = [\"git.push\"]\non = { commits = \"ci\", none = \"ci\" }"),
+                "step `open-pr`: the key `on` does not belong to an act step",
+            ),
+            (
+                act("run = [\"git.push\"]\nexpects = [\"clean\"]\nnext = \"ci\""),
+                "step `open-pr`: the key `expects` does not belong to an act step",
+            ),
+            (
+                act("run = []\nnext = \"ci\""),
+                "step `open-pr`: run of an act step names one verb or more, such as run = [\"git.push\"], not an empty list",
+            ),
+            (
+                act("next = \"ci\""),
+                "step `open-pr`: an act step names the verbs that it runs in run",
+            ),
+            (
+                act("run = \"git.push\"\nnext = \"ci\""),
+                "step `open-pr` run: it must be a list",
+            ),
+            (
+                act("run = [\"git.push\", \"git.force\"]\nnext = \"ci\""),
+                "step `open-pr` run: the verb `git.force` is not in [verbs]",
+            ),
+            (
+                act("run = [\"tracker.issue\"]\nnext = \"ci\""),
+                "step `open-pr` run: `tracker.issue` is a read verb: it changes nothing outside, so an act step does not run it",
+            ),
+            (
+                act("run = [\"git.push\", \"job:lint\"]\nnext = \"ci\""),
+                "step `open-pr` run: `job:lint` is a job, and an act step runs only verbs",
+            ),
+            (
+                act("run = [{ job = \"lint\" }]\nnext = \"ci\""),
+                "step `open-pr` run: `job:lint` is a job, and an act step runs only verbs",
+            ),
+            (
+                act("run = [\"git.push\"]\nnext = \"nowhere\""),
+                "step `open-pr`: next names the step `nowhere`, which does not exist",
+            ),
+            (
+                act("run = [\"git.push\"]"),
+                "step `open-pr`: it has no next",
+            ),
+            (
+                act("run = [\"git.push\"]\nnext = \"ci\"\nwhen = [\"bug\"]"),
+                "step `open-pr`: when names `bug`, but the adapter has no [kinds]",
+            ),
+            (
+                act("run = [\"git.push\"]\nnext = \"ci\"\ncap = \"rounds\""),
+                "step `open-pr`: cap `rounds` is not a key of [caps]",
+            ),
+        ];
+        for (text, expected) in cases {
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        // The unknown kind names each kind, act too.
+        let err = error(&with("kind = \"wait\"", "kind = \"loop\""));
+        assert!(
+            err.contains("Use turn, job, human, wait, ask, check, act, or end"),
+            "{err}"
+        );
     }
 
     /// The adapter of the demo with the investigation before the plan.
@@ -4045,6 +4247,15 @@ url = "http://localhost:3000"
         assert_eq!(gate.stop_line.as_deref(), Some("Decision: drop"));
         assert_eq!(gate.fail, "investigate");
         assert_eq!(check.cap.as_deref(), Some("2"));
+        // From the build on, the path is that of the demo: the act step open-pr pushes the
+        // branch and opens the pull request after the review.
+        assert!(adapter.step("build").unwrap().after.is_empty());
+        let review = adapter.step("review").unwrap();
+        assert!(review.after.is_empty());
+        assert_eq!(review.next.as_deref(), Some("open-pr"));
+        let open = adapter.step("open-pr").unwrap();
+        assert!(matches!(open.kind, StepKind::Act(_)), "{open:?}");
+        assert_eq!(open.next.as_deref(), Some("ci"));
     }
 
     #[test]

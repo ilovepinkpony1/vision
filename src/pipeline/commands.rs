@@ -822,6 +822,10 @@ pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
         text.push_str(
             ". Its turn result held, so the next tick runs the operations of the step again",
         );
+    } else if matches!(step.kind, StepKind::Act(_)) {
+        text.push_str(
+            ". The step runs no turn, so the next tick runs the operations of the step again",
+        );
     } else if paused && new_visit.as_ref().is_some_and(|v| v.resume.is_some()) {
         text.push_str(". The next turn resumes the session that you worked in");
     } else {

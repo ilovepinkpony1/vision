@@ -606,10 +606,15 @@ fn promote_and_demote_move_one_step_on_the_ladder() {
     let top = demo.run(&["promote", "git.push"]);
     top.expect_code(1);
     assert!(top.stderr.contains("already auto"), "{top:?}");
+    // Each write verb of the demo starts in the mode auto, so a promote of another verb stops
+    // at the top, and a demote moves it down.
     let review = demo.run(&["promote", "review.reply"]);
+    review.expect_code(1);
+    assert!(review.stderr.contains("already auto"), "{review:?}");
+    let review = demo.run(&["demote", "review.reply"]);
     review.expect_code(0);
     assert!(
-        review.stdout.starts_with("review.reply: ask -> auto."),
+        review.stdout.starts_with("review.reply: auto -> ask."),
         "{review:?}"
     );
     let unknown = demo.run(&["promote", "git.force"]);
@@ -1381,6 +1386,8 @@ fn a_read_verb_answers_with_documents_and_needs_no_approval() {
 #[test]
 fn ci_run_and_review_reply_in_the_demo_world() {
     let demo = Demo::new();
+    // review.reply starts in the mode auto in the demo. The person moved it to the mode ask.
+    demo.set_mode("review.reply", "ask");
     let ctx = demo.ctx();
     let ledger = demo.ledger();
     let head = demo.commit_subtract();
@@ -1409,7 +1416,7 @@ fn ci_run_and_review_reply_in_the_demo_world() {
     .unwrap();
     assert!(
         matches!(reply.outcome, Outcome::Waiting { .. }),
-        "review.reply starts in the mode ask: {reply:?}"
+        "review.reply in the mode ask waits: {reply:?}"
     );
     let run = demo.run(&["approve", KEY, "review.reply", &red]);
     run.expect_code(0);

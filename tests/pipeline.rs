@@ -419,9 +419,19 @@ fn a_refused_gate_needs_you_and_a_retry_runs_the_verb_again() {
             result("Built.", &[("pr.md", "Add subtract\n\nBody.")])
         )]),
     );
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([ends_with(result(
+            "Reviewed.",
+            &[("review.md", "# Review\n\n## Findings\n\nNone.\n")]
+        ))]),
+    );
     take_and_approve(&world);
+    // The commits stay in the clone through the review: the act step open-pr pushes them.
     world.tick_until("the refused push", LONG, |w| has_flag(w, "needs-you"));
-    assert_eq!(world.step().as_deref(), Some("build"));
+    assert_eq!(world.step().as_deref(), Some("open-pr"));
+    assert_eq!(step_turns(&world, "review").len(), 1);
     let reason = world.reason("needs-you");
     assert!(
         reason.contains("git.push was refused by the secrets gate"),
@@ -458,6 +468,8 @@ fn a_refused_gate_needs_you_and_a_retry_runs_the_verb_again() {
         .unwrap()
         .ends_with(&format!(":{}", pushes[0].id)));
     assert_eq!(step_turns(&world, "build").len(), 1, "no new build turn");
+    assert_eq!(step_turns(&world, "review").len(), 1, "no new review turn");
+    assert_eq!(world.acts_of("pr.open"), 0, "pr.open waits for the push");
 
     // While an operation is uncertain, retry refuses.
     world
@@ -484,9 +496,12 @@ fn one_entry_above_the_review_cap_needs_you_with_the_open_findings() {
     let world = World::new();
     simple_scenarios(&world);
     world.write_adapter(|text| {
+        // No pull request exists before open-pr, so its draft flag is the value none.
+        let old = "cap = \"review_rounds\"\nnext = \"open-pr\"";
+        assert!(text.contains(old));
         text.replacen(
-            "cap = \"review_rounds\"\nnext = \"ci\"",
-            "cap = \"review_rounds\"\nnext = \"again\"\n\n[[step]]\nid = \"again\"\nkind = \"wait\"\nwatch = \"pr.draft\"\non = { \"true\" = \"review\" }\nevery = 1",
+            old,
+            "cap = \"review_rounds\"\nnext = \"again\"\n\n[[step]]\nid = \"again\"\nkind = \"wait\"\nwatch = \"pr.draft\"\non = { \"none\" = \"review\" }\nevery = 1",
             1,
         )
     });

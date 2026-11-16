@@ -66,6 +66,8 @@ pub fn retry(app: &App, card: &RetryCard, c: &mut Canvas) {
         format!(
             "Vision clears the pause. The next turn of {agent} resumes the session that you worked in, and it gets a note that you worked there."
         )
+    } else if card.act {
+        "The step runs no turn, so no agent starts. Vision clears the flag and runs the writes of the step again, the ones that are not done.".to_string()
     } else if card.held {
         "The turn of the step already gave a result that held, so no new turn starts. Vision runs the writes of the step again, the ones that waited.".to_string()
     } else {

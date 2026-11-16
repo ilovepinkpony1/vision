@@ -6,7 +6,7 @@ Vision is in development. The demo path works from the ticket to the merged pull
 
 ## What it does
 
-- It refines the ticket, plans, builds with tests first, reviews its own branch, and fixes red CI runs.
+- It refines the ticket, plans, builds with tests first, reviews its own branch, tests it on the local app, and only then pushes the branch and opens the pull request. It fixes red CI runs.
 - It asks its questions as cards. It keeps each answer with its reason, and it answers a later question from that memory.
 - The memory is a folder of small text files in a git repo. You can edit each file, and an agent proposes rules that you accept or reject.
 - No session holds a credential for the tracker or the forge. One executor does each change outside the machine.
@@ -142,7 +142,7 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
 
 3. Edit the copy. Set `name = "myproject"`, and set `base` to your main branch, such as `origin/main`. Keep the line `scripts = "builtin:jira-github"` of the copy. The vision binary answers the calls of the adapter, so your folder needs no other file. Remove each step that your project does not need, such as `qa`.
 
-4. In the copy, set the mode of each verb that writes to `shadow`. A verb in this mode records what it intends, and it calls nothing.
+4. Each verb that writes starts in the mode `auto`, so no write waits for you. If you want to see what Vision does before it writes, set the mode of a verb to `shadow` in the copy. A verb in this mode records what it intends, and it calls nothing.
 
 5. Set `project = "myproject"` in `config.toml`. Fill the tables `[adapter]` and `[secrets]`. A secret is a command or the name of an environment variable, and never a value.
 
@@ -180,7 +180,7 @@ The adapter `adapters/jira-github` connects Vision to Jira Cloud and GitHub. The
 
 8. Write the standing rules of your project to `~/.vision/agents/project.md`. One example is the command that runs one test file. Each work agent gets this text.
 
-9. Take one ticket with `vision take KEY`. A verb in the mode `shadow` stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
+9. Take one ticket with `vision take KEY`. If a verb is in the mode `shadow`, it stops the ticket, and `vision needs` says why. Move that verb up with `vision promote VERB`, and then run `vision retry KEY`.
 
 The timer of `vision install` gets the `PATH` of your shell and none of its other variables. For the timer, give each secret as a command.
 

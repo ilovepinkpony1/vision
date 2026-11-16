@@ -764,7 +764,7 @@ The recommendation is the cheapest model whose quality numbers are not worse tha
 
 ## 11. The pipeline and the adapter
 
-The core knows five kinds of step: a turn, a job, a human action, a wait, and the end. The steps of a project are data in `adapter.toml`. The core has no word that names a project, a tracker, or a forge.
+The core knows eight kinds of step: a turn, a job, a human action, a wait, an ask, a check, an act, and the end. The steps of a project are data in `adapter.toml`. The core has no word that names a project, a tracker, or a forge.
 
 ### 11.1 The adapter folder
 
@@ -832,7 +832,7 @@ base = "origin/main"          # the ref that a new branch starts from
 
 [[step]]
 id = "refine"
-kind = "turn"                 # turn | job | human | wait | end
+kind = "turn"                 # turn | job | human | wait | ask | check | act | end
 agent = "scout"
 turn = "reader"               # reader | worker | tester
 reads = ["issue.json"]        # documents of the ticket folder that the session gets
@@ -853,8 +853,7 @@ agent = "builder"
 turn = "worker"
 reads = ["approved-plan.md", "refine.md", "answers.md"]
 expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
-after = ["git.push", "pr.open"]
-next = "review"
+next = "review"               # the commits stay in the clone until open-pr
 
 [[step]]
 id = "review"
@@ -864,8 +863,13 @@ turn = "worker"
 before = ["job:second-review"]    # jobs that run first. Their documents become inputs.
 reads = ["approved-plan.md", "second-review.md"]
 expects = ["clean", "doc:review.md", "job:proof"]
-after = ["git.push"]
 cap = "review_rounds"         # a key of [caps]. It counts each entry into the step.
+next = "open-pr"
+
+[[step]]
+id = "open-pr"
+kind = "act"                  # no turn: the verbs of run run in order
+run = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "ci"
 
 [[step]]
@@ -999,6 +1003,8 @@ on = { changed = "amend", same = "reproduced" }
 
 A missing document counts as no card. A document that is not an array of cards sets the flag `needs-you`. A card whose question repeats an earlier one is dropped. The ticket moves to `changed` when an answer is not the recommended choice, when a card has no recommendation, or when the person wrote an answer. Else, and when there is no card, it moves to `same`.
 
+An act step runs verbs and no turn. Its keys are `run`, `next`, `cap`, and `when`. `run` names one verb or more, each in the form of an entry of `after`. The loader refuses each other key, a missing or empty `run`, a job, a verb that is not in `[verbs]`, a read verb, and a `next` that is not a step. The shipped adapters use the act step `open-pr` to push the branch and open the pull request after the review, so that nothing leaves the machine before the review holds.
+
 A check step reads one document:
 
 ```toml
@@ -1058,6 +1064,8 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - `rounds` and `cap` count different things. `rounds` counts the failed turns of one visit, and each resume continues the same session. `cap` counts the entries into a step from `next`, `on`, or `fail`, so it limits the loops between steps.
 - A wait step with `from` does nothing before the first moment after its entry with that local time: no `start` verb and no `observe`. With `from = "09:00"`, an entry at 23:00 starts at 09:00 the next day, an entry at 08:00 starts at 09:00 the same day, and an entry at 09:30 starts at 09:00 the next day. The visit keeps that moment in `opens`. `vision retry KEY` keeps the moment, so a retry never waits for a later day. The limit counts from the first look, which comes at the first pass after that moment. The column NOW of `vision status` and the app say `waits until 09:00`.
 - If each end fact holds, the `after` verbs run in order. After each one has the state `confirmed`, the ticket moves to `next`.
+- At the entry of an act step, each tick requests the first verb of `run` that is not `confirmed`. The verb takes the path of an `after` verb: its mode, the gates, the idempotency key, and the `{doc:NAME}` rule. After each verb has the state `confirmed`, the next tick moves the ticket to `next`, and this move counts as an entry for the `cap` of the target. A verb that a mode keeps back, that a gate refuses, or that fails sets the flag `needs-you`. A verb in the mode `ask` waits for `vision approve`. An entry above the `cap` of the act step sets the flag `needs-you`, and no verb runs.
+- The commit is part of the idempotency key. So a new entry into an act step at a new commit runs each verb again, and `pr.open` answers with the pull request that is open. At the same commit, a verb that is `confirmed` does not run again.
 - After `rounds` failed turns, a step with `extra_rounds` gets one more turn at a time, up to `extra_rounds` more, while the loop converges. The loop converges when the gate of the failed end fact fails on fewer items in the last turn than in the turn before it, and no failing item is CRITICAL (cr) or critical (qa). A turn whose document the gate cannot read gives no number, so the loop does not converge. Otherwise the ticket gets the flag `needs-you`, and the reason says whether the extra rounds are used or the loop does not converge. The event `extra-round` of each extra turn says why it was granted.
 - When the end facts of a turn are tested, each gate of the step that has a document gets a row of `gate_rounds`. Each finding of a gate cr with a place gets a row of `findings` with the source `cr` and a fingerprint: its path and a hash of its title in lower case, with no digits and no punctuation. Two findings of two rounds are the same when their fingerprints are equal, or when their paths are equal and their lines are at most 3 apart. A finding that comes back two times after a round where it was gone becomes one notice for the person, `this finding keeps coming back after its fix`, with its first line, and a problem note in the journal entry of that turn.
 - The resume after a failed job names its documents, such as `.vision/precheck.md`.
@@ -1070,13 +1078,13 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - A human step waits for its command. `vision needs` lists it. The one action is `approve-plan`.
 - The end step frees the clone. If the pull request is merged, it records the event `ticket-merged`.
 
-Each visit of a step is one row in `spans`. Its key `waits_on` says what the ticket waits for: `agent:<name>`, `job:<name>`, `person:<action>`, `watch:<path>`, or `end`.
+Each visit of a step is one row in `spans`. Its key `waits_on` says what the ticket waits for: `agent:<name>`, `job:<name>`, `person:<action>`, `watch:<path>`, `verbs:<verb>,<verb>` for an act step (such as `verbs:git.push,pr.open`), or `end`.
 
-The column NOW of `vision status` says the same thing for people. After a turn that ended well, it names the first `after` verb that is not `confirmed`, with its state. Two examples are `runs git.push` and `waits for your approval of review.reply`. Before a turn, it names the first `before` entry that is not done. The text `next: a turn of <agent>` means that a turn is the next action.
+The column NOW of `vision status` says the same thing for people. After a turn that ended well, it names the first `after` verb that is not `confirmed`, with its state. Two examples are `runs git.push` and `waits for your approval of review.reply`. Before a turn, it names the first `before` entry that is not done. The text `next: a turn of <agent>` means that a turn is the next action. On an act step, it names the first verb of `run` that is not `confirmed`, with its state, such as `next: git.push` or `runs git.push`. After each verb is `confirmed`, it says `its verbs are done, so the next tick moves it to the next step`.
 
 A ticket can have four flags. A ticket with a flag starts no new turn, no job, and no operation.
 
-- `needs-you`: a rule stopped the ticket. `vision retry KEY` clears the flag and enters the step again. If the turn of the step ended well and an `after` verb stopped the ticket, `vision retry KEY` starts no new turn. It only requests the `after` verbs again.
+- `needs-you`: a rule stopped the ticket. `vision retry KEY` clears the flag and enters the step again. If the turn of the step ended well and an `after` verb stopped the ticket, `vision retry KEY` starts no new turn. It only requests the `after` verbs again. On an act step, `vision retry KEY` starts no turn either. It requests the verbs of `run` that are not `confirmed`.
 - `paused`: the person took over the session with `vision open KEY`. `vision retry KEY` clears the flag and enters the step again. The new turn resumes the session, and its message says that the person worked in the session.
 - `waits-for-limit`: a limit of section 4 refused a turn. The tick clears the flag after the limit allows a turn again.
 - `stopped`: `vision stop KEY` killed the running turn and freed the clone. The branch stays in that clone. `vision take KEY` starts the ticket again at the same step.
@@ -1093,11 +1101,11 @@ The proof gets the approved plan in `args.plan`. A line `Proof: green` in the pl
 
 `adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
 
-Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
+Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `open-pr`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. The commits of `build` and `review` stay in the clone. Then the act step `open-pr` runs `git.push`, and `pr.open` with the text of `pr.md`. So nothing leaves the machine before the review. `fix-ci` and `comments` push their own commits with `after`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
 
-`adapters/demo-investigate` uses the scripts of `adapters/demo` and starts with the investigation: `refine`, `investigate` (a team by kind), `analyze`, `critic` (wide) or `critic-narrow` (narrow), `questions` (ask), `amend`, `reproduced` (check, bugs only), `plan-ready`, and then the rest of the demo path. The fake `codex` of the tests stands in for Codex.
+`adapters/demo-investigate` uses the scripts of `adapters/demo` and starts with the investigation: `refine`, `investigate` (a team by kind), `analyze`, `critic` (wide) or `critic-narrow` (narrow), `questions` (ask), `amend`, `reproduced` (check, bugs only), `plan-ready`, and then the rest of the demo path from `build`. The fake `codex` of the tests stands in for Codex.
 
-`adapters/demo-review-team` uses the scripts of `adapters/demo` and reviews with a team. `review-lanes` is a team of three readers that the adapter defines: `cr-correctness` and `cr-design` on Claude, and `cr-codex` on Codex with a fallback. Each writes `findings-<lane>.md` in the form of the gate cr. In `review-challenge`, each lane reads the findings of the two other lanes and writes `challenge-<lane>.md`, one line `<lane> F<n>: agree|disagree: <evidence>` for each finding. In `review`, the Reviewer with `roles/reviewer.md` judges each finding with its votes, fixes the kept ones, and writes `cr.md` for the gate cr and `cr-fixed.md`. A commit of the lead sends the ticket back to `review-lanes`, and no commit sends it to `ci`. The cap of `review-lanes` is 2, so its third entry needs the person.
+`adapters/demo-review-team` uses the scripts of `adapters/demo` and reviews with a team. `review-lanes` is a team of three readers that the adapter defines: `cr-correctness` and `cr-design` on Claude, and `cr-codex` on Codex with a fallback. Each writes `findings-<lane>.md` in the form of the gate cr. In `review-challenge`, each lane reads the findings of the two other lanes and writes `challenge-<lane>.md`, one line `<lane> F<n>: agree|disagree: <evidence>` for each finding. In `review`, the Reviewer with `roles/reviewer.md` judges each finding with its votes, fixes the kept ones, and writes `cr.md` for the gate cr and `cr-fixed.md`. A commit of the lead sends the ticket back to `review-lanes`. No commit sends it to `open-pr`, which pushes the branch and opens the pull request, and then to `ci`. The cap of `review-lanes` is 2, so its third entry needs the person.
 
 ### 11.5 The adapter for Jira and GitHub
 
@@ -1107,14 +1115,16 @@ The path has these parts:
 
 1. The Scout refines the ticket, and `tracker.describe` writes the new description to Jira. The answer keeps the old description as a backup document.
 2. The Scout writes the plan, and the person approves it.
-3. `tracker.move` moves the issue to the status of work. The Builder builds, and the proof runs.
-4. `git.push` pushes the branch, and `pr.open` opens a draft pull request.
-5. The Reviewer reviews the diff. A second review command is optional.
-6. `ci.run` starts the CI workflow. After a red run, `ci.rerun` runs the failed jobs one more time. After a second red run, the Builder fixes the fault.
-7. The Tester does QA on the local app. A kept bug goes to a fix, to CI, and to QA again.
+3. `tracker.move` moves the issue to the status of work. The Builder builds, and the proof runs. The commits stay in the clone.
+4. The Reviewer reviews the diff. A second review command is optional.
+5. The Tester does QA on the local app. A kept bug goes to `fix-qa`, then to the review, and then to QA again.
+6. When QA holds with no kept bug, the act step `open-pr` runs `git.push` and then `pr.open`. `pr.open` opens a draft pull request with the text of `pr.md`.
+7. `ci.run` starts the CI workflow. After a red run, `ci.rerun` runs the failed jobs one more time. After a second red run, the Builder fixes the fault. A green run goes to `ready`.
 8. The person marks the pull request as ready. The team reviews it.
 9. The Shepherd judges each comment that waits, and it fixes each fault that a comment names. `review.reply` answers each comment.
 10. After the approval, the person merges, and the ticket ends.
+
+No commit leaves the machine before the review and the local QA hold. The steps after `open-pr`, such as `fix-ci` and `comments`, push their own commits.
 
 These rules keep the tokens and the repo safe:
 
@@ -1181,6 +1191,7 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - A new request of a verb at a newer commit ends the older operation of that verb that still waits. Its state becomes `failed`.
 - A human operation names its object with an id that cannot change: `approve-plan KEY HASH`, `answer ID`, `approve KEY VERB COMMIT`. A stale id is an error.
 - After a wrong operation, the person moves its verb down the ladder with `vision demote VERB`. Vision never changes a mode by itself.
+- Each write verb of the shipped adapters starts in the mode `auto`, so no write waits for an approval. The gates still test each verb with `leaves`. A verb with no `mode` in `adapter.toml` starts in the mode `ask`. `vision demote VERB` moves a verb down the ladder, and `[modes]` of the configuration keeps the new mode.
 - `vision approve` runs each operation of the verb that waits at that commit. With `--op ID`, it runs only the operation with that id. If that operation no longer waits at that commit, the command sends nothing.
 - `vision approve` exits with code 2 after a gate refuses. It exits with code 1 after an operation fails or stays `uncertain`.
 - A job with `env = "full"` gets the environment of the tick, with no variable that has the name or the value of a secret, unless the job has `secrets = true`. Each other script gets the plain environment. The executor passes the table of a job with `command` in the call, so the adapter needs no second reader of `adapter.toml`. At the time limit of a call, the executor kills its process group, and the command of a job runs in that group, so it stops too.
@@ -1317,7 +1328,7 @@ In the log, Enter on a turn shows the events of that turn. Esc closes a pager, a
 
 The key `n` opens the first thing that waits for the person as a card. On Home, this is the first thing of all tickets. If more than one thing waits, the title says which one this is, such as `2 of 3`. The left and right arrows go to the other ones. Esc closes the card, and the thing keeps waiting. After an answer, the next card shows, or the card closes with a notice.
 
-The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show `1 of N` as the other cards do. Models lists the agents that the adapter defines after those of Vision, with the source `adapter`. In the line BY AGENT of Stats, they come behind the label `adapter:`. The start card and the team list of the live view name an agent of the adapter with its model.
+The live view shows the kind of the ticket. For a team step, NOW shows one line with the state of each member, such as `team: repro done, cause runs, history runs`. The cards of a batch show `1 of N` as the other cards do. Models lists the agents that the adapter defines after those of Vision, with the source `adapter`. In the line BY AGENT of Stats, they come behind the label `adapter:`. The start card and the team list of the live view name an agent of the adapter with its model. On an act step, NOW names the write that runs or waits, such as `the write pr.open runs at the next pass`. Its last line names the verbs of the step in their order, such as `No agent works. The step runs git.push, then pr.open.` The path shows an act step as each other step.
 
 Each kind of thing has its card:
 
@@ -1325,7 +1336,7 @@ Each kind of thing has its card:
 - A plan shows its text and its short hash. `a` approves the full hash that the card showed, and `x` stops the ticket.
 - A write in the mode `ask`, or a held diff, shows what it sends. `y` approves it. In the mode `ask`, `a` approves it and moves its verb to the mode `auto`.
 - The first write of a verb in the mode `shadow` or `hold` shows the text that the mode kept back. `y` sends it and moves the verb to the mode `ask`. `a` sends it and moves the verb to the mode `auto`. `n` leaves it.
-- A rule that stopped a ticket shows its reason. `r` tries the step again, `o` opens the session, and `x` stops the ticket.
+- A rule that stopped a ticket shows its reason. `r` tries the step again, `o` opens the session, and `x` stops the ticket. On an act step, `r` runs the writes of the step again that are not done, and no agent starts.
 - A paused ticket takes Enter to continue.
 - A proposal of the Curator takes Enter. The app then gives the terminal to `vision memory review --proposal NAME`.
 - A notice lists the issues that a passing gate qa found and that do not block, each with its id, its severity, and its title. Enter marks it read. A notice stays until the person reads it. It never stops a ticket, never marks the ticket as one that needs the person, and comes after each other thing that waits.

@@ -35,12 +35,13 @@ pub fn minutes_ago(minutes: i64) -> String {
     vision::util::time::rfc3339(at)
 }
 
-pub const STEPS: [&str; 12] = [
+pub const STEPS: [&str; 13] = [
     "refine",
     "plan",
     "plan-ready",
     "build",
     "review",
+    "open-pr",
     "ci",
     "fix-ci",
     "ready",

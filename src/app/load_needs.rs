@@ -133,7 +133,7 @@ fn write_item(
         intent: op.intent.clone(),
         held: op.held.clone(),
         step: view.and_then(|v| v.step.clone()).unwrap_or_default(),
-        turn_held: facts.held,
+        turn_held: facts.held || view.is_some_and(|v| v.kind.as_deref() == Some("act")),
     }
 }
 
@@ -157,6 +157,7 @@ fn flag_item(
         last,
         branch: view.branch.clone(),
         held: facts.held,
+        act: view.kind.as_deref() == Some("act"),
         stopped: view.flags.iter().any(|f| f.flag == STOPPED),
     })
 }

@@ -71,6 +71,7 @@ pub fn steps(step: &str) -> Vec<StepLine> {
             };
             let kind = match *id {
                 "plan-ready" => "human",
+                "open-pr" => "act",
                 "ci" | "ready" | "ci-review" | "ready-to-merge" => "wait",
                 "done" => "end",
                 _ => "turn",

@@ -2,8 +2,9 @@
 //! with the review team (`adapters/demo-review-team`): three agents that the adapter defines
 //! (two readers on Claude and one reader on Codex) review the branch in parallel, challenge the
 //! findings of each other, and the lead Reviewer fixes the kept findings. A commit of the lead
-//! sends the ticket back to the lanes, no commit sends it to CI, and the cap of the lanes stops
-//! a third round. Nothing calls the real `claude` or `codex`.
+//! sends the ticket back to the lanes, no commit sends it to the act step open-pr, which pushes
+//! the branch and opens the pull request before CI, and the cap of the lanes stops a third
+//! round. Nothing calls the real `claude` or `codex`.
 
 mod pipeline_support;
 
@@ -397,9 +398,25 @@ fn a_review_team_reviews_challenges_fixes_and_looks_again_at_the_new_head() {
         moves[0]["entry_head"],
         git(world.clone(), &["rev-parse", "HEAD~1"]).as_str()
     );
+    // Nothing left the machine: the build and the fix of the lead stay in the clone.
+    for verb in ["git.push", "pr.open"] {
+        assert!(
+            world
+                .ledger()
+                .operations_of(KEY, Some(verb))
+                .unwrap()
+                .is_empty(),
+            "no {verb} before the review ends with no commit"
+        );
+    }
+    assert!(world.world_json("prs.json")["prs"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 
     // The second round: the lane on Codex fails at its limit and falls back to Claude, and the
-    // lead makes no commit, so the ticket goes on to CI.
+    // lead makes no commit, so the ticket goes on to open-pr, which pushes and opens the pull
+    // request, and then to CI.
     world.tick_until("the ticket reaches ci", LONG, |w| {
         w.step().as_deref() == Some("ci")
     });
@@ -409,11 +426,37 @@ fn a_review_team_reviews_challenges_fixes_and_looks_again_at_the_new_head() {
         .filter(|e| e["from"] == "review")
         .collect();
     assert_eq!(moves.len(), 2, "{moves:?}");
-    assert_eq!(moves[1]["to"], "ci");
+    assert_eq!(moves[1]["to"], "open-pr");
     assert_eq!(moves[1]["how"], "on none");
     assert_eq!(moves[1]["way"], "none");
     assert_eq!(moves[1]["head"], head.as_str());
     assert_eq!(moves[1]["entry_head"], head.as_str());
+    let ops: Vec<(String, String)> = world
+        .ledger()
+        .operations_of(KEY, None)
+        .unwrap()
+        .into_iter()
+        .filter(|o| o.verb != "tracker.describe")
+        .map(|o| (o.verb, o.state))
+        .collect();
+    assert_eq!(
+        ops,
+        [
+            ("git.push".to_string(), "confirmed".to_string()),
+            ("pr.open".to_string(), "confirmed".to_string())
+        ],
+        "one push of the last head, then the pull request"
+    );
+    assert_eq!(world.acts_of("git.push"), 1);
+    assert_eq!(
+        git(
+            &world.world.join("remote.git"),
+            &["rev-parse", "refs/heads/vision/DEMO-12"]
+        ),
+        head,
+        "the fix of the lead is on the forge"
+    );
+    assert_eq!(world.world_json("prs.json")["prs"][0]["number"], 1);
     assert_eq!(world.counts()["entries"]["review-lanes"], 2);
     assert_eq!(step_turns(&world, "review").len(), 2);
     let fallback = events(&world, "fallback");

@@ -595,8 +595,9 @@ fn next(input: &Input, step: &str) -> Now {
             EntryState::Cannot(text) => format!("{label} cannot run: {}", cut_words(text, 60)),
             EntryState::Other(text) => format!("{label} is {text}"),
         }
-    } else if facts.held {
-        // The turn held its end facts, and each write after it is done.
+    } else if facts.held || kind == "act" {
+        // The turn held its end facts and each write after it is done, or each write of an
+        // act step is done.
         "the next pass moves it to its next step".to_string()
     } else if !facts.agents.is_empty() && facts.open_cards > 0 {
         // The last turn asked questions: its work is not tested before they have answers.
@@ -618,15 +619,21 @@ fn next(input: &Input, step: &str) -> Now {
         Pass::Paused => "The engine is paused. Press p on Home to start it again.",
         Pass::Off => "Vision is off, so nothing starts. Press K on Home to turn it on.",
     };
+    // An act step names its writes in their order: it runs no agent.
+    let rest = if kind == "act" && !facts.run.is_empty() {
+        format!(
+            "No agent works. The step runs {}.",
+            facts.run.join(", then ")
+        )
+    } else {
+        "No agent works, so this costs nothing.".to_string()
+    };
     let mut now = Now::new(
         Kind::Next,
         Tone::Wait,
         what.clone(),
         what,
-        vec![
-            pass.to_string(),
-            "No agent works, so this costs nothing.".into(),
-        ],
+        vec![pass.to_string(), rest],
     );
     now.spinner = matches!(input.pass, Pass::Runs | Pass::Waits);
     now.ready = ready;

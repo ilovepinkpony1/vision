@@ -61,7 +61,7 @@ pub struct Visit {
     pub turns: u32,
     /// The last commit at the entry. The end fact `commits` compares with it.
     pub base: Option<String>,
-    /// The kind of the step: turn, job, human, wait, or end.
+    /// The kind of the step: turn, job, human, wait, ask, check, act, or end.
     pub kind: String,
     /// The agent of a turn step.
     pub agent: Option<String>,
@@ -247,6 +247,10 @@ pub fn waits_on(step: &Step) -> String {
         StepKind::Job(job) => format!("job:{}", job.job),
         StepKind::Human(human) => format!("person:{}", human.action),
         StepKind::Wait(wait) => format!("watch:{}", wait.watch),
+        StepKind::Act(act) => {
+            let verbs: Vec<String> = act.run.iter().map(|e| e.label()).collect();
+            format!("verbs:{}", verbs.join(","))
+        }
         StepKind::End => "end".to_string(),
     }
 }

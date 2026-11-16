@@ -27,6 +27,7 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
             "plan-ready",
             "build",
             "review",
+            "open-pr",
             "ci",
             "fix-ci",
             "ready",
@@ -40,6 +41,7 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
     assert_eq!(adapter.end().id, "done");
     assert_eq!(adapter.branch_for(&key()), BRANCH);
     assert_eq!(adapter.base, "origin/main");
+    // Each write verb starts in the mode auto: no write waits for an approval.
     for verb in [
         "tracker.describe",
         "git.push",
@@ -48,10 +50,10 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
         "review.reply",
     ] {
         assert!(!adapter.verbs[verb].read, "{verb}");
+        assert_eq!(adapter.verbs[verb].mode, Mode::Auto, "{verb}");
     }
     assert!(adapter.verbs["tracker.issue"].read);
     assert!(adapter.verbs["git.push"].leaves);
-    assert_eq!(adapter.verbs["review.reply"].mode, Mode::Ask);
     for job in ["proof", "second-review"] {
         assert!(adapter.jobs.contains_key(job), "{job}");
     }
@@ -64,11 +66,22 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
         ("builder", TurnKind::Worker)
     );
     assert!(build.expects.contains(&Expect::Job("proof".into())));
-    let after: Vec<String> = build.after.iter().map(|e| e.label()).collect();
-    assert_eq!(after, ["git.push", "pr.open"]);
+    // Nothing leaves the machine before the review: the act step open-pr pushes the branch and
+    // opens the pull request after it.
+    assert!(build.after.is_empty(), "{:?}", build.after);
     let review = adapter.step("review").unwrap();
     assert_eq!(review.before[0].kind, EntryKind::Job);
     assert_eq!(review.cap.as_deref(), Some("review_rounds"));
+    assert!(review.after.is_empty(), "{:?}", review.after);
+    assert_eq!(review.next.as_deref(), Some("open-pr"));
+    let open = adapter.step("open-pr").unwrap();
+    let StepKind::Act(act) = &open.kind else {
+        panic!("open-pr is an act step: {open:?}")
+    };
+    let run: Vec<String> = act.run.iter().map(|e| e.label()).collect();
+    assert_eq!(run, ["git.push", "pr.open"]);
+    assert_eq!(act.run[1].args["text"], "{doc:pr.md}");
+    assert_eq!(open.next.as_deref(), Some("ci"));
     let ci = adapter.step("ci").unwrap();
     assert_eq!(ci.on["green"], "ready");
     assert_eq!(ci.on["red"], "fix-ci");
@@ -186,7 +199,7 @@ fn doctor_tests_that_the_adapter_of_the_project_loads() {
         .unwrap_or_else(|| panic!("no adapter line: {run:?}"));
     assert!(line.starts_with("ok"), "{line}");
     assert!(line.contains("demo from"), "{line}");
-    assert!(line.contains("12 steps, 6 verbs, 4 jobs"), "{line}");
+    assert!(line.contains("13 steps, 6 verbs, 4 jobs"), "{line}");
 
     let broken = home.user_home.join("broken");
     std::fs::create_dir_all(&broken).unwrap();

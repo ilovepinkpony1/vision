@@ -288,6 +288,7 @@ fn a_real_ticket_goes_through_the_whole_demo_path() {
         "plan-ready",
         "build",
         "review",
+        "open-pr",
         "ci",
         "ready",
         "comments",
@@ -299,6 +300,24 @@ fn a_real_ticket_goes_through_the_whole_demo_path() {
             &world,
             steps.iter().any(|s| s == step),
             "the path has no step {step}: {steps:?}"
+        );
+    }
+    // The order: the review comes before the act step open-pr, and the first push and the
+    // pull request are its operations, with no turn.
+    let review_at = steps.iter().position(|s| s == "review");
+    let open_at = steps.iter().position(|s| s == "open-pr");
+    check!(
+        &world,
+        matches!((review_at, open_at), (Some(r), Some(o)) if r < o),
+        "open-pr does not come after the review: {steps:?}"
+    );
+    let ops = world.ledger().operations_of(KEY, None).unwrap();
+    for verb in ["git.push", "pr.open"] {
+        let first = ops.iter().find(|o| o.verb == verb);
+        check!(
+            &world,
+            first.is_some_and(|o| o.source.as_deref() == Some("rule") && o.turn.is_none()),
+            "the first {verb} is not an operation of the act step open-pr: {first:?}"
         );
     }
 

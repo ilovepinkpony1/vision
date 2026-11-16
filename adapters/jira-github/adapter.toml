@@ -138,17 +138,23 @@
 # The path of a ticket. A wait step moves on a fact of observe, and the step qa moves on its
 # findings:
 #
-#   refine -> plan -> plan-ready -> build -> review -> ci
-#   ci:        green -> qa, red -> ci-rerun (the failed jobs run once more)
-#   ci-rerun:  green -> qa, red -> fix-ci -> ci
-#   qa:        a kept bug in qa.md -> fix-qa -> ci (each commit goes through CI, then QA
-#              again); no kept bug -> ready
+#   refine -> plan -> plan-ready -> build -> review -> qa
+#   qa:        QA on the local app. A kept bug in qa.md -> fix-qa -> review (each fix is
+#              reviewed and tested again); no kept bug -> open-pr
+#   open-pr:   an act step, with no turn: git.push pushes the branch, then pr.open opens the
+#              draft pull request with pr.md -> ci
+#   ci:        green -> ready, red -> ci-rerun (the failed jobs run once more)
+#   ci-rerun:  green -> ready, red -> fix-ci -> ci
 #   ready:     the person marks the pull request ready -> in-review
 #   in-review: review.state approved -> ready-to-merge, changes or comments -> comments,
 #              merged -> done
 #   comments -> ci-review: a commit of the comments goes through CI again; green -> in-review,
 #              red -> fix-ci
 #   ready-to-merge: merged -> done, changes or comments -> comments
+#
+# Nothing leaves the machine before the review and the local QA hold: the commits of build,
+# review, and fix-qa stay in the clone until open-pr. The steps after open-pr push their own
+# commits: fix-ci and comments name git.push in after.
 #
 # review.state is the first value that holds of: merged, closed, comments (a comment waits),
 # changes (a reviewer asks for changes and is not asked again), conflict (the open pull request
@@ -177,7 +183,7 @@
 # envs = [{ name = "staging", branch = "staging", deployment = "staging" }] in the [adapter]
 # table:
 #
-#   [[step]]                      # the step qa then has none = "deploy-staging" in its `on`
+#   [[step]]                      # ci and ci-rerun then have green = "deploy-staging" in `on`
 #   id = "deploy-staging"
 #   kind = "wait"
 #   start = [{ verb = "deploy", args = { env = "staging" } }]
@@ -206,8 +212,9 @@
 #   on = { findings = "fix-qa", none = "ready" }
 #   cap = "qa_fix"
 #
-# A bug on the env then goes the same way as a local bug: fix-qa, CI, QA on local, a new deploy
-# of the new commit, and QA on the env again.
+# A bug on the env then goes the same way as a local bug: fix-qa, the review, QA on local, the
+# push of open-pr, CI, a new deploy of the new commit, and QA on the env again. The deploy needs
+# the branch on GitHub, so the steps of an env come after open-pr.
 #
 # `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
 # merge happened, not that the env already runs the new code. `envs.staging.deployed` says
@@ -253,7 +260,6 @@ turn = "worker"
 before = [{ verb = "tracker.move", args = { status = "in_progress" } }]
 reads = ["approved-plan.md", "refine.md", "answers.md"]
 expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
-after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "review"
 
 [[step]]
@@ -264,9 +270,38 @@ turn = "worker"
 before = ["job:second-review"]
 reads = ["approved-plan.md", "second-review.md"]
 expects = ["clean", "doc:review.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
-after = ["git.push"]
 findings = "review"
 cap = "review_rounds"
+next = "qa"
+
+[[step]]
+id = "qa"
+kind = "turn"
+agent = "tester"
+turn = "tester"
+before = [{ job = "app-start", args = { env = "local" } }]
+reads = ["approved-plan.md", "app-local.json"]
+with = { env = "local" }
+expects = ["doc:qa.md"]
+findings = "qa"
+on = { findings = "fix-qa", none = "open-pr" }   # a kept bug of qa.md, or none
+cap = "qa_fix"
+
+[[step]]
+id = "fix-qa"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+reads = ["qa.md", "approved-plan.md"]
+with = { env = "local" }
+expects = ["clean", "doc:fix-notes.md"]
+cap = "qa_fix"
+next = "review"               # each fix is reviewed and tested again before the push
+
+[[step]]
+id = "open-pr"
+kind = "act"
+run = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "ci"
 
 [[step]]
@@ -274,7 +309,7 @@ id = "ci"
 kind = "wait"
 start = ["ci.run"]
 watch = "ci.state"
-on = { green = "qa", red = "ci-rerun" }
+on = { green = "ready", red = "ci-rerun" }
 wait = ["running", "none"]
 limit = 7200
 every = 60
@@ -284,7 +319,7 @@ id = "ci-rerun"
 kind = "wait"
 start = ["ci.rerun"]
 watch = "ci.state"
-on = { green = "qa", red = "fix-ci" }
+on = { green = "ready", red = "fix-ci" }
 wait = ["running", "none"]
 limit = 7200
 every = 60
@@ -299,31 +334,6 @@ reads = ["ci-log.txt", "approved-plan.md"]
 expects = ["commits", "clean", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
 after = ["git.push"]
 cap = "ci_fix"
-next = "ci"
-
-[[step]]
-id = "qa"
-kind = "turn"
-agent = "tester"
-turn = "tester"
-before = [{ job = "app-start", args = { env = "local" } }]
-reads = ["approved-plan.md", "app-local.json"]
-with = { env = "local" }
-expects = ["doc:qa.md"]
-findings = "qa"
-on = { findings = "fix-qa", none = "ready" }   # a kept bug of qa.md, or none
-cap = "qa_fix"
-
-[[step]]
-id = "fix-qa"
-kind = "turn"
-agent = "builder"
-turn = "worker"
-reads = ["qa.md", "approved-plan.md"]
-with = { env = "local" }
-expects = ["clean", "doc:fix-notes.md"]
-after = ["git.push"]
-cap = "qa_fix"
 next = "ci"
 
 [[step]]
@@ -385,13 +395,15 @@ id = "done"
 kind = "end"
 
 # The verbs. A verb with `leaves` sends text or code out, so the gates of the core run first.
+# Each write verb starts in the mode auto: Vision asks for no approval. `vision demote VERB`
+# moves a verb down the ladder, such as to the mode ask, and [modes] of config.toml keeps it.
 
 [verbs."tracker.describe"]
 mode = "auto"
 leaves = true
 
 [verbs."tracker.move"]
-mode = "ask"
+mode = "auto"
 once = true                   # one move for each status in a ticket, whatever the commit
 
 [verbs."git.push"]
@@ -412,16 +424,16 @@ mode = "auto"
 timeout = 120
 
 [verbs.deploy]
-mode = "ask"
+mode = "auto"
 leaves = true
 timeout = 120
 
 [verbs."review.reply"]
-mode = "ask"
+mode = "auto"
 leaves = true
 
 [verbs."review.rerequest"]
-mode = "ask"
+mode = "auto"
 
 # review.resolve resolves each review thread that verdicts.json settles. A row settles its
 # comment with `settle`: true, "resolved", or "outdated". The verb touches a thread only when
@@ -431,14 +443,14 @@ mode = "ask"
 # comment has no thread, so the verb leaves it out. A step runs it after review.reply:
 #   { verb = "review.resolve", args = { verdicts = "{doc:verdicts.json}" } }
 [verbs."review.resolve"]
-mode = "ask"
+mode = "auto"
 
 # review.minimize hides each comment that verdicts.json settles: an inline comment, a review, or
 # a conversation comment. GitHub shows it as outdated for "outdated", and as resolved for true
 # and "resolved". The verb touches a comment only when its author is a bot. It refuses each
 # other comment, and its answer names that comment. It takes the same args as review.resolve.
 [verbs."review.minimize"]
-mode = "ask"
+mode = "auto"
 
 # The read verbs that a turn can ask for. Each answer carries its result as a document.
 

@@ -2,13 +2,15 @@
 //! tick` on the demo adapter with the investigation path (`adapters/demo-investigate`): the kind
 //! of a ticket, the steps that `when` skips, a team of members in parallel, the Codex runner
 //! through the fake `codex` with a fallback to Claude, the ask step with one batch of cards, the
-//! amend, the reproduction gate, and `vision kind`. Nothing calls the real `claude` or `codex`.
+//! amend, the reproduction gate, and `vision kind`. A chore goes on through the build and the
+//! review to the act step open-pr, which pushes and opens the pull request only then. Nothing
+//! calls the real `claude` or `codex`.
 
 mod pipeline_support;
 
 use std::time::Duration;
 
-use pipeline_support::{demo_dir, ends_with, result, World, KEY};
+use pipeline_support::{demo_dir, ends_with, plan_hash_of, result, runs_then, World, KEY};
 use serde_json::{json, Value};
 
 /// Writes the private copy of the investigation path in the home, as the adapter `demo`.
@@ -680,7 +682,7 @@ fn a_bug_that_did_not_reproduce_goes_back_and_a_drop_stops_for_the_person() {
 }
 
 #[test]
-fn a_chore_from_vision_kind_runs_scope_and_reaches_the_plan_approval() {
+fn a_chore_from_vision_kind_runs_scope_and_opens_the_pull_request_after_the_review() {
     let world = world_of("Story");
     world.scenario(
         "scope",
@@ -739,6 +741,64 @@ fn a_chore_from_vision_kind_runs_scope_and_reaches_the_plan_approval() {
         .collect();
     assert_eq!(skipped, ["critic", "reproduced"], "{skipped:?}");
     assert_eq!(world.turns_of("critic-narrow"), 1);
+    assert!(world.flags().is_empty(), "{:?}", world.flags());
+
+    // From the plan on, the path is that of the demo: the build and the review keep their
+    // commits in the clone, and the act step open-pr pushes the branch and opens the pull
+    // request after the review.
+    world.scenario(
+        "builder",
+        "build",
+        json!([runs_then(
+            "printf '# The functions of the toy calculator.\\n' >> calc.py && git commit -q -am 'Comment calc.py'",
+            result("Built.", &[("pr.md", "Comment calc.py\n\nA chore.")])
+        )]),
+    );
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([ends_with(result(
+            "Reviewed.",
+            &[("review.md", "# Review\n\n## Findings\n\nNone.\n")]
+        ))]),
+    );
+    let shown = world.run(&["plan", KEY]);
+    shown.expect_code(0);
+    world
+        .run(&["approve-plan", KEY, &plan_hash_of(&shown.stdout)])
+        .expect_code(0);
+    tick_to(&world, "open-pr");
+    assert_eq!(world.turns_of("review"), 1);
+    for verb in ["git.push", "pr.open"] {
+        assert!(
+            world
+                .ledger()
+                .operations_of(KEY, Some(verb))
+                .unwrap()
+                .is_empty(),
+            "no {verb} before the review held"
+        );
+        assert_eq!(world.acts_of(verb), 0, "{verb}");
+    }
+    tick_to(&world, "ci");
+    let ops: Vec<String> = world
+        .ledger()
+        .operations_of(KEY, None)
+        .unwrap()
+        .into_iter()
+        .filter(|o| o.state == "confirmed")
+        .map(|o| o.verb)
+        .filter(|v| v == "git.push" || v == "pr.open")
+        .collect();
+    assert_eq!(
+        ops,
+        ["git.push", "pr.open"],
+        "the push, then the pull request"
+    );
+    assert_eq!(
+        world.world_json("prs.json")["prs"][0]["title"],
+        "Comment calc.py"
+    );
     assert!(world.flags().is_empty(), "{:?}", world.flags());
 }
 

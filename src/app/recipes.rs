@@ -345,7 +345,7 @@ pub fn retry(id: u64, item: &FlagItem, paused: bool) -> Chain {
             format!("{key} is still paused."),
         )
     } else {
-        let label = if item.held {
+        let label = if item.held || item.act {
             format!("run the writes of the step {step} of {key} again")
         } else {
             format!("start the step {step} of {key} again")

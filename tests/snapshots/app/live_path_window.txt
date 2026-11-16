@@ -9,11 +9,11 @@
  ✓ plan-ready      2m      │ ACTIVITY ─────────────────────────────────── │ to you                0
  ⠦ build               6:00│ 14:05:31 step  moves from plan to plan-ready │ by memory             1
  ○ review                  │ 14:20:00 you   approved the plan             │ by the Judge          0
- ○ ci                      │ 14:20:01 step  moves from plan-ready to bui… │ MARKS
- ○ fix-ci                  │ 14:24:00 turn  builder starts a turn at the… │ plan          3f2a1b4 ✓
- ○ ready                   │ 14:24:01 start the session starts with clau… │ proof                 -
- ○ comments                │ 14:24:05 read  src/report/export.py          │ CI                    -
-   ↓ 9 more                │ 14:24:12 find  "def export_month" in src     │ PR                    -
+ ○ open-pr                 │ 14:20:01 step  moves from plan-ready to bui… │ MARKS
+ ○ ci                      │ 14:24:00 turn  builder starts a turn at the… │ plan          3f2a1b4 ✓
+ ○ fix-ci                  │ 14:24:01 start the session starts with clau… │ proof                 -
+ ○ ready                   │ 14:24:05 read  src/report/export.py          │ CI                    -
+   ↓ 10 more               │ 14:24:12 find  "def export_month" in src     │ PR                    -
                            │ 14:24:20 says  The export writes each row by │ LIMITS
  TEAM                      │                hand. I add a CSV writer and  │ 5h ━━━━━━━━━━ 31% of 60
  ✓ scout     fable-5-2 high│                keep the order of the columns │    resets at 18:00

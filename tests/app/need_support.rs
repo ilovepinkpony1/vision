@@ -131,6 +131,7 @@ pub fn flag_item(stopped: bool) -> FlagItem {
         last: Some("builder".into()),
         branch: Some("vision/DEMO-12".into()),
         held: false,
+        act: false,
         stopped,
     }
 }

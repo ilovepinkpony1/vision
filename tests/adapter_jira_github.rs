@@ -72,11 +72,12 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
             "plan-ready",
             "build",
             "review",
+            "qa",
+            "fix-qa",
+            "open-pr",
             "ci",
             "ci-rerun",
             "fix-ci",
-            "qa",
-            "fix-qa",
             "ready",
             "in-review",
             "comments",
@@ -99,23 +100,31 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
 #[test]
 fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
     let adapter = load();
-    for (verb, mode) in [
-        ("tracker.describe", Mode::Auto),
-        ("git.push", Mode::Auto),
-        ("pr.open", Mode::Auto),
-        ("ci.run", Mode::Auto),
-        ("ci.rerun", Mode::Auto),
-        ("tracker.move", Mode::Ask),
-        ("deploy", Mode::Ask),
-        ("review.reply", Mode::Ask),
-        ("review.rerequest", Mode::Ask),
-        ("review.resolve", Mode::Ask),
-        ("review.minimize", Mode::Ask),
+    // Each write verb starts in the mode auto: no write waits for an approval.
+    for verb in [
+        "tracker.describe",
+        "git.push",
+        "pr.open",
+        "ci.run",
+        "ci.rerun",
+        "tracker.move",
+        "deploy",
+        "review.reply",
+        "review.rerequest",
+        "review.resolve",
+        "review.minimize",
     ] {
         let spec = &adapter.verbs[verb];
-        assert_eq!(spec.mode, mode, "{verb}");
+        assert_eq!(spec.mode, Mode::Auto, "{verb}");
         assert!(!spec.read, "{verb}");
     }
+    let writes: BTreeSet<&str> = adapter
+        .verbs
+        .values()
+        .filter(|v| !v.read)
+        .map(|v| v.name.as_str())
+        .collect();
+    assert_eq!(writes.len(), 11, "{writes:?}");
     for verb in ["review.resolve", "review.minimize"] {
         assert!(
             !adapter.verbs[verb].leaves,
@@ -238,11 +247,16 @@ fn the_steps_name_their_documents_and_their_evidence() {
     assert_eq!(refine.after[0].args["seen"], "{doc:issue.json}");
     let build = step("build");
     assert!(build.expects.contains(&Expect::Job("proof".into())));
-    assert_eq!(build.after[1].args["text"], "{doc:pr.md}");
+    // Nothing leaves the machine before the review and the local QA hold: the build, the
+    // review, and the fix of QA push nothing, and the act step open-pr comes after QA.
+    assert!(build.after.is_empty(), "{:?}", build.after);
+    assert_eq!(build.next.as_deref(), Some("review"));
     let StepKind::Turn(review) = &step("review").kind else {
         panic!("review is a turn step")
     };
     assert_eq!(review.findings.as_deref(), Some("review"));
+    assert!(step("review").after.is_empty());
+    assert_eq!(step("review").next.as_deref(), Some("qa"));
     let qa = step("qa");
     let StepKind::Turn(turn) = &qa.kind else {
         panic!("qa is a turn step")
@@ -252,11 +266,35 @@ fn the_steps_name_their_documents_and_their_evidence() {
     assert_eq!(turn.with["env"], "local");
     assert_eq!(qa.before[0].kind, EntryKind::Job);
     assert_eq!(qa.before[0].name, "app-start");
-    // QA moves on its findings; a fix goes through CI, and then through QA again.
+    // QA moves on its findings; a fix goes through the review, and then through QA again.
     assert_eq!(qa.next, None);
     assert_eq!(qa.on["findings"], "fix-qa");
-    assert_eq!(qa.on["none"], "ready");
-    assert_eq!(step("fix-qa").next.as_deref(), Some("ci"));
+    assert_eq!(qa.on["none"], "open-pr");
+    let fix = step("fix-qa");
+    assert!(
+        fix.after.is_empty(),
+        "the fix of QA pushes nothing: {:?}",
+        fix.after
+    );
+    assert_eq!(fix.next.as_deref(), Some("review"));
+    // The act step pushes the branch and opens the pull request, and CI comes after it.
+    let open = step("open-pr");
+    let StepKind::Act(act) = &open.kind else {
+        panic!("open-pr is an act step: {open:?}")
+    };
+    let run: Vec<String> = act.run.iter().map(|e| e.label()).collect();
+    assert_eq!(run, ["git.push", "pr.open"]);
+    assert_eq!(act.run[1].args["text"], "{doc:pr.md}");
+    assert_eq!(open.next.as_deref(), Some("ci"));
+    for id in ["ci", "ci-rerun"] {
+        assert_eq!(step(id).on["green"], "ready", "{id}");
+    }
+    assert_eq!(step("ci").on["red"], "ci-rerun");
+    assert_eq!(step("ci-rerun").on["red"], "fix-ci");
+    // The steps after the pull request exists push their own commits.
+    for id in ["fix-ci", "comments"] {
+        assert_eq!(step(id).after[0].name, "git.push", "{id}");
+    }
     // Each wait step names the values that mean "not yet", and has a limit.
     for wait in adapter
         .steps

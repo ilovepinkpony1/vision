@@ -64,6 +64,26 @@ fn needs(world: &World) -> Vec<Value> {
     status(world)["needs"].as_array().unwrap().clone()
 }
 
+/// The commit of the branch of DEMO-12 on the forge of the demo world, or `None` before the
+/// first push.
+fn remote_branch(world: &World) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(world.world.join("remote.git"))
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "refs/heads/vision/DEMO-12",
+        ])
+        .output()
+        .unwrap();
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 #[test]
 fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
     let world = World::new();
@@ -264,7 +284,7 @@ fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
     world.run(&["approve-plan", KEY, &hash]).expect_code(0);
     assert_eq!(world.doc("approved-plan.md").as_deref(), Some(PLAN));
 
-    // The build: a commit, pr.md, the proof, the push, and the pull request.
+    // The build: a commit, pr.md, and the proof. The commit stays in the clone.
     world.tick_to("review");
     let build_turns: Vec<_> = world
         .turns()
@@ -278,36 +298,96 @@ fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
         world.doc("proof.txt").is_some(),
         "the proof job wrote its log"
     );
-    let prs = world.world_json("prs.json");
-    assert_eq!(prs["prs"][0]["number"], 1);
-    assert_eq!(prs["prs"][0]["title"], "Add subtract to the calculator");
-    assert_eq!(prs["prs"][0]["body"], "The calculator can subtract now.");
-    assert_eq!(world.row().unwrap().pr, Some(1));
     let head = pipeline_support::git(world.clone(), &["rev-parse", "HEAD"]);
-    let remote = pipeline_support::git(
-        &world.world.join("remote.git"),
-        &["rev-parse", "refs/heads/vision/DEMO-12"],
+    assert_eq!(
+        remote_branch(&world),
+        None,
+        "nothing leaves the machine before the review"
     );
-    assert_eq!(head, remote, "the branch is on the forge");
     let diff = world.run(&["diff", KEY, "--json"]);
     diff.expect_code(0);
-    assert_eq!(diff.json()["commits"], json!([]), "{diff:?}");
+    assert_eq!(
+        diff.json()["commits"][0]["commit"],
+        head.as_str(),
+        "{diff:?}"
+    );
 
-    // The review step, then a red CI run and the fix.
-    world.tick_to("fix-ci");
+    // The review step: the before job, the review, and its findings. Still nothing leaves.
+    world.tick_to("open-pr");
     assert!(
         world.doc("second-review.md").is_some(),
         "the before job ran"
     );
     assert!(world.doc("review.md").is_some());
+    let review_turns: Vec<_> = world
+        .turns()
+        .into_iter()
+        .filter(|t| t.0 == "review")
+        .collect();
+    assert_eq!(review_turns.len(), 1);
+    assert_eq!(review_turns[0].3.as_deref(), Some("held"));
     let findings = world.ledger().findings_of(KEY).unwrap();
     assert_eq!(findings.len(), 2, "{findings:?}");
     assert!(findings.iter().all(|f| f.source == "review"));
     assert_eq!(findings[1].reason_code.as_deref(), Some("style_only"));
+    for verb in ["git.push", "pr.open"] {
+        assert!(
+            world
+                .ledger()
+                .operations_of(KEY, Some(verb))
+                .unwrap()
+                .is_empty(),
+            "no {verb} before the review held"
+        );
+        assert_eq!(world.acts_of(verb), 0, "{verb}");
+    }
+    assert!(world.world_json("prs.json")["prs"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let view = ticket_status(&world);
+    assert_eq!(view["kind"], "act");
+    assert_eq!(view["now"], "next: git.push");
+
+    // The act step open-pr: the push, then the pull request, and no turn.
+    world.tick_to("ci");
+    let ops: Vec<(String, String)> = world
+        .ledger()
+        .operations_of(KEY, None)
+        .unwrap()
+        .into_iter()
+        .filter(|o| o.verb != "tracker.describe")
+        .map(|o| (o.verb, o.state))
+        .collect();
+    assert_eq!(
+        ops,
+        [
+            ("git.push".to_string(), "confirmed".to_string()),
+            ("pr.open".to_string(), "confirmed".to_string())
+        ],
+        "the push comes first, then the pull request"
+    );
+    assert_eq!(world.turns_of("open-pr"), 0);
+    let prs = world.world_json("prs.json");
+    assert_eq!(prs["prs"][0]["number"], 1);
+    assert_eq!(prs["prs"][0]["title"], "Add subtract to the calculator");
+    assert_eq!(prs["prs"][0]["body"], "The calculator can subtract now.");
+    assert_eq!(world.row().unwrap().pr, Some(1));
+    assert_eq!(
+        remote_branch(&world).as_deref(),
+        Some(head.as_str()),
+        "the branch is on the forge"
+    );
+    let diff = world.run(&["diff", KEY, "--json"]);
+    diff.expect_code(0);
+    assert_eq!(diff.json()["commits"], json!([]), "{diff:?}");
+
+    // A red CI run and the fix.
+    world.tick_to("fix-ci");
     assert_eq!(
         world.acts_of("git.push"),
         1,
-        "the review made no commit, so no second push"
+        "the review made no commit, so open-pr pushed one head"
     );
     let checks = world.ledger().checks_of(KEY, Some(&head)).unwrap();
     assert!(
@@ -338,28 +418,17 @@ fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
         "--author",
         "someone",
     ]);
-    world.tick_until("the approval of the reply", Duration::from_secs(60), |w| {
-        needs(w).iter().any(|n| n["kind"] == "operation")
-    });
-    assert_eq!(world.step().as_deref(), Some("comments"));
+    // review.reply is in the mode auto: the reply goes out with no approval.
+    world.tick_to("ci-review");
     let reviews = world.ledger().review_rows_after(0, 10).unwrap();
     assert_eq!(reviews.len(), 1);
     assert_eq!(reviews[0].comment_id, Some(1));
     assert_eq!(reviews[0].verdict.as_deref(), Some("incorrect"));
     assert_eq!(reviews[0].reviewer.as_deref(), Some("someone"));
-    let reply = needs(&world)
-        .into_iter()
-        .find(|n| n["kind"] == "operation")
-        .unwrap();
-    let id = reply["id"].as_str().unwrap().to_string();
-    let (verb, commit) = id.split_once(' ').unwrap();
-    assert_eq!(verb, "review.reply");
-    assert_eq!(
-        ticket_status(&world)["now"],
-        "waits for your approval of review.reply. Run `vision needs`",
-        "the turn ended well, so the column names the after verb"
+    assert!(
+        needs(&world).iter().all(|n| n["kind"] != "operation"),
+        "no write waits for an approval"
     );
-    world.run(&["approve", KEY, verb, commit]).expect_code(0);
     let prs = world.world_json("prs.json");
     assert_eq!(
         prs["prs"][0]["comments"][0]["replies"][0]["body"],
@@ -392,6 +461,7 @@ fn a_ticket_goes_from_the_tracker_to_a_merged_pull_request() {
             "plan-ready",
             "build",
             "review",
+            "open-pr",
             "ci",
             "fix-ci",
             "ci",

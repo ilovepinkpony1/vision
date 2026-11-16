@@ -29,7 +29,7 @@ pub struct LastTurn {
     pub end_fact: Option<String>,
 }
 
-/// The state of one entry of `after` or `start`.
+/// The state of one entry of `after`, `start`, or `run`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpFact {
     /// The executor has no operation of it at the commit of now.
@@ -54,6 +54,8 @@ pub enum Refused {
 pub enum List {
     After,
     Start,
+    /// `run` of an act step.
+    Run,
 }
 
 /// The facts of the step of one ticket.
@@ -105,6 +107,10 @@ pub enum KindFacts {
         /// The local time (such as `09:00`) of `from` while it is still to come: the step
         /// does nothing before it.
         until: Option<String>,
+    },
+    /// An act step: the entries of `run`, in order, with their label.
+    Act {
+        run: Vec<(String, OpFact)>,
     },
     End {
         finished: bool,
@@ -193,7 +199,7 @@ pub enum Next {
     },
     /// Serve the read verbs of a turn that ended with requests, then resume its session.
     Serve { turn: String, session: String },
-    /// Request the entry `index` of `after` or `start` through the executor.
+    /// Request the entry `index` of `after`, `start`, or `run` through the executor.
     Request { list: List, index: usize },
     /// Run the job of a job step.
     RunJob,
@@ -340,6 +346,16 @@ pub fn decide(facts: &Facts) -> Next {
                 "it waits for {watch}, which is {}",
                 watched.as_deref().unwrap_or("not observed yet")
             ))
+        }
+        KindFacts::Act { run } => {
+            // The cap counts the entries into the step: an entry above it runs no verb. The
+            // entry number does not change in a visit, so the test holds at each tick.
+            let cap = facts.cap.as_ref().map(|(_, v)| *v);
+            if cap_exceeded(facts.n, cap, facts.skip_cap) {
+                let (name, value) = facts.cap.clone().unwrap_or_default();
+                return flag(cap_text(&facts.step, &name, value, facts.n, &facts.open));
+            }
+            after_next(facts, List::Run, run)
         }
         KindFacts::End { finished } => {
             if *finished {
@@ -1409,6 +1425,142 @@ kind = "end"
                 index: 0
             }
         );
+    }
+
+    /// The facts of the act step `open-pr` with these entries of `run`, and `ci` as its next.
+    fn act_facts(run: Vec<(String, OpFact)>) -> Facts {
+        let mut facts = turn_facts(None, Vec::new());
+        facts.step = "open-pr".into();
+        facts.next = Some("ci".into());
+        facts.kind = KindFacts::Act { run };
+        facts
+    }
+
+    #[test]
+    fn an_act_step_requests_each_verb_of_run_in_order_then_moves() {
+        let run = |push: OpFact, open: OpFact| {
+            decide(&act_facts(vec![
+                ("git.push".to_string(), push),
+                ("pr.open".to_string(), open),
+            ]))
+        };
+        let confirmed = || known(Outcome::Confirmed);
+        assert_eq!(
+            run(OpFact::NotAsked, OpFact::NotAsked),
+            Next::Request {
+                list: List::Run,
+                index: 0
+            }
+        );
+        assert_eq!(
+            run(known(Outcome::Pending), OpFact::NotAsked),
+            Next::Request {
+                list: List::Run,
+                index: 0
+            },
+            "a pending verb is judged again in the mode of now"
+        );
+        assert_eq!(
+            run(confirmed(), OpFact::NotAsked),
+            Next::Request {
+                list: List::Run,
+                index: 1
+            }
+        );
+        assert_eq!(
+            run(confirmed(), confirmed()),
+            Next::Move {
+                to: "ci".into(),
+                how: "next".into()
+            }
+        );
+        // A verb that waits for the person, runs, or is uncertain holds the ticket.
+        assert!(matches!(
+            run(confirmed(), known(Outcome::Waiting { command: "vision approve DEMO-12 pr.open abc".into() })),
+            Next::Nothing(t) if t.contains("pr.open waits for the approval: vision approve DEMO-12 pr.open abc")
+        ));
+        assert!(
+            matches!(run(known(Outcome::Executing), OpFact::NotAsked), Next::Nothing(t) if t == "git.push runs")
+        );
+        assert!(
+            matches!(run(known(Outcome::Uncertain), OpFact::NotAsked), Next::Nothing(t) if t.contains("uncertain"))
+        );
+        // A mode, a gate, a failure, or a missing document stops the ticket with the reason of
+        // an `after` verb.
+        assert!(is_flag(
+            &run(confirmed(), known(Outcome::Held)),
+            NEEDS_YOU,
+            "pr.open is held: the detail"
+        ));
+        assert!(is_flag(
+            &run(confirmed(), known(Outcome::Shadowed)),
+            NEEDS_YOU,
+            "pr.open is in the mode shadow: the detail"
+        ));
+        assert!(is_flag(
+            &run(
+                known(Outcome::Refused {
+                    gate: "secrets".into()
+                }),
+                OpFact::NotAsked
+            ),
+            NEEDS_YOU,
+            "git.push was refused by the secrets gate: the detail"
+        ));
+        assert!(is_flag(
+            &run(confirmed(), known(Outcome::Failed)),
+            NEEDS_YOU,
+            "pr.open failed: the detail"
+        ));
+        assert!(is_flag(
+            &run(
+                confirmed(),
+                OpFact::BadArgs(
+                    "pr.open: an argument names the document pr.md, which the ticket folder does not have".into()
+                )
+            ),
+            NEEDS_YOU,
+            "the document pr.md"
+        ));
+        // The same facts in the `after` list of a turn that held give the same answers.
+        let after = decide(&turn_facts(
+            Some(turn(TurnStatus::Done, Some("result"), Some("held"))),
+            vec![
+                ("git.push".to_string(), confirmed()),
+                ("pr.open".to_string(), known(Outcome::Failed)),
+            ],
+        ));
+        assert_eq!(after, run(confirmed(), known(Outcome::Failed)));
+        // A step whose next is missing cannot move.
+        let mut facts = act_facts(vec![("git.push".to_string(), confirmed())]);
+        facts.next = None;
+        assert!(is_flag(&decide(&facts), NEEDS_YOU, "has no next step"));
+    }
+
+    #[test]
+    fn an_act_step_above_its_cap_runs_no_verb() {
+        let mut facts = act_facts(vec![("git.push".to_string(), OpFact::NotAsked)]);
+        facts.cap = Some(("2".into(), 2));
+        facts.n = 2;
+        assert!(matches!(decide(&facts), Next::Request { .. }));
+        facts.n = 3;
+        assert!(is_flag(
+            &decide(&facts),
+            NEEDS_YOU,
+            "the step open-pr reached its cap 2 = 2: this is entry 3. Nothing open is listed"
+        ));
+        // Each verb of an earlier visit at the same commit is confirmed: the cap still holds.
+        facts.kind = KindFacts::Act {
+            run: vec![("git.push".to_string(), known(Outcome::Confirmed))],
+        };
+        assert!(is_flag(&decide(&facts), NEEDS_YOU, "reached its cap"));
+        // The person lets it go on with vision retry, which does not count as an entry.
+        facts.skip_cap = true;
+        assert!(matches!(decide(&facts), Next::Move { .. }));
+        // A flag or a running turn starts nothing, as for each kind of step.
+        let mut flagged = act_facts(vec![("git.push".to_string(), OpFact::NotAsked)]);
+        flagged.flags = vec![NEEDS_YOU.into()];
+        assert!(matches!(decide(&flagged), Next::Nothing(_)));
     }
 
     #[test]

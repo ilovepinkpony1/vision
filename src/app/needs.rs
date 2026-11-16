@@ -106,7 +106,8 @@ pub struct WriteItem {
     pub held: Vec<String>,
     /// The step of the ticket now.
     pub step: String,
-    /// The turn of the step held its end facts, so a retry runs only its writes again.
+    /// A retry runs only the writes of the step again: its turn held its end facts, or it is
+    /// an act step, which runs no turn.
     pub turn_held: bool,
 }
 
@@ -126,6 +127,8 @@ pub struct FlagItem {
     pub branch: Option<String>,
     /// The turn of the step held its end facts, so a retry runs only its writes again.
     pub held: bool,
+    /// The step is an act step: it runs no turn, so a retry runs only its writes again.
+    pub act: bool,
     pub stopped: bool,
 }
 

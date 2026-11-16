@@ -284,6 +284,7 @@ fn retry_card(app: &mut App) {
         agent: data.facts.agent.clone(),
         paused,
         held: data.facts.held,
+        act: data.view.kind.as_deref() == Some("act"),
         reason,
         run: Run::Idle,
     };

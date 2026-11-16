@@ -6,23 +6,23 @@
  ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
  ⠸ build               6:00│   ▀▀▀▀▀▀▀  ⠸ 6:00 · 5 tool calls                       │ commits    none to push
  ○ review                  │                                                        │
- ○ ci                      │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
- ○ fix-ci        ╭─ Stop DEMO-12 ───────────────────────────────────────────────────────────╮               0
- ○ ready         │                                                                          │ry             1
- ○ comments      │  Stop DEMO-12?                                                           │Judge          0
- ○ ci-review     │                                                                          │
- ○ ready-to-merge│  The running turn of builder ends now. The ticket keeps its step         │
- ○ done          │  build and the branch vision/DEMO-12, and its clone is free for          │       3f2a1b4 ✓
-                 │  another ticket. No new turn starts until you resume it.                 │               -
- TEAM            │                                                                          │               -
- ✓ scout     fabl│  Later, Enter on the stopped ticket starts it again at the same step.    │               -
- ● builder   opus│                                                                          │
- · reviewer  opus│  enter stop    esc cancel                                                │
- · tester    opus│                                                                          │━━━━━━ 31% of 60
- · shepherd  opus╰──────────────────────────────────────────────────────────────────────────╯ts at 18:00
- · judge     fable-5-2 high│                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
- · curator   fable-5-2 high│                the columns that the plan names.        │
-                           │ 14:24:35 edit  src/report/export.py                    │ ENGINE
+ ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ ci            ╭─ Stop DEMO-12 ───────────────────────────────────────────────────────────╮               0
+ ○ fix-ci        │                                                                          │ry             1
+ ○ ready         │  Stop DEMO-12?                                                           │Judge          0
+ ○ comments      │                                                                          │
+ ○ ci-review     │  The running turn of builder ends now. The ticket keeps its step         │
+ ○ ready-to-merge│  build and the branch vision/DEMO-12, and its clone is free for          │       3f2a1b4 ✓
+ ○ done          │  another ticket. No new turn starts until you resume it.                 │               -
+                 │                                                                          │               -
+ TEAM            │  Later, Enter on the stopped ticket starts it again at the same step.    │               -
+ ✓ scout     fabl│                                                                          │
+ ● builder   opus│  enter stop    esc cancel                                                │
+ · reviewer  opus│                                                                          │━━━━━━ 31% of 60
+ · tester    opus╰──────────────────────────────────────────────────────────────────────────╯ts at 18:00
+ · shepherd  opus-5-5 high │                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
+ · judge     fable-5-2 high│                the columns that the plan names.        │
+ · curator   fable-5-2 high│ 14:24:35 edit  src/report/export.py                    │ ENGINE
                            │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 2s ago
                            │ 14:25:03 says  3 tests pass. I add a test for an empty │
                            │                month next.                             │

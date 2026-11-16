@@ -3,8 +3,12 @@
 #
 #   refine -> plan -> plan-ready -> build -> review-lanes -> review-challenge -> review
 #   review:    a commit of the lead -> review-lanes (a fresh look at the new head)
-#              no commit            -> ci
+#              no commit            -> open-pr
+#   open-pr:   an act step, with no turn: git.push, then pr.open -> ci
 #   ci and the rest: as in the demo
+#
+# The commits of the build and of the lead stay in the clone until open-pr: nothing leaves the
+# machine before the review ends with no commit.
 #
 # The adapter defines its own agents in [agents]: three review lanes, each with its role file
 # in roles/. Two lanes run on Claude, and one runs on Codex, so a second model reads the diff
@@ -18,9 +22,12 @@
 #   adapter) judges each finding with its votes, opens each file, fixes the findings that it
 #   keeps, and commits. cr.md holds only the findings that are still open, and the gate cr reads
 #   it. cr-fixed.md names each fix. When the lead made a commit, the ticket goes back to
-#   review-lanes for a fresh look; when it made none, the ticket goes on to ci.
+#   review-lanes for a fresh look; when it made none, the ticket goes on to open-pr.
 #
 # The cap of review-lanes bounds the rounds: its third entry needs the person.
+#
+# Each write verb is in the mode auto, so no write waits for the person. `vision demote VERB`
+# moves a verb down the ladder, such as to the mode ask.
 
 name = "demo-review-team"
 branch = "vision/{key}"
@@ -76,7 +83,6 @@ agent = "builder"
 turn = "worker"
 reads = ["approved-plan.md", "refine.md", "answers.md"]
 expects = ["commits", "clean", "doc:pr.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
-after = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
 next = "review-lanes"
 
 [[step]]
@@ -112,8 +118,13 @@ reads = ["approved-plan.md", "second-review.md",
          "findings-cr-correctness.md", "findings-cr-design.md", "findings-cr-codex.md",
          "challenge-cr-correctness.md", "challenge-cr-design.md", "challenge-cr-codex.md"]
 expects = ["clean", { gate = "cr", doc = "cr.md" }, "doc:cr-fixed.md"]
-after = ["git.push"]
-on = { commits = "review-lanes", none = "ci" }
+on = { commits = "review-lanes", none = "open-pr" }
+
+[[step]]
+id = "open-pr"
+kind = "act"
+run = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
+next = "ci"
 
 [[step]]
 id = "ci"
@@ -197,7 +208,7 @@ leaves = true
 mode = "auto"
 
 [verbs."review.reply"]
-mode = "ask"
+mode = "auto"
 leaves = true
 
 [verbs."tracker.issue"]

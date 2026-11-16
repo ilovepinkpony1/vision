@@ -7,7 +7,7 @@ use vision::app::live::StepLine;
 use vision::app::model::App;
 use vision::app::msg::{ChildResult, Key, Msg};
 use vision::pipeline::commands::{DiffCommit, DiffView, PlanView};
-use vision::pipeline::facts::{Checks, LimitFact, TurnFact, WaitFacts};
+use vision::pipeline::facts::{Checks, EntryFact, EntryState, LimitFact, TurnFact, WaitFacts};
 use vision::running::Running;
 
 use super::live_support::*;
@@ -127,6 +127,22 @@ fn the_next_step_starts_at_the_next_pass() {
     // The minute passes, so a pass runs now and the spinner moves.
     send(&mut app, 61.0, Msg::Tick);
     check("live_next", &app);
+}
+
+#[test]
+fn an_act_step_names_the_write_that_runs_next() {
+    let mut held = resting("open-pr");
+    held.view.kind = Some("act".into());
+    held.view.pr = None;
+    held.facts.agent = None;
+    held.facts.run = vec!["git.push".into(), "pr.open".into()];
+    held.facts.entry = Some(EntryFact {
+        label: "pr.open".into(),
+        before: false,
+        state: EntryState::Next,
+    });
+    let app = live(SIZE, vec![held], Vec::new(), Vec::new());
+    check("live_act", &app);
 }
 
 #[test]

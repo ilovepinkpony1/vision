@@ -41,8 +41,12 @@ pub struct StateFacts {
     /// The last turn of the visit held its end facts, so a retry runs the writes of the step
     /// again instead of a new turn.
     pub held: bool,
-    /// The first `before` or `after` entry of the step that is not done.
+    /// The first `before` or `after` entry of the step that is not done, or the first entry of
+    /// `run` of an act step.
     pub entry: Option<EntryFact>,
+    /// An act step: the label of each entry of `run`, in order, such as `git.push`. Empty for
+    /// each other kind of step.
+    pub run: Vec<String>,
     /// The cards of the ticket that wait for an answer.
     pub open_cards: usize,
     /// The verb of an operation of the ticket whose outside state is not known.
@@ -86,12 +90,12 @@ pub struct TurnFact {
     pub n: usize,
 }
 
-/// One `before` or `after` entry with its state.
+/// One `before`, `after`, or `run` entry with its state.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct EntryFact {
     /// Such as `git.push` or `job:second-review`.
     pub label: String,
-    /// True for a `before` entry, false for an `after` entry.
+    /// True for a `before` entry, false for an `after` entry or an entry of `run`.
     pub before: bool,
     pub state: EntryState,
 }
@@ -332,6 +336,22 @@ fn facts_of(
             _ => None,
         };
     }
+    if visit.kind == "act" {
+        if let Some(StepKind::Act(act)) = adapter.and_then(|a| a.step(&visit.step)).map(|s| &s.kind)
+        {
+            facts.run = act.run.iter().map(|e| e.label()).collect();
+            // The first verb that is not confirmed, as for the `after` verbs of a turn.
+            facts.entry = first_open(op_facts(ctx, ledger, ticket, &act.run, None)?, false);
+            facts.first_write = match &facts.entry {
+                Some(EntryFact {
+                    label,
+                    state: EntryState::Other(text),
+                    ..
+                }) if kept_back(text) => Some(label.clone()),
+                _ => None,
+            };
+        }
+    }
     if visit.kind == "wait" {
         facts.wait = Some(wait_facts(ledger, ticket, &visit, adapter)?);
         if let Some(step) = adapter.and_then(|a| a.step(&visit.step)) {
@@ -353,9 +373,10 @@ fn kept_back(outcome: &str) -> bool {
 
 /// The operations of the step of a ticket that the mode shadow or hold kept from running, as
 /// the next pass would ask for them again: each verb entry of the visit of now (the `before`
-/// entries before its first turn, the `after` entries after a turn that held, or the `start`
-/// entries of a wait step) whose stored operation at the commit of now is pending in one of
-/// these modes. The app shows each one on the card of a first write.
+/// entries before its first turn, the `after` entries after a turn that held, the `start`
+/// entries of a wait step, or the `run` entries of an act step) whose stored operation at the
+/// commit of now is pending in one of these modes. The app shows each one on the card of a
+/// first write.
 pub fn open_writes(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -394,6 +415,7 @@ pub fn open_writes(
             }
         }
         StepKind::Wait(_) => entries.extend(step.start.iter().map(|e| (e, None))),
+        StepKind::Act(act) => entries.extend(act.run.iter().map(|e| (e, None))),
         _ => {}
     }
     let mut out = Vec::new();

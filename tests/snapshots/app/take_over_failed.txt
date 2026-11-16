@@ -6,23 +6,23 @@
  ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
  ⠇ build         ╭─ The session of DEMO-12 ─────────────────────────────────────────────────╮    none to push
  ○ review        │                                                                          │
- ○ ci            │  builder works now.                                                      │NS
- ○ fix-ci        │                                                                          │               0
- ○ ready         │  Press t to send builder a message: it reads your text at its next       │ry             1
- ○ comments      │  tool step. Press o to stop the turn of builder and open its session     │Judge          0
- ○ ci-review     │  here: the turn that runs ends and is lost, and its session keeps        │
- ○ ready-to-merge│  what the agent did so far. Press x to stop the ticket and its turn.     │
- ○ done          │                                                                          │       3f2a1b4 ✓
-                 │  ✗ stop the turn of builder                                              │               -
- TEAM            │  · open the session of builder in this terminal                          │               -
- ✓ scout     fabl│                                                                          │               -
- ● builder   opus│  It did not work:                                                        │
- · reviewer  opus│  the command failed in the test                                          │
- · tester    opus│  Now  The turn of builder still runs.                                    │━━━━━━ 31% of 60
- · shepherd  opus│                                                                          │ts at 18:00
- · judge     fabl│  o try again    esc close                                                │━━━━━━ 71% of 85
- · curator   fabl│                                                                          │
-                 ╰──────────────────────────────────────────────────────────────────────────╯
+ ○ open-pr       │  builder works now.                                                      │NS
+ ○ ci            │                                                                          │               0
+ ○ fix-ci        │  Press t to send builder a message: it reads your text at its next       │ry             1
+ ○ ready         │  tool step. Press o to stop the turn of builder and open its session     │Judge          0
+ ○ comments      │  here: the turn that runs ends and is lost, and its session keeps        │
+ ○ ci-review     │  what the agent did so far. Press x to stop the ticket and its turn.     │
+ ○ ready-to-merge│                                                                          │       3f2a1b4 ✓
+ ○ done          │  ✗ stop the turn of builder                                              │               -
+                 │  · open the session of builder in this terminal                          │               -
+ TEAM            │                                                                          │               -
+ ✓ scout     fabl│  It did not work:                                                        │
+ ● builder   opus│  the command failed in the test                                          │
+ · reviewer  opus│  Now  The turn of builder still runs.                                    │━━━━━━ 31% of 60
+ · tester    opus│                                                                          │ts at 18:00
+ · shepherd  opus│  o try again    esc close                                                │━━━━━━ 71% of 85
+ · judge     fabl│                                                                          │
+ · curator   fabl╰──────────────────────────────────────────────────────────────────────────╯
                            │ 14:24:50 run   python3 -m unittest tests/test_export.… │ ● on   last pass 0s ago
                            │ 14:25:03 says  3 tests pass. I add a test for an empty │
                            │                month next.                             │
