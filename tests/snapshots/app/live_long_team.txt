@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION ▸ DEMO-12  Export the report of the mont…   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
+ ⠦ build               6:00│   ▀▀▀▀▀▀▀  ⠦ 6:00 · 5 tool calls                       │ commits    none to push
+ ○ review                  │                                                        │
+ ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
+ ○ ci                      │ All 13  Agents 7  Questions 0  Steps 3  Writes 1     › │ to you                0
+ ○ fix-ci                  │ 13:52:00 you   took the ticket                         │ by memory             1
+ ○ ready                   │ 13:52:04 turn  scout starts a turn at the step refine… │ by the Judge          0
+ ○ comments                │ 13:56:14 turn  the turn of scout ended: it gave its r… │
+ ○ ci-review               │ 13:56:15 write tracker.describe is confirmed           │ MARKS
+ ○ ready-to-merge          │ 13:56:16 step  moves from refine to plan               │ plan          3f2a1b4 ✓
+ ○ done                    │ 13:56:30 turn  builder starts a turn at the step plan… │ proof                 -
+                           │ 14:05:30 turn  the turn of builder ended: it gave its… │ CI                    -
+ TEAM                      │ 14:05:31 step  moves from plan to plan-ready           │ PR                    -
+ ✓ scout     fable-5-2 high│ 14:20:00 you   approved the plan                       │
+ ● builder   opus-5-5 xhigh│ 14:20:01 step  moves from plan-ready to build          │ LIMITS
+ · reviewer  opus-5-5 max  │ 14:24:00 turn  builder starts a turn at the step buil… │ 5h ━━━━━━━━━━ 31% of 60
+ · tester    opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I   │    resets at 18:00
+ · shepherd  opus-5-5 high │                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
+ · judge     fable-5-2 high│                the columns that the plan names.        │
+ · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │ ENGINE
+ · repro     opus-5-5 high │                month next.                             │ ● on   last pass 2s ago
+ · cause     opus-5-5 high │                                                        │
+ ✓ critic    opus-5-5 high │                                                        │
+   +7 more agents          │                                                        │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
+

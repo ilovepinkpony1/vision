@@ -7,20 +7,20 @@
  │             ●━●━●━●━◉─○─○─○─○─○─○─○─○  review · stopped · Enter continues it                             │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
-  READY TO START                                                              from the tracker · 1 can start
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │   DEMO-15 ╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮     To Do │
+  READY TO ST╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮1 can start
+ ╭───────────│                                                                                  │───────────╮
+ │   DEMO-15 │  Rename the setting of the weekly email                                          │     To Do │
  │   DEMO-9  │                                                                                  │ll request │
- ╰───────────│  Rename the setting of the weekly email                                          │───────────╯
+ ╰───────────│  DEMO-3 is stopped at the step review.                                           │───────────╯
              │                                                                                  │
-             │  DEMO-3 is stopped at the step review.                                           │
-             │  ⠹ Vision checks the tracker and the pull request                                │
+             │  ⠹ Vision reads the facts of DEMO-3 now · 0:00                                   │
+             │    It asks the tracker for the status, and the forge for the pull request, the   │
+             │    review, CI, and each env. It also compares the branch with the clone. The     │
+             │    steps show when the read ends.                                                │
              │                                                                                  │
              │  esc cancel    v live view                                                       │
              │                                                                                  │
              ╰──────────────────────────────────────────────────────────────────────────────────╯
-
-
 
 
 

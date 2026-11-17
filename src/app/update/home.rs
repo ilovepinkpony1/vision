@@ -84,6 +84,7 @@ fn open(app: &mut App, fx: &mut Vec<Effect>) {
             title: row.title.clone(),
             info: None,
             run: Run::Idle,
+            since: app.clock.elapsed,
         })),
         Item::Queue(row) => {
             let reason = if row.reason.trim().is_empty() {

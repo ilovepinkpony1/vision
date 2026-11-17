@@ -192,6 +192,8 @@ pub struct StartCard {
     /// `None` while it loads.
     pub info: Option<Result<StartInfo, String>>,
     pub run: Run,
+    /// When its read started, so that the card can say how long it reads.
+    pub since: Duration,
 }
 
 /// The continue card of a stopped or paused ticket. It names the stored step, and a thread
@@ -211,11 +213,20 @@ pub struct ContinueCard {
     pub view: Option<Result<ContinueView, String>>,
     /// The selected row of the steps of the view.
     pub selected: usize,
+    /// When the read that runs now started, so that the card can say how long it reads.
+    pub since: Duration,
 }
 
 impl ContinueCard {
-    /// The card of a ticket at the step `stored`, while its read runs.
-    pub fn new(key: &str, title: &str, stored: &str, stopped: bool) -> ContinueCard {
+    /// The card of a ticket at the step `stored`, while its read runs. Its read started at
+    /// `since`.
+    pub fn new(
+        key: &str,
+        title: &str,
+        stored: &str,
+        stopped: bool,
+        since: Duration,
+    ) -> ContinueCard {
         ContinueCard {
             key: key.to_string(),
             title: title.to_string(),
@@ -223,6 +234,7 @@ impl ContinueCard {
             stopped,
             view: None,
             selected: 0,
+            since,
         }
     }
 

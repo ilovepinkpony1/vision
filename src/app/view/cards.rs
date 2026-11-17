@@ -320,7 +320,16 @@ fn start(app: &App, card: &StartCard, c: &mut Canvas) {
     rows.text(3, title, ink(T.fg).bold());
     rows.blank();
     match &card.info {
-        None => rows.busy(app, "reads the adapter and looks for a free clone"),
+        None => {
+            let ran = app.clock.elapsed.saturating_sub(card.since).as_secs();
+            rows.busy(
+                app,
+                &format!(
+                    "Vision reads the adapter and looks for a free clone · {}",
+                    super::header::mmss(ran)
+                ),
+            );
+        }
         Some(Err(error)) => {
             rows.text(3, "Vision could not read what the start does:", ink(T.bad));
             rows.para(3, error, 72, ink(T.bad));

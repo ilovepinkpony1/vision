@@ -3,27 +3,27 @@
  PATH                      │ NOW                                                    │ TICKET
  ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
  ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
- ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
- ⠋ build               6:00│   ▀▀▀▀▀▀▀  ⠋ 6:00 · 5 tool calls                       │ commits    none to push
- ○ review    ╭─ Continue DEMO-12 ───────────────────────────────────────────────────────────────╮
+ ✓ plan-ready╭─ Continue DEMO-12 ───────────────────────────────────────────────────────────────╮           3
+ ⠋ build     │                                                                                  │none to push
+ ○ review    │  Export the report of the month as a CSV file                                    │
  ○ open-pr   │                                                                                  │
- ○ ci        │  Export the report of the month as a CSV file                                    │           0
+ ○ ci        │  DEMO-12 is at the step build.                                                   │           0
  ○ fix-ci    │                                                                                  │           1
- ○ ready     │  DEMO-12 is at the step build.                                                   │e          0
- ○ comments  │  ⠋ Vision checks the tracker and the pull request                                │
- ○ ci-review │                                                                                  │
- ○ ready-to-m│  ✓ continue DEMO-12 at the step build                                            │   3f2a1b4 ✓
- ○ done      │  ✗ clear the pause of DEMO-12: its next turn resumes the session                 │           -
-             │                                                                                  │           -
- TEAM        │  It did not work:                                                                │           -
- ✓ scout     │  the command failed in the test                                                  │
- ● builder   │  Now  DEMO-12 is no longer stopped, and it is still paused.                      │
- · reviewer  │                                                                                  │━━ 31% of 60
- · tester    │  esc close                                                                       │t 18:00
+ ○ ready     │  ⠋ Vision reads the facts of DEMO-12 now · 0:00                                  │e          0
+ ○ comments  │    It asks the tracker for the status, and the forge for the pull request, the   │
+ ○ ci-review │    review, CI, and each env. It also compares the branch with the clone. The     │
+ ○ ready-to-m│    steps show when the read ends.                                                │   3f2a1b4 ✓
+ ○ done      │                                                                                  │           -
+             │  ✓ continue DEMO-12 at the step build                                            │           -
+ TEAM        │  ✗ clear the pause of DEMO-12: its next turn resumes the session                 │           -
+ ✓ scout     │                                                                                  │
+ ● builder   │  It did not work:                                                                │
+ · reviewer  │  the command failed in the test                                                  │━━ 31% of 60
+ · tester    │  Now  DEMO-12 is no longer stopped, and it is still paused.                      │t 18:00
  · shepherd  │                                                                                  │━━ 71% of 85
- · judge     ╰──────────────────────────────────────────────────────────────────────────────────╯
- · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │ ENGINE
-                           │                month next.                             │ ● on   last pass 0s ago
+ · judge     │  esc close                                                                       │
+ · curator   │                                                                                  │
+             ╰──────────────────────────────────────────────────────────────────────────────────╯ pass 0s ago
                            │                                                        │
                            │                                                        │
                            │                                                        │

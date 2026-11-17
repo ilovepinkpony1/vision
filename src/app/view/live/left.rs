@@ -8,7 +8,7 @@
 
 use super::layout::Layout;
 use crate::app::hits::Act;
-use crate::app::live::TicketData;
+use crate::app::live::{Member, TicketData};
 use crate::app::model::App;
 use crate::app::now::{mmss, Kind, Now};
 use crate::app::text::cut;
@@ -117,7 +117,7 @@ pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData, now: &Now)
         c.put(3, y, "the adapter did not load", ink(T.faint));
         y += 1;
     }
-    team(c, y + 1, data);
+    team(c, y + 1, l, data);
 }
 
 fn tone_color(now: &Now) -> crate::app::view::theme::Rgb {
@@ -147,8 +147,13 @@ pub fn window(n: usize, current: Option<usize>, rows: usize) -> (usize, usize, u
 }
 
 /// TEAM: the agent that works now in its color with a filled dot, each agent that did a turn for
-/// the ticket with a check mark, and the others dim.
-fn team(c: &mut Canvas, y: i32, data: &TicketData) {
+/// the ticket with a check mark, and the others dim. The rows end at the bottom of the column.
+/// When the team has more agents than rows, the agents that work and then the agents that did a
+/// turn come first, in the order of the table, and the last row says how many more there are.
+fn team(c: &mut Canvas, y: i32, l: &Layout, data: &TicketData) {
+    if y > l.bottom() {
+        return;
+    }
     c.put(1, y, "TEAM", ink(T.dim).bold());
     let working: Vec<&str> = data
         .facts
@@ -157,14 +162,26 @@ fn team(c: &mut Canvas, y: i32, data: &TicketData) {
         .chain(&data.facts.judge)
         .map(|t| t.agent.as_str())
         .collect();
-    for (i, member) in data.team.iter().enumerate() {
+    let works = |m: &Member| working.contains(&m.agent.as_str());
+    let did = |m: &Member| data.facts.agents.contains(&m.agent);
+    let rows = (l.bottom() - y).max(0) as usize;
+    let members = &data.team;
+    let shown: Vec<&Member> = if members.len() <= rows {
+        members.iter().collect()
+    } else {
+        let rank = |m: &Member| u8::from(!works(m)) + u8::from(!works(m) && !did(m));
+        let mut chosen: Vec<usize> = (0..members.len()).collect();
+        chosen.sort_by_key(|&i| (rank(&members[i]), i));
+        chosen.truncate(rows.saturating_sub(1));
+        chosen.sort_unstable();
+        chosen.into_iter().map(|i| &members[i]).collect()
+    };
+    for (i, member) in shown.iter().enumerate() {
         let yy = y + 1 + i as i32;
         let color = agent_color(&member.agent);
-        let works = working.contains(&member.agent.as_str());
-        let did = data.facts.agents.contains(&member.agent);
-        let (mark, mark_ink, name_ink, model_ink) = if works {
+        let (mark, mark_ink, name_ink, model_ink) = if works(member) {
             ("●", ink(color), ink(color).bold(), ink(T.fg))
-        } else if did {
+        } else if did(member) {
             ("✓", ink(T.dim), ink(T.dim), ink(T.faint))
         } else {
             ("·", ink(T.faint), ink(T.faint), ink(T.faint))
@@ -181,6 +198,15 @@ fn team(c: &mut Canvas, y: i32, data: &TicketData) {
             &cut(&format!("{model:<8} {}", member.effort), 14),
             model_ink,
         );
+    }
+    let hidden = members.len() - shown.len();
+    if hidden > 0 && rows > 0 {
+        let text = if hidden == 1 {
+            "+1 more agent".to_string()
+        } else {
+            format!("+{hidden} more agents")
+        };
+        c.put(3, y + 1 + shown.len() as i32, &text, ink(T.faint));
     }
 }
 

@@ -13,7 +13,7 @@
   READY TO STAR│                                                                              │· 1 can start
  ╭─────────────│  Keep the filter of the list when the page loads again                       │─────────────╮
  │ ▸ DEMO-15   │                                                                              │       To Do │
- │   DEMO-9    │  ⠼ reads the adapter and looks for a free clone                              │pull request │
+ │   DEMO-9    │  ⠼ Vision reads the adapter and looks for a free clone · 0:00                │pull request │
  ╰─────────────│                                                                              │─────────────╯
                │  enter start    esc cancel                                                   │
                │                                                                              │

@@ -10,7 +10,7 @@
 use super::canvas::{ink, Canvas};
 use super::cards::{card_rect, show, Rows};
 use super::chain_rows;
-use super::header::spinner;
+use super::header::{mmss, spinner};
 use super::home::window;
 use super::theme::T;
 use crate::app::chain::{Chain, Owner};
@@ -26,6 +26,8 @@ pub const WIDTH: i32 = 84;
 const TEXT: usize = 78;
 /// The most lines of the reason of a failed chain that the foot shows.
 const FAILURE_LINES: usize = 4;
+/// What the read of the card does, while it runs.
+pub const READING: &str = "It asks the tracker for the status, and the forge for the pull request, the review, CI, and each env. It also compares the branch with the clone. The steps show when the read ends.";
 
 pub fn draw(app: &App, card: &ContinueCard, c: &mut Canvas) {
     let rows = rows(app, card, c.h);
@@ -83,14 +85,18 @@ fn head(app: &App, card: &ContinueCard) -> Rows {
         ink(T.fg),
     );
     let Some(view) = &card.view else {
+        // The read can take some seconds: the card says what it reads and for how long.
+        let ran = app.clock.elapsed.saturating_sub(card.since).as_secs();
+        rows.blank();
         rows.rows.push(vec![
             (3, spinner(app).to_string(), ink(T.accent)),
             (
                 5,
-                "Vision checks the tracker and the pull request".to_string(),
-                ink(T.fg),
+                format!("Vision reads the facts of {} now · {}", card.key, mmss(ran)),
+                ink(T.accent).bold(),
             ),
         ]);
+        rows.para(5, READING, TEXT - 2, ink(T.dim));
         return rows;
     };
     let view = match view {

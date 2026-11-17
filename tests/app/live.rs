@@ -250,6 +250,63 @@ fn a_path_with_more_steps_than_rows() {
     check("live_path_window", &app);
 }
 
+/// The team of an adapter with many agents of its own, as the person has it.
+fn long_team() -> Vec<vision::app::live::Member> {
+    let mut team = team();
+    for agent in [
+        "repro",
+        "cause",
+        "history",
+        "points",
+        "scope",
+        "analyst",
+        "critic",
+        "cr-codex",
+        "cr-correctness",
+        "cr-design",
+    ] {
+        team.push(vision::app::live::Member {
+            agent: agent.into(),
+            model: "claude-opus-5-5".into(),
+            effort: "high".into(),
+        });
+    }
+    team
+}
+
+#[test]
+fn a_team_with_more_agents_than_rows_stays_above_the_keys() {
+    for (size, name) in [
+        (SIZE, "live_long_team"),
+        ((100, 28), "live_long_team_100x28"),
+    ] {
+        let mut app = working_live(size);
+        if let Some(live) = app.live.as_mut() {
+            let data = live.data.data.as_mut().unwrap();
+            data.team = long_team();
+            // The critic did a turn, so it shows before the agents that did nothing.
+            data.facts.agents.push("critic".into());
+        }
+        let text = screen(&app);
+        let rows: Vec<&str> = text.lines().collect();
+        let h = usize::from(size.1);
+        assert!(
+            rows[h - 3].chars().all(|c| c == '─'),
+            "the line over the keys stays whole:\n{text}"
+        );
+        assert!(
+            !rows[h - 2].contains("opus") && !rows[h - 1].contains("opus"),
+            "no agent on the keys or under them:\n{text}"
+        );
+        assert!(text.contains("more agents"), "{text}");
+        assert!(
+            text.contains("critic"),
+            "an agent that did a turn shows:\n{text}"
+        );
+        check(name, &app);
+    }
+}
+
 #[test]
 fn a_feed_that_does_not_follow() {
     let mut app = working_live(SIZE);

@@ -44,7 +44,17 @@ pub fn draw(app: &App, c: &mut Canvas, key: &str) {
     let Some(data) = data else {
         let text = match &live.data.error {
             Some(error) => format!("The ticket did not load: {}", error_line(error)),
-            None => format!("{} reads the ticket", spinner(app)),
+            None => {
+                let ran = live
+                    .data
+                    .since
+                    .map_or(0, |since| app.clock.elapsed.saturating_sub(since).as_secs());
+                format!(
+                    "{} Vision reads {key} from the ledger · {}",
+                    spinner(app),
+                    super::header::mmss(ran)
+                )
+            }
         };
         let color = if live.data.error.is_some() {
             T.bad

@@ -1,0 +1,28 @@
+ ‹  ›  ◆ VISION ▸ DEMO-12  Export the report o…   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                          │ TICKET
+ ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                     │ cost              $1.03
+ ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this tick… │ time                38m
+ ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh           │ turns                 3
+ ⠦ build               6:00│   ▀▀▀▀▀▀▀  ⠦ 6:00 · 5 tool calls             │ commits    none to push
+ ○ review                  │                                              │ QUESTIONS
+ ○ open-pr                 │ ACTIVITY ─────────────────────────────────── │ to you                0
+ ○ ci                      │ All 13  Agents 7  Questions 0  Steps 3     › │ by memory             1
+ ○ fix-ci                  │ 13:56:14 turn  the turn of scout ended: it … │ by the Judge          0
+ ○ ready                   │ 13:56:15 write tracker.describe is confirmed │ MARKS
+ ○ comments                │ 13:56:16 step  moves from refine to plan     │ plan          3f2a1b4 ✓
+ ○ ci-review               │ 13:56:30 turn  builder starts a turn at the… │ proof                 -
+ ○ ready-to-merge          │ 14:05:30 turn  the turn of builder ended: i… │ CI                    -
+ ○ done                    │ 14:05:31 step  moves from plan to plan-ready │ PR                    -
+                           │ 14:20:00 you   approved the plan             │ LIMITS
+ TEAM                      │ 14:20:01 step  moves from plan-ready to bui… │ 5h ━━━━━━━━━━ 31% of 60
+ ✓ scout     fable-5-2 high│ 14:24:00 turn  builder starts a turn at the… │    resets at 18:00
+ ● builder   opus-5-5 xhigh│ 14:24:20 says  The export writes each row by │ 7d ━━━━━━━━━━ 71% of 85
+ · reviewer  opus-5-5 max  │                hand. I add a CSV writer and  │ ENGINE
+ · tester    opus-5-5 high │                keep the order of the columns │ ● on   last pass 2s ago
+ · shepherd  opus-5-5 high │                that the plan names.          │
+ ✓ critic    opus-5-5 high │ 14:25:03 says  3 tests pass. I add a test    │
+   +11 more agents         │                for an empty month next.      │
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
+

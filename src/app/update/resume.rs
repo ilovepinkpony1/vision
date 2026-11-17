@@ -26,8 +26,9 @@ pub fn open(
     fx: &mut Vec<Effect>,
 ) {
     chain::drop_ended(app);
+    let since = app.clock.elapsed;
     app.card = Some(Card::Continue(ContinueCard::new(
-        key, title, stored, stopped,
+        key, title, stored, stopped, since,
     )));
     app.dirty = true;
     fx.push(Effect::LoadResume(key.to_string()));
@@ -62,10 +63,12 @@ fn card_mut<'a>(app: &'a mut App, key: &str) -> Option<&'a mut ContinueCard> {
 /// The chain of the card failed: the card reads the ticket again, because a step of the chain
 /// can have changed its flags. Enter waits for that read.
 pub fn reload(app: &mut App, key: &str, fx: &mut Vec<Effect>) {
+    let now = app.clock.elapsed;
     let Some(card) = card_mut(app, key) else {
         return;
     };
     card.view = None;
+    card.since = now;
     app.dirty = true;
     fx.push(Effect::LoadResume(key.to_string()));
 }
