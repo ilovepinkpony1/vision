@@ -5,8 +5,9 @@ use std::time::Duration;
 
 use super::canvas::{ink, Canvas};
 use super::theme::{Rgb, T};
+use crate::app::hits::{hint, Act};
 use crate::app::model::{App, Tone};
-use crate::app::msg::JobKind;
+use crate::app::msg::{JobKind, Key};
 use crate::app::text::{cut, width};
 use crate::snapshot::LimitView;
 
@@ -104,17 +105,38 @@ fn limit(c: &mut Canvas, r: i32, label: &str, view: &LimitView) -> i32 {
 }
 
 /// The footer: the keys of a screen, on the second row from the bottom. When the row is too
-/// narrow, the keys before the last one go away from the end, so that `q quit` stays.
+/// narrow, the keys before the last one go away from the end, so that `q quit` stays. A click on
+/// a key that shows acts as that key.
 pub fn keys(c: &mut Canvas, list: &[(&str, &str)]) {
+    keys_with(c, list, &[], None);
+}
+
+/// The footer, with the keys of `decide`, which send something or record a decision: a click
+/// on such a key arms it, and while `armed` is its part, its label says to click again. The
+/// row fits with the labels that show.
+pub fn keys_with(c: &mut Canvas, list: &[(&str, &str)], decide: &[Key], armed: Option<&Act>) {
     let y = c.h - 2;
-    let mut list = list.to_vec();
-    while list.len() > 1 && keys_width(&list) > c.w - 1 {
+    let mut list: Vec<(&str, String)> = list
+        .iter()
+        .map(|(key, label)| (*key, hint(0, key, label, decide, armed).label))
+        .collect();
+    // The row fits when it is at most the width of the window less one.
+    let fits = |list: &[(&str, String)]| {
+        let refs: Vec<(&str, &str)> = list.iter().map(|(k, l)| (*k, l.as_str())).collect();
+        keys_width(&refs) < c.w
+    };
+    while list.len() > 1 && !fits(&list) {
         list.remove(list.len() - 2);
     }
     let mut x = 1;
     for (key, label) in &list {
+        let shown = hint(x, key, label, decide, armed);
+        for (hx, hw, act) in shown.parts {
+            c.click(hx, y, hw, 1, act);
+        }
+        let tone = if shown.armed { T.warn } else { T.dim };
         x = c.put(x, y, key, ink(T.fg).bold());
-        x = c.put(x + 1, y, label, ink(T.dim)) + 3;
+        x = c.put(x + 1, y, &shown.label, ink(tone)) + 3;
     }
 }
 

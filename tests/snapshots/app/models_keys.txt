@@ -5,23 +5,23 @@
   turn that runs now.
     AGENT        MODEL                  EFFORT  SOURCE                                              MEASURED
   ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-    scout        claude-fable-5-2       high    default                               9 turns · $0.12 a turn
-                 A wrong reading of the ticket costs the full build.
-  ▸ builder    ‹ cla╭─ Keys ─────────────────────────────────────────────────────────────╮rns · $0.41 a turn
-                 The│                                                                    │st tokens.
-    reviewer     cla│  ↑↓  j k      select an agent                                      │       no turn yet
-                 The│  ←→           change its model                                     │
-    tester       cla│  e            change its effort                                    │       no turn yet
-                 A f│  enter        pin the values that show                             │
-    shepherd     cla│  u            go back to the default of Vision                     │       no turn yet
-                 It │  esc          drop the changes that are not pinned, then go home   │
-    judge        cla│  ?            this list of keys                                    │       no turn yet
+    scout        cla╭─ Keys ─────────────────────────────────────────────────────────────╮rns · $0.12 a turn
+                 A w│                                                                    │
+  ▸ builder    ‹ cla│  ↑↓  j k      select an agent                                      │rns · $0.41 a turn
+                 The│  ←→           change its model                                     │st tokens.
+    reviewer     cla│  e            change its effort                                    │       no turn yet
+                 The│  enter        pin the values that show                             │
+    tester       cla│  u            go back to the default of Vision                     │       no turn yet
+                 A f│  esc          drop the changes that are not pinned, then go home   │
+    shepherd     cla│  ?            this list of keys                                    │       no turn yet
                  It │  q            quit                                                 │
-    curator      cla│                                                                    │       no turn yet
-                 It │  esc closes this list                                              │
+    judge        cla│  click        a key acts as that key; a row selects, then opens    │       no turn yet
+                 It │  2 clicks     a key that sends something or records a decision     │
+    curator      cla│  shift drag   selects text; some terminals use Option              │       no turn yet
+                 It │                                                                    │
+                    │  esc closes this list                                              │
                     │                                                                    │
                     ╰────────────────────────────────────────────────────────────────────╯
-
 
   ╭─ recommendation for builder ───────────────────────────────────────────────────────────────────────────╮
   │  ✗ go back to the default for builder                                                                  │

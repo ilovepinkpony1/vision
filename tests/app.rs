@@ -29,6 +29,8 @@ mod live_support;
 mod live_update;
 #[path = "app/loads.rs"]
 mod loads;
+#[path = "app/mouse.rs"]
+mod mouse;
 #[path = "app/need_cards.rs"]
 mod need_cards;
 #[path = "app/need_support.rs"]

@@ -5,6 +5,10 @@
 //! After each message, the update runs the timers (the refresh of the local data each second,
 //! the queue each 5 minutes, a pass each minute) and hands the next job to the worker when the
 //! worker is free.
+//!
+//! A click acts on the parts of the last frame that the model keeps: most parts act as a key,
+//! so a click and its key run the same code. A part that sends something or records a decision
+//! acts on a second click, and a typed key takes the arm of the first click away.
 
 mod act;
 mod ask;
@@ -16,6 +20,7 @@ pub mod engine;
 mod home;
 pub mod live;
 mod models;
+mod mouse;
 mod needs;
 mod pager;
 mod stats;
@@ -23,6 +28,7 @@ mod tell;
 
 use std::time::Duration;
 
+use super::hits::HitMap;
 use super::model::{App, Notice, Tone};
 use super::msg::{Effect, Key, Msg};
 
@@ -46,13 +52,20 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::Resize { width, height } => {
             app.size = (width, height);
             app.dirty = true;
+            // The parts of the old frame are not where the next frame puts them.
+            app.hits = HitMap::default();
             boot::fit_picture(app);
         }
         Msg::Key(key) => {
             app.dirty = true;
+            // A typed key acts at once, and it takes the arm of a click away.
+            app.armed = None;
             on_key(app, key, &mut fx);
         }
+        Msg::Mouse(event) => mouse::on_mouse(app, event, &mut fx),
         Msg::Paste(text) => {
+            // A paste is typed text, so it takes the arm of a click away, as a key does.
+            mouse::disarm(app);
             tell::on_paste(app, &text);
             needs::on_paste(app, &text);
         }
@@ -127,6 +140,12 @@ fn timers(app: &mut App, fx: &mut Vec<Effect>) {
     let now = app.clock.elapsed;
     if app.notice.as_ref().is_some_and(|n| n.until <= now) {
         app.notice = None;
+        app.dirty = true;
+    }
+    // The arm of a click ends on the first message after its time, such as the tick of each
+    // second at rest, so it needs no fast loop.
+    if app.armed.as_ref().is_some_and(|a| a.until <= now) {
+        app.armed = None;
         app.dirty = true;
     }
     if app.setup.is_some() {

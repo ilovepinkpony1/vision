@@ -4,8 +4,9 @@
 //! types in, the steps of a chain with their marks, and the keys. Each kind of item builds its
 //! own head, body, and foot.
 //!
-//! [`place`] puts the card in the window for the draw, and [`hits`] gives the places of the
-//! parts of a form that a click can hit, from the same placement.
+//! [`place`] puts the card in the window for the draw. The rows of the head, the body, and the
+//! foot hold the parts that a click can hit, and [`placed`] gives their places in the window
+//! from the same placement: the draw records them, and [`hits`] gives the parts of a form.
 
 use super::ask_card;
 use super::canvas::{ink, Canvas};
@@ -16,6 +17,7 @@ use super::other_cards;
 use super::theme::T;
 use super::write_card;
 use crate::app::chain::Owner;
+use crate::app::hits::Act;
 use crate::app::model::App;
 use crate::app::needs::{NeedItem, NeedsCard, Target};
 use crate::app::text::cut;
@@ -24,8 +26,10 @@ use crate::app::text::cut;
 pub const WIDTH: i32 = 92;
 /// The width of a text in the card, from its column 3.
 pub const TEXT: usize = 86;
+/// The lines that one step of the wheel scrolls in the body of a card.
+const WHEEL_LINES: usize = 3;
 
-/// The parts of a card.
+/// The parts of a card. The rows of each part hold what a click can hit in them.
 #[derive(Default)]
 pub(super) struct Parts {
     pub(super) title: String,
@@ -33,27 +37,6 @@ pub(super) struct Parts {
     pub(super) head: Rows,
     pub(super) body: Rows,
     pub(super) foot: Rows,
-    /// The parts that a click can hit.
-    pub(super) hits: Vec<Hit>,
-}
-
-/// The rows of a card.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Area {
-    Head,
-    Body,
-    Foot,
-}
-
-/// A part of a card that a click can hit: its row in the head, the body, or the foot, and its
-/// columns in the card.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Hit {
-    pub target: Target,
-    pub area: Area,
-    pub row: usize,
-    pub x: i32,
-    pub w: i32,
 }
 
 /// The rows of the body that the card has, and the rows that show at the size of the window.
@@ -132,23 +115,31 @@ pub fn hits(app: &App) -> Vec<(Target, i32, i32, i32)> {
     };
     let parts = parts(app, card);
     let p = place(card, &parts, i32::from(app.size.0), i32::from(app.size.1));
-    parts
-        .hits
-        .iter()
-        .filter_map(|hit| {
-            let y = match hit.area {
-                Area::Head => p.head_y + hit.row as i32,
-                Area::Body => {
-                    if hit.row < p.top || hit.row >= p.top + p.visible {
-                        return None;
-                    }
-                    p.body_y + (hit.row - p.top) as i32
-                }
-                Area::Foot => p.foot_y + hit.row as i32,
-            };
-            let w = hit.w.min(p.w - hit.x - 2);
-            (w > 0).then_some((hit.target, p.x + hit.x, y, w))
+    placed(&parts, &p)
+        .into_iter()
+        .filter_map(|(act, x, y, w)| match act {
+            Act::Form(target) => Some((target, x, y, w)),
+            _ => None,
         })
+        .collect()
+}
+
+/// The head, the body, and the foot of a card, each with its first row in the window and the
+/// rows of it that show. The draw and [`placed`] both use it.
+fn areas<'a>(parts: &'a Parts, p: &Place) -> [(&'a Rows, i32, usize, usize); 3] {
+    [
+        (&parts.head, p.head_y, 0, parts.head.rows.len()),
+        (&parts.body, p.body_y, p.top, p.visible),
+        (&parts.foot, p.foot_y, 0, parts.foot.rows.len()),
+    ]
+}
+
+/// Each part of the card that a click can hit, with what a click does, its column, its row,
+/// and its width in the window. A part that the scroll hides is not in the list.
+fn placed(parts: &Parts, p: &Place) -> Vec<(Act, i32, i32, i32)> {
+    areas(parts, p)
+        .into_iter()
+        .flat_map(|(rows, y, from, count)| rows.placed(p.x, y, p.w, from, count))
         .collect()
 }
 
@@ -201,31 +192,41 @@ fn parts(app: &App, card: &NeedsCard) -> Parts {
         let mut body = Rows::default();
         body.para(3, note, TEXT, ink(T.warn).bold());
         body.blank();
-        let added = body.rows.len();
-        body.rows.append(&mut parts.body.rows);
+        body.append(std::mem::take(&mut parts.body));
         parts.body = body;
-        for hit in parts.hits.iter_mut().filter(|h| h.area == Area::Body) {
-            hit.row += added;
-        }
     }
     let owner = Owner::Need(item.id());
     if let Some(chain) = app.chain_of(&owner) {
-        let mut foot = Rows::default();
-        chain_rows::rows(app, chain, &mut foot, TEXT);
-        foot.blank();
-        let added = foot.rows.len();
-        if chain.running() {
-            foot.keys(&[("esc", "close this card; the action goes on")]);
-            parts.hits.retain(|h| h.area != Area::Foot);
-        } else {
-            foot.rows.append(&mut parts.foot.rows);
-            for hit in parts.hits.iter_mut().filter(|h| h.area == Area::Foot) {
-                hit.row += added;
+        let keys = std::mem::take(&mut parts.foot);
+        let foot = |max_text: usize| {
+            let mut foot = Rows::default();
+            chain_rows::rows(app, chain, &mut foot, TEXT, max_text);
+            foot.blank();
+            if chain.running() {
+                foot.keys(&[("esc", "close this card; the action goes on")]);
+            } else {
+                foot.append(keys.clone());
             }
+            foot
+        };
+        // The foot never scrolls, so the card fits the window only when the foot leaves a row
+        // for the body. A long reason of a failure shows only the lines that fit, as the other
+        // cards cut it, and the state and the keys under it stay.
+        let mut rows = foot(usize::MAX);
+        let room = foot_room(i32::from(app.size.1), &parts);
+        let text = chain_rows::text_lines(chain, TEXT);
+        if rows.rows.len() > room && text > 0 {
+            let over = rows.rows.len() - room;
+            rows = foot(text.saturating_sub(over + 1).max(1));
         }
-        parts.foot = foot;
+        parts.foot = rows;
     }
     parts
+}
+
+/// The most rows of the foot that leave one row of the body in a window of `h` rows.
+fn foot_room(h: i32, parts: &Parts) -> usize {
+    (h - 8 - head_rows(parts)).max(0) as usize
 }
 
 pub fn draw(app: &App, card: &NeedsCard, c: &mut Canvas) {
@@ -241,16 +242,15 @@ pub fn draw(app: &App, card: &NeedsCard, c: &mut Canvas) {
         &format!(" {} ", cut(&parts.title, (w - 6) as usize)),
         ink(T.fg).bold(),
     );
-    put_rows(c, x, p.head_y, w, &parts.head.rows);
+    // The wheel over the card acts as the up and down arrows: it scrolls the body, or it
+    // chooses a row of the review page.
+    let reviewing = card.reviewing();
+    c.wheel(x, y, w, h, if reviewing { 1 } else { WHEEL_LINES });
+    for (rows, row, from, count) in areas(&parts, &p) {
+        rows.put(c, x, row, w, from, count);
+    }
     let total = parts.body.rows.len();
     let top = p.top;
-    put_rows(
-        c,
-        x,
-        p.body_y,
-        w,
-        &parts.body.rows[top..(top + p.visible).min(total)],
-    );
     if top > 0 {
         c.right(x + w - 3, y, &format!(" ▲ {top} more "), ink(T.dim));
     }
@@ -262,21 +262,5 @@ pub fn draw(app: &App, card: &NeedsCard, c: &mut Canvas) {
             &format!("▼ {below} more · ↑↓ scroll"),
             ink(T.dim),
         );
-    }
-    put_rows(c, x, p.foot_y, w, &parts.foot.rows);
-}
-
-fn put_rows(
-    c: &mut Canvas,
-    x: i32,
-    y: i32,
-    w: i32,
-    rows: &[Vec<(i32, String, super::canvas::Ink)>],
-) {
-    for (i, row) in rows.iter().enumerate() {
-        for (dx, text, style) in row {
-            let room = (w - dx - 2).max(0) as usize;
-            c.put(x + dx, y + i as i32, &cut(text, room), *style);
-        }
     }
 }

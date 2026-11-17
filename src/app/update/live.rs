@@ -81,6 +81,14 @@ fn filter(app: &mut App, to: Filter) {
     }
 }
 
+/// A click on a tab of the activity shows that tab, as its digit does. The line of `t` stays
+/// open.
+pub fn click_tab(app: &mut App, to: Filter) {
+    if app.card.is_none() && app.live.as_ref().is_some_and(|l| l.pagers.is_empty()) {
+        filter(app, to);
+    }
+}
+
 /// The lines of the activity before a change, when the feed does not follow: the place of the
 /// view needs them. A feed that follows keeps no place, so it needs no count.
 fn lines_before(app: &App) -> Option<usize> {

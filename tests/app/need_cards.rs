@@ -8,6 +8,7 @@
 //! its load failed.
 
 use vision::app::chain::{CheckFacts, OpFacts};
+use vision::app::hits::Act;
 use vision::app::model::App;
 use vision::app::msg::{ChildResult, Effect, JobDone, Key, Msg};
 use vision::app::needs::NeedItem;
@@ -36,6 +37,97 @@ fn check_of(effects: &[Effect]) -> u64 {
             _ => None,
         })
         .unwrap_or_else(|| panic!("no check: {effects:?}"))
+}
+
+/// The card of the first write in a window of `size`, after its promote failed with the text
+/// `stderr`.
+fn first_write_failed(size: (u16, u16), stderr: String) -> App {
+    let mut app = open_with(size, vec![first_write("shadow")]);
+    let fx = key(&mut app, 3.0, Key::Char('y'));
+    let chain = check_of(&fx);
+    let fx = send(
+        &mut app,
+        3.2,
+        Msg::Checked {
+            chain,
+            facts: Box::new(Ok(CheckFacts {
+                mode: Some("shadow".into()),
+                step: Some("refine".into()),
+                flags: vec!["needs-you".into()],
+                ..CheckFacts::default()
+            })),
+        },
+    );
+    let job = jobs(&fx).pop().expect("the promote runs");
+    send(
+        &mut app,
+        4.0,
+        Msg::JobDone(JobDone {
+            id: job.id,
+            kind: job.kind.clone(),
+            result: ChildResult {
+                code: Some(1),
+                stderr,
+                ..ChildResult::default()
+            },
+        }),
+    );
+    app
+}
+
+#[test]
+fn a_long_reason_of_a_failure_keeps_the_card_in_the_window() {
+    // Thirty lines of standard error: the foot of the card takes the rows that leave one row of
+    // the body, the reason shows its first lines, and the state and the keys stay in the card.
+    let stderr: String = (1..=30)
+        .map(|n| format!("error: line {n} of a long error that the command wrote\n"))
+        .collect();
+    for size in [SMALL, SIZE] {
+        let app = first_write_failed(size, stderr.clone());
+        let text = screen(&app);
+        let rows: Vec<&str> = text.lines().collect();
+        let h = usize::from(size.1);
+        let bottom = rows
+            .iter()
+            .rposition(|r| r.contains('╰'))
+            .unwrap_or_else(|| panic!("no bottom of the card:\n{text}"));
+        assert!(bottom <= h - 2, "{text}");
+        let keys = rows
+            .iter()
+            .position(|r| r.contains("y a n choose"))
+            .unwrap();
+        let now = rows
+            .iter()
+            .position(|r| r.contains("Now  Nothing was sent"))
+            .unwrap();
+        let cut = rows
+            .iter()
+            .position(|r| r.contains("The rest of the text is cut."))
+            .unwrap_or_else(|| panic!("no cut:\n{text}"));
+        assert!(cut < now && now < keys && keys < bottom, "{text}");
+        assert!(text.contains("line 1 of a long error"), "{text}");
+        assert!(!text.contains("line 30 of a long error"), "{text}");
+        assert!(
+            text.contains("▼"),
+            "the body shows its first row and a mark:\n{text}"
+        );
+        // The keys of the foot are parts that a click can hit.
+        let mut drawn = app.clone();
+        draw(&mut drawn);
+        let at = rows[keys].find("y a n").unwrap();
+        let x = rows[keys][..at].chars().count() as u16;
+        assert_eq!(
+            drawn.hits.click_at(x, keys as u16),
+            Some(&Act::Decide(Key::Char('y')))
+        );
+    }
+    check(
+        "need_first_write_long_failure_100x28",
+        &first_write_failed(SMALL, stderr),
+    );
+    // A short reason shows whole, with no cut.
+    let app = first_write_failed(SMALL, "error: the configuration is not valid TOML\n".into());
+    assert!(!screen(&app).contains("The rest of the text is cut."));
 }
 
 #[test]

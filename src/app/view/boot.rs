@@ -4,6 +4,9 @@
 //! fit it whole, with the same shape; a picture that fits shows cell for cell. With no color,
 //! no picture and no android show, because a picture needs color. When the home folder is not
 //! set up, the loader says what is missing and which command makes it.
+//!
+//! A click anywhere skips the loader, as any key does. On a loader that a setup error blocks,
+//! only a click on `q leaves` acts.
 
 use std::borrow::Cow;
 
@@ -11,9 +14,11 @@ use super::android;
 use super::canvas::{ink, Canvas};
 use super::header::spinner;
 use super::theme::T;
+use crate::app::hits::Act;
 use crate::app::model::{App, StageState, STAGE_ENGINE, STAGE_HOME, STAGE_LEDGER, STAGE_TRACKER};
+use crate::app::msg::Key;
 use crate::app::picture::Picture;
-use crate::app::text::{cut, wrap};
+use crate::app::text::{cut, width, wrap};
 use crate::app::view::theme::ColorMode;
 
 const NAMES: [&str; 4] = ["home folder", "ledger", "tracker", "engine"];
@@ -130,9 +135,19 @@ pub fn draw(app: &App, c: &mut Canvas) {
             c.center(y, &line, ink(T.fg));
             y += 1;
         }
-        c.center((top + hint).max(y + 1), "q leaves", ink(T.faint));
+        let leaves = "q leaves";
+        let row = (top + hint).max(y + 1);
+        c.center(row, leaves, ink(T.faint));
+        c.hint(
+            (c.w - width(leaves) as i32).div_euclid(2),
+            row,
+            "q",
+            "leaves",
+        );
         return;
     }
+    // Any key skips the loader, and so does a click anywhere.
+    c.click(0, 0, c.w, c.h, Act::Key(Key::Other));
     let filled = (f64::from(settled) / 4.0 * f64::from(BAR)).round() as i32;
     let mut bx = c.put(x, top + bar, &"━".repeat(filled as usize), ink(T.accent));
     bx = c.put(

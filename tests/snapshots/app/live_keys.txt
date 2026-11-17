@@ -2,30 +2,30 @@
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  PATH                      │ NOW                                                    │ TICKET
  ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
- ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
- ✓ plan-ready      2╭─ Keys ─────────────────────────────────────────────────────────────╮s                 3
- ⠸ build            │                                                                    │its    none to push
- ○ review           │  esc          back to Home                                         │
- ○ open-pr          │  n            answer what waits for this ticket                    │TIONS
- ○ ci               │  t            tell the agent something                             │ou                0
- ○ fix-ci           │  o            open the session and type into it yourself           │emory             1
- ○ ready            │  l  p  d      the log, the plan, the commits to push               │he Judge          0
- ○ comments         │               Enter on a turn of the log shows its tool calls      │
- ○ ci-review        │  x            stop the ticket                                      │S
- ○ ready-to-merge   │  r            start the step again, or continue                    │          3f2a1b4 ✓
- ○ done             │  enter        start a stopped ticket again                         │f                 -
-                    │  ↑↓  j k      scroll the activity                                  │                  -
- TEAM               │  pgup pgdn    scroll the activity by a page                        │                  -
- ✓ scout     fable-5│  G  end       back to the end of the activity                      │
- ● builder   opus-5-│  f  F  1-7    the next tab of the activity, the one before, a tab  │TS
- · reviewer  opus-5-│  ?            this list of keys                                    │━━━━━━━━━ 31% of 60
- · tester    opus-5-│  q            quit                                                 │esets at 18:00
- · shepherd  opus-5-│                                                                    │━━━━━━━━━ 71% of 85
- · judge     fable-5│  esc closes this list                                              │
+ ✓ plan            9╭─ Keys ─────────────────────────────────────────────────────────────╮                38m
+ ✓ plan-ready      2│                                                                    │s                 3
+ ⠸ build            │  esc          back to Home                                         │its    none to push
+ ○ review           │  n            answer what waits for this ticket                    │
+ ○ open-pr          │  t            tell the agent something                             │TIONS
+ ○ ci               │  o            open the session and type into it yourself           │ou                0
+ ○ fix-ci           │  l  p  d      the log, the plan, the commits to push               │emory             1
+ ○ ready            │               Enter on a turn of the log shows its tool calls      │he Judge          0
+ ○ comments         │  x            stop the ticket                                      │
+ ○ ci-review        │  r            start the step again, or continue                    │S
+ ○ ready-to-merge   │  enter        start a stopped ticket again                         │          3f2a1b4 ✓
+ ○ done             │  ↑↓  j k      scroll the activity                                  │f                 -
+                    │  pgup pgdn    scroll the activity by a page                        │                  -
+ TEAM               │  G  end       back to the end of the activity                      │                  -
+ ✓ scout     fable-5│  f  F  1-7    the next tab of the activity, the one before, a tab  │
+ ● builder   opus-5-│  ?            this list of keys                                    │TS
+ · reviewer  opus-5-│  q            quit                                                 │━━━━━━━━━ 31% of 60
+ · tester    opus-5-│  click        a key acts as that key; a row selects, then opens    │esets at 18:00
+ · shepherd  opus-5-│  2 clicks     a key that sends something or records a decision     │━━━━━━━━━ 71% of 85
+ · judge     fable-5│  shift drag   selects text; some terminals use Option              │
  · curator   fable-5│                                                                    │NE
-                    ╰────────────────────────────────────────────────────────────────────╯   last pass 2s ago
-                           │                                                        │
-                           │                                                        │
+                    │  esc closes this list                                              │   last pass 2s ago
+                    │                                                                    │
+                    ╰────────────────────────────────────────────────────────────────────╯
                            │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys

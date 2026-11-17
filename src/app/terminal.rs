@@ -1,12 +1,18 @@
-//! The terminal of the app: raw mode, the alternate screen, and the paste of text as one piece
-//! while the app runs, and the normal terminal again on each way out: the normal end, an error,
-//! a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is a key in raw mode, and the
-//! app treats it as `q` (it cancels the line of `t`), so SIGINT comes only from another process.
+//! The terminal of the app: raw mode, the alternate screen, the paste of text as one piece, and
+//! the clicks and the wheel of the mouse while the app runs, and the normal terminal again on
+//! each way out: the normal end, an error, a panic, and the signals SIGTERM, SIGHUP, and SIGINT.
+//! Ctrl-C is a key in raw mode, and the app treats it as `q` (it cancels the line of `t`), so
+//! SIGINT comes only from another process.
 //!
-//! The thread that reads the keys waits in its poll until a key comes. It can pause: while a
-//! child owns the terminal, it reads nothing, and the runtime wakes it and waits for it to
-//! confirm the pause before the child starts.
+//! The terminal reports a press and a release of a button and each step of the wheel, but no
+//! move of the mouse, so a move never wakes the app. With the mouse on, a terminal selects text
+//! only with a modifier, such as Shift.
+//!
+//! The thread that reads the keys waits in its poll until a key, a click, or a step of the wheel
+//! comes. It can pause: while a child owns the terminal, it reads nothing, and the runtime wakes
+//! it and waits for it to confirm the pause before the child starts.
 
+use std::fmt;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::Sender;
@@ -15,15 +21,15 @@ use std::time::{Duration, Instant};
 
 use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::event::{
-    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event, KeyCode,
+    KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ratatui::crossterm::{execute, Command};
 
-use super::msg::{Key, Msg};
+use super::msg::{Key, Mouse, MouseKind, Msg};
 use super::stderr;
 
 /// True while the app owns the terminal.
@@ -44,17 +50,12 @@ impl Session {
     }
 }
 
-/// Puts the terminal in the state of the app: raw mode, the alternate screen, no cursor, and a
-/// paste as one piece. Also after a child gave the terminal back.
+/// Puts the terminal in the state of the app: raw mode and [`app_modes`]. Also after a child
+/// gave the terminal back.
 pub fn take() -> io::Result<()> {
     enable_raw_mode()?;
     ACTIVE.store(true, Ordering::SeqCst);
-    if let Err(e) = execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        Hide,
-        EnableBracketedPaste
-    ) {
+    if let Err(e) = app_modes(&mut io::stdout()) {
         leave();
         return Err(e);
     }
@@ -67,14 +68,52 @@ impl Drop for Session {
     }
 }
 
-/// Gives the terminal back. Safe to call more than once.
+/// Gives the terminal back: [`normal_modes`] and no raw mode. Safe to call more than once. Each
+/// way out calls it, and so does the hand-over of the terminal to a child.
 pub fn leave() {
     if ACTIVE.swap(false, Ordering::SeqCst) {
-        let mut out = io::stdout();
-        let _ = execute!(out, DisableBracketedPaste, Show, LeaveAlternateScreen);
-        let _ = out.flush();
+        let _ = normal_modes(&mut io::stdout());
         let _ = disable_raw_mode();
     }
+}
+
+/// Turns on the report of the buttons and of the wheel of the mouse, with no report of a move:
+/// the normal tracking (1000) with the cells of SGR (1006).
+#[derive(Clone, Copy, Debug)]
+struct EnableClicks;
+
+impl Command for EnableClicks {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[?1000h\x1b[?1006h")
+    }
+}
+
+/// The modes of the app on the terminal: the alternate screen, no cursor, a paste as one piece,
+/// and the clicks and the wheel of the mouse. Each mode of the mouse that was on before goes
+/// first, so that no report of a move stays on.
+pub fn app_modes(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        EnterAlternateScreen,
+        Hide,
+        EnableBracketedPaste,
+        DisableMouseCapture,
+        EnableClicks
+    )
+}
+
+/// The normal modes of the terminal: no mode of the mouse, no paste as one piece, the cursor,
+/// and the main screen. [`DisableMouseCapture`] turns off each mode of the mouse, also one that
+/// the app did not turn on.
+pub fn normal_modes(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        Show,
+        LeaveAlternateScreen
+    )?;
+    out.flush()
 }
 
 /// A panic of the main thread gives the terminal and standard error back before the message
@@ -315,12 +354,12 @@ impl Source for Terminal {
 }
 
 /// The longest wait for a key before the thread looks at its control again. A pause wakes the
-/// thread before that, so the thread wakes for nothing else than a key, a paste, or a change of
-/// the window.
+/// thread before that, so the thread wakes for nothing else than a key, a paste, an event of the
+/// mouse, or a change of the window.
 const POLL: Duration = Duration::from_secs(60);
 
-/// Reads the keys, the pastes, and the changes of the window in a thread, and sends them to
-/// the loop. The thread pauses when `control` asks.
+/// Reads the keys, the pastes, the clicks, the steps of the wheel, and the changes of the window
+/// in a thread, and sends them to the loop. The thread pauses when `control` asks.
 pub fn watch_input(tx: Sender<Msg>, control: InputControl) -> io::Result<()> {
     // The event reader of crossterm wakes on the signal of a change of the window and reports
     // the size of now: a pause sends that signal to wake the thread. The change of the window
@@ -349,6 +388,7 @@ pub fn input_loop(mut source: impl Source, tx: &Sender<Msg>, control: &InputCont
         }
         let msg = match source.read() {
             Ok(Event::Key(key)) => key_of(key).map(Msg::Key),
+            Ok(Event::Mouse(mouse)) => mouse_of(mouse).map(Msg::Mouse),
             Ok(Event::Paste(text)) => Some(Msg::Paste(text)),
             Ok(Event::Resize(width, height)) => Some(Msg::Resize { width, height }),
             Ok(_) => None,
@@ -360,6 +400,26 @@ pub fn input_loop(mut source: impl Source, tx: &Sender<Msg>, control: &InputCont
             }
         }
     }
+}
+
+/// The event of the app for an event of the mouse: a press of the left button, or a step of the
+/// wheel. A release, a move, a drag, another button, and an event with Shift, Alt, or Ctrl give
+/// none, so that they never reach the loop.
+pub fn mouse_of(event: MouseEvent) -> Option<Mouse> {
+    if !event.modifiers.is_empty() {
+        return None;
+    }
+    let kind = match event.kind {
+        MouseEventKind::Down(MouseButton::Left) => MouseKind::Click,
+        MouseEventKind::ScrollUp => MouseKind::WheelUp,
+        MouseEventKind::ScrollDown => MouseKind::WheelDown,
+        _ => return None,
+    };
+    Some(Mouse {
+        kind,
+        column: event.column,
+        row: event.row,
+    })
 }
 
 /// The key of the app for a key of the terminal. Ctrl-C is [`Key::Cancel`], which the update
@@ -391,4 +451,83 @@ pub fn key_of(key: KeyEvent) -> Option<Key> {
         KeyCode::Char(c) => Key::Char(c),
         _ => Key::Other,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(write: impl Fn(&mut Vec<u8>) -> io::Result<()>) -> String {
+        let mut out = Vec::new();
+        write(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn the_app_turns_on_the_clicks_and_the_wheel_but_no_report_of_a_move() {
+        let on = text(app_modes);
+        let enable = on.rfind("\x1b[?1000h").expect("the clicks are on");
+        assert!(on.contains("\x1b[?1006h"), "the cells of SGR: {on:?}");
+        // Each mode of the mouse goes first, and no report of a move comes back after it.
+        let off = on
+            .rfind("\x1b[?1003l")
+            .expect("the report of each move is off first");
+        assert!(off < enable, "{on:?}");
+        assert!(!on.contains("\x1b[?1003h"), "{on:?}");
+        assert!(!on.contains("\x1b[?1002h"), "{on:?}");
+    }
+
+    #[test]
+    fn the_normal_modes_turn_off_each_mode_of_the_mouse() {
+        let off = text(normal_modes);
+        for mode in ["1000", "1002", "1003", "1006", "1015"] {
+            assert!(off.contains(&format!("\x1b[?{mode}l")), "{mode}: {off:?}");
+        }
+        assert!(!off.contains("\x1b[?1000h"), "{off:?}");
+    }
+
+    #[test]
+    fn only_a_press_of_the_left_button_and_the_wheel_reach_the_loop() {
+        let event = |kind, modifiers| MouseEvent {
+            kind,
+            column: 12,
+            row: 7,
+            modifiers,
+        };
+        let none = KeyModifiers::NONE;
+        assert_eq!(
+            mouse_of(event(MouseEventKind::Down(MouseButton::Left), none)),
+            Some(Mouse {
+                kind: MouseKind::Click,
+                column: 12,
+                row: 7
+            })
+        );
+        assert_eq!(
+            mouse_of(event(MouseEventKind::ScrollUp, none)).map(|m| m.kind),
+            Some(MouseKind::WheelUp)
+        );
+        assert_eq!(
+            mouse_of(event(MouseEventKind::ScrollDown, none)).map(|m| m.kind),
+            Some(MouseKind::WheelDown)
+        );
+        for kind in [
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Moved,
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Down(MouseButton::Middle),
+            MouseEventKind::ScrollLeft,
+        ] {
+            assert_eq!(mouse_of(event(kind, none)), None, "{kind:?}");
+        }
+        assert_eq!(
+            mouse_of(event(
+                MouseEventKind::Down(MouseButton::Left),
+                KeyModifiers::SHIFT
+            )),
+            None,
+            "a click with Shift is for the terminal"
+        );
+    }
 }

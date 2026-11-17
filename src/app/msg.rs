@@ -1,7 +1,7 @@
 //! The messages that reach the update, and the effects that it gives back for the runtime to
-//! run. A message is a key, a tick of the clock, a change of the window, or the result of a
-//! background thread. An effect starts a load, hands a job to the worker, gives the terminal to
-//! a child, writes the drafts file of a question form, or leaves.
+//! run. A message is a key, a click or a step of the wheel, a tick of the clock, a change of the
+//! window, or the result of a background thread. An effect starts a load, hands a job to the
+//! worker, gives the terminal to a child, writes the drafts file of a question form, or leaves.
 
 use super::chain::{Check, CheckFacts};
 use super::feed::{Batch, StreamLine};
@@ -37,9 +37,28 @@ pub enum Key {
     Other,
 }
 
+/// A press of the left button of the mouse, or one step of its wheel, at a cell of the window.
+/// The thread of the keys sends no message for a release, a move, or another button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mouse {
+    pub kind: MouseKind,
+    pub column: u16,
+    pub row: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseKind {
+    /// A press of the left button.
+    Click,
+    WheelUp,
+    WheelDown,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Msg {
     Key(Key),
+    /// A click or a step of the wheel. It acts on the parts of the last frame.
+    Mouse(Mouse),
     /// A paste of text, when the terminal sends it as one piece.
     Paste(String),
     Resize {

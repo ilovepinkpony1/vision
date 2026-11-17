@@ -3,11 +3,16 @@
 //! box, draw two pixels in one cell, and dim the whole screen behind a card. Each text goes
 //! through [`super::super::text`] rules: a control character becomes a space, and a wide
 //! character never splits at the right edge.
+//!
+//! The canvas is also the one place that records the parts of the frame that the mouse can hit
+//! ([`Canvas::click`] and [`Canvas::wheel`]). The view gives them back with the frame.
 
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 
 use super::theme::{Rgb, T};
+use crate::app::hits::{hint_parts, Act, HitMap};
 use crate::app::text::{char_width, width};
 
 /// How a text looks: its color, an optional background, and bold.
@@ -46,6 +51,8 @@ pub struct Canvas<'a> {
     pub h: i32,
     /// True when the terminal shows no color: dimming then uses the dim attribute.
     plain: bool,
+    /// The parts of the frame that the mouse can hit.
+    hits: HitMap,
 }
 
 impl<'a> Canvas<'a> {
@@ -56,7 +63,58 @@ impl<'a> Canvas<'a> {
             h: i32::from(area.height),
             buf,
             plain,
+            hits: HitMap::default(),
         }
+    }
+
+    /// The cells of a part in the window, cut to the grid, or `None` when no cell is left.
+    fn rect(&self, x: i32, y: i32, w: i32, h: i32) -> Option<Rect> {
+        let (x0, y0) = (x.max(0), y.max(0));
+        let (x1, y1) = ((x + w).min(self.w), (y + h).min(self.h));
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let area = self.buf.area;
+        Some(Rect::new(
+            area.x + x0 as u16,
+            area.y + y0 as u16,
+            (x1 - x0) as u16,
+            (y1 - y0) as u16,
+        ))
+    }
+
+    /// Records a part that a click hits, with what the click does.
+    pub fn click(&mut self, x: i32, y: i32, w: i32, h: i32, act: Act) {
+        if let Some(rect) = self.rect(x, y, w, h) {
+            self.hits.click(rect, act);
+        }
+    }
+
+    /// Records the parts of a key hint whose key starts at the column `x`, as
+    /// [`hint_parts`] gives them.
+    pub fn hint(&mut self, x: i32, y: i32, key: &str, label: &str) {
+        for (hx, hw, k) in hint_parts(x, key, label) {
+            self.click(hx, y, hw, 1, Act::Key(k));
+        }
+    }
+
+    /// Records a part that the wheel scrolls: one step of the wheel is `by` presses of Up or
+    /// Down.
+    pub fn wheel(&mut self, x: i32, y: i32, w: i32, h: i32, by: usize) {
+        if let Some(rect) = self.rect(x, y, w, h) {
+            self.hits.wheel(rect, by);
+        }
+    }
+
+    /// Forgets the parts that are recorded so far: a card takes each click, so the parts of
+    /// the screen under it no longer count.
+    pub fn clear_hits(&mut self) {
+        self.hits.clear();
+    }
+
+    /// The parts of the frame that the mouse can hit.
+    pub fn into_hits(self) -> HitMap {
+        self.hits
     }
 
     fn cell(&mut self, x: i32, y: i32) -> Option<&mut ratatui::buffer::Cell> {

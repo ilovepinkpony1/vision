@@ -113,6 +113,8 @@ The live view shows the path of the ticket, what happens now, and the work of th
 - The arrows scroll the activity, and `G` goes back to its end.
 - Esc goes back to Home.
 
+You can also use the mouse. A click on a key hint acts as that key, a click on a row selects it, and a second click opens it. The wheel scrolls the list or the text under the pointer. A key that sends something or records a decision, such as an approval or the send of your answers, needs two clicks: the first one only arms it. To select text, hold Shift (Option in some terminals).
+
 Each thing that waits for you has its card:
 
 - The questions of one turn come as one form. A question takes the letter of a choice, your own words with `e`, or `k` for a question that was needless. Then type a reason, or press Tab to skip it. Each answer is only a draft: the arrows and the digits move between the questions, so you can change any draft. The review page lists your drafts, and `s` sends them all at once.

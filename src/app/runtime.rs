@@ -4,9 +4,10 @@
 //! with a queue, and the keys in one thread. The loop never blocks on the ledger, on the
 //! tracker, or on a child process.
 //!
-//! The runtime sets the time of the model before each message. [`Runtime`] needs no terminal,
-//! so a test can drive the real loaders and the real worker with it; [`run_terminal`] adds the
-//! terminal and draws.
+//! The runtime sets the time of the model before each message, and keeps the parts of each
+//! frame that the mouse can hit in the model after the draw. [`Runtime`] needs no terminal, so
+//! a test can drive the real loaders and the real worker with it, and draw on a test backend;
+//! [`run_terminal`] adds the terminal and draws.
 
 use std::io;
 use std::panic::AssertUnwindSafe;
@@ -14,10 +15,11 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::Terminal;
 use time::OffsetDateTime;
 
+use super::hits::HitMap;
 use super::loader::{Loader, Request};
 use super::model::{App, Clock};
 use super::msg::{ChildResult, Effect, Handoff, Job, JobDone, JobKind, Msg};
@@ -152,6 +154,16 @@ impl Runtime {
                 )));
             }
         }
+    }
+
+    /// Draws the model, and keeps the parts of the frame that the mouse can hit in the model, so
+    /// that the next click acts on what this frame shows.
+    pub fn draw<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+        let mut hits = HitMap::default();
+        terminal.draw(|frame| hits = view::draw(&self.app, frame))?;
+        self.app.hits = hits;
+        self.app.dirty = false;
+        Ok(())
     }
 
     /// Waits for the next message up to `timeout`.
@@ -440,6 +452,10 @@ fn redraw_all(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resu
 /// The loop with a terminal: draws when something changed or something moves, and waits for a
 /// message up to 100 ms while something moves, else up to one second, or until a pass that runs
 /// shows in the header. A session that waits for the terminal runs here, between two messages.
+///
+/// A click acts on the parts of the last frame. So when a message changed the model and an
+/// event of the mouse waits behind it, the loop draws first, and the event acts on the new
+/// frame.
 pub fn run_terminal(
     rt: &mut Runtime,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -447,6 +463,8 @@ pub fn run_terminal(
 ) -> Result<Exit> {
     rt.start();
     let mut shown = None;
+    // An event of the mouse that waits for the next frame.
+    let mut held: Option<Msg> = None;
     loop {
         if rt.app.quit {
             return Ok(Exit::Normal);
@@ -472,8 +490,7 @@ pub fn run_terminal(
         };
         let now_shown = (hour, minute, second);
         if rt.app.dirty || rt.app.animating() || shown != Some(now_shown) {
-            terminal.draw(|frame| view::draw(&rt.app, frame))?;
-            rt.app.dirty = false;
+            rt.draw(terminal)?;
             shown = Some(now_shown);
         }
         // A pass shows in the header after a while: the loop wakes at that time.
@@ -484,7 +501,7 @@ pub fn run_terminal(
                 .until_pass_shows()
                 .map_or(SLOW, |left| left.min(SLOW))
         };
-        let mut next = rt.wait(timeout);
+        let mut next = held.take().or_else(|| rt.wait(timeout));
         loop {
             let msg = next.take().unwrap_or(Msg::Tick);
             if let Msg::Signal(signal) = msg {
@@ -492,6 +509,10 @@ pub fn run_terminal(
             }
             rt.handle(msg);
             match rt.next_now() {
+                Some(msg @ Msg::Mouse(_)) if rt.app.dirty => {
+                    held = Some(msg);
+                    break;
+                }
                 Some(msg) => next = Some(msg),
                 None => break,
             }

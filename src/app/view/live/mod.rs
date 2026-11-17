@@ -11,8 +11,10 @@ mod right;
 use super::canvas::{ink, Canvas};
 use super::header::{header, keys, keys_width, spinner};
 use super::theme::T;
+use crate::app::hits::hint;
 use crate::app::live::{Live, TicketData};
 use crate::app::model::App;
+use crate::app::msg::Key;
 use crate::app::now::{Kind, Now};
 use crate::app::text::{cut, error_line, width};
 use crate::pipeline::state::{NEEDS_YOU, PAUSED};
@@ -59,7 +61,7 @@ pub fn draw(app: &App, c: &mut Canvas, key: &str) {
     middle::feed(app, c, &l, live, &now);
     right::draw(app, c, &l, data);
     match &live.tell {
-        Some(line) => tell_line(c, data, line),
+        Some(line) => tell_line(app, c, data, line),
         None => {
             let list = footer(data, &now, c.w - 1);
             let refs: Vec<(&str, &str)> = list.iter().map(|(k, l)| (*k, l.as_str())).collect();
@@ -145,15 +147,19 @@ fn fit(mut list: Vec<(&'static str, String)>, room: i32) -> Vec<(&'static str, S
 
 /// The line of `t` at the bottom: the prompt, the text, and the cursor. A long text shows the
 /// part around the cursor.
-fn tell_line(c: &mut Canvas, data: &TicketData, line: &crate::app::line::Line) {
+fn tell_line(app: &App, c: &mut Canvas, data: &TicketData, line: &crate::app::line::Line) {
     let y = c.h - 2;
     let who = match &data.facts.work {
         Some(work) => format!("tell {}:", work.agent),
         None => "tell the next turn:".to_string(),
     };
     let x = c.put(1, y, &cut(&who, 30), ink(T.accent).bold()) + 1;
-    let hint = "enter send · esc cancel";
-    let room = (c.w - 3 - width(hint) as i32 - 2 - x).max(4) as usize;
+    // Enter sends the text, so a click on `enter send` arms first, and its label says to click
+    // again while it is armed. The hint ends at the same column, so `esc cancel` stays.
+    let send = hint(0, "enter", "send", &[Key::Enter], app.armed_act());
+    let before_esc = format!("enter {} · ", send.label);
+    let hint_text = format!("{before_esc}esc cancel");
+    let room = (c.w - 3 - width(&hint_text) as i32 - 2 - x).max(4) as usize;
     let chars: Vec<char> = line.text().chars().collect();
     let cursor = line.cursor().min(chars.len());
     // The window of characters that fits, with the cursor in it.
@@ -178,7 +184,15 @@ fn tell_line(c: &mut Canvas, data: &TicketData, line: &crate::app::line::Line) {
         .get(cursor)
         .map_or(" ".to_string(), |ch| ch.to_string());
     c.put(cx, y, &under, ink(T.bg).on(T.accent));
-    c.right(c.w - 2, y, hint, ink(T.dim));
+    // A click on `esc cancel` acts as that key.
+    let hx = c.right(c.w - 2, y, &hint_text, ink(T.dim)) + 1;
+    if send.armed {
+        c.put(hx + width("enter ") as i32, y, &send.label, ink(T.warn));
+    }
+    for (px, pw, act) in hint(hx, "enter", &send.label, &[Key::Enter], app.armed_act()).parts {
+        c.click(px, y, pw, 1, act);
+    }
+    c.hint(hx + width(&before_esc) as i32, y, "esc", "cancel");
 }
 
 /// The data of the live view, for the other parts of the view.

@@ -19,11 +19,16 @@
 //!
 //! `e`, `k`, and `r` are also letters of choices. On a card with that many choices, the letter
 //! chooses, and `t`, `-`, and `s` still do their part.
+//!
+//! A click on a tab of the question row opens its page, a click on a choice takes it as its
+//! letter does, a click on a row of the review page chooses it and a second click opens it, and
+//! the send sends on its second click: the first click arms it. A click on a choice while the
+//! line of the reason is open keeps the text of the line. A click on a tab while a line is open leaves the line, as Esc does.
 
 use super::super::line::Line;
 use super::super::model::{App, Card, Tone};
 use super::super::msg::{Effect, Key};
-use super::super::needs::{enter_reply, Draft, Input, NeedsCard, QuestionSet, Reply};
+use super::super::needs::{enter_reply, Draft, Input, NeedsCard, QuestionSet, Reply, Target};
 use super::super::recipes;
 use super::super::text::join_and;
 use super::{chain, notice};
@@ -58,6 +63,60 @@ pub fn on_key(app: &mut App, set: &QuestionSet, key: Key) {
         review_key(app, set, key);
     } else {
         question_key(app, set, page, key);
+    }
+}
+
+/// A click on a part of the form.
+pub fn on_click(app: &mut App, set: &QuestionSet, target: Target) {
+    match target {
+        Target::Page(page) => open_page(app, set, page),
+        Target::Choice(i) => choose(app, set, i),
+        Target::Row(i) => {
+            let Some(card) = card(app).filter(|c| c.reviewing()) else {
+                return;
+            };
+            if i >= set.len() {
+                return;
+            }
+            if card.row == i {
+                open_page(app, set, i);
+            } else {
+                card.row = i;
+            }
+        }
+        Target::Send => {
+            if card(app).is_some_and(|c| c.reviewing()) {
+                send(app, set);
+            }
+        }
+    }
+}
+
+/// Takes the choice `i` of the question that shows, as its letter does: the line of the reason
+/// opens with the reason of the draft. A line of the reason that is open keeps its text.
+fn choose(app: &mut App, set: &QuestionSet, i: usize) {
+    let Some(card) = card(app) else {
+        return;
+    };
+    let Some(view) = card.question().and_then(|q| set.cards.get(q)) else {
+        return;
+    };
+    let Some(choice) = view.choices.get(i) else {
+        return;
+    };
+    let reply = Reply::Choice(choice.n.saturating_sub(1));
+    let old_why = match card.drafts.get(&view.id) {
+        Some(Draft::Answer { why, .. }) => why.clone(),
+        _ => String::new(),
+    };
+    match &mut card.input {
+        Input::Why { reply: shown, .. } => *shown = reply,
+        input => {
+            *input = Input::Why {
+                reply,
+                line: Line::of(&old_why),
+            }
+        }
     }
 }
 

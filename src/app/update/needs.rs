@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use super::super::model::{App, Card, Tone};
 use super::super::msg::{Effect, Key};
-use super::super::needs::{Input, NeedItem, NeedsCard};
+use super::super::needs::{Input, NeedItem, NeedsCard, Target};
 use super::super::view::need_card::body_size;
 use super::{act, ask, ask_quit, chain, notice};
 
@@ -364,6 +364,24 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         }
         _ if runs => {}
         _ => item_key(app, key),
+    }
+}
+
+/// A click on a part of the question form that shows. While the chain of the form runs, it does
+/// nothing, as the keys of the form do nothing then.
+pub fn click(app: &mut App, target: Target) {
+    let Some(card) = card(app) else {
+        return;
+    };
+    let Some(set) = card.set().cloned() else {
+        return;
+    };
+    let id = card.item().map(NeedItem::id);
+    let runs = id
+        .and_then(|id| chain::of(app, &super::super::chain::Owner::Need(id)))
+        .is_some_and(|c| c.running());
+    if !runs {
+        ask::on_click(app, &set, target);
     }
 }
 

@@ -52,6 +52,25 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
     }
 }
 
+/// A click on the line `i` of the log: the first click puts the cursor on it, and a click on
+/// the line of the cursor acts as Enter.
+pub fn click_line(app: &mut App, i: usize, fx: &mut Vec<Effect>) {
+    if app.card.is_some() {
+        return;
+    }
+    let Some(pager) = top(app) else {
+        return;
+    };
+    if pager.cursor.is_none() || i >= pager.lines.len() {
+        return;
+    }
+    if pager.cursor == Some(i) {
+        on_key(app, Key::Enter, fx);
+    } else {
+        pager.cursor = Some(i);
+    }
+}
+
 /// The title of the pager of a turn: its step and number, and its start in the local time,
 /// such as `turn build-1 of 14:24`.
 fn turn_title(turn: &str, key: &str, offset_seconds: i32) -> String {

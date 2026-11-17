@@ -6,12 +6,20 @@
 //! and the effort, a spinner, the running time, the tool calls, and the output tokens. A ticket
 //! that needs the person gets a box in the warning color with a badge and the key. Each other
 //! state gets the resting head and its lines.
+//!
+//! A click on the box of a ticket that needs the person acts as its key, and a click on a tab
+//! shows that tab. The marks `‹` and `›` show the tab before and after, as `F` and `f` do, the
+//! mark of the lines below acts as `G`, and the wheel over the activity scrolls it as the arrows
+//! do. While the line of `t` is open, the box and the mark of the lines below are no parts,
+//! because their keys go into the line.
 
 use super::layout::{Layout, ACTIVITY_Y, FEED_TEXT_DX, FEED_Y, TABS_Y};
+use crate::app::hits::{keys_of, Act};
 use crate::app::live::{Live, TicketData};
 use crate::app::model::App;
+use crate::app::msg::Key;
 use crate::app::now::{mmss, Kind, Now};
-use crate::app::text::{count, cut, wrap};
+use crate::app::text::{count, cut, width, wrap};
 use crate::app::view::canvas::{ink, Canvas};
 use crate::app::view::face;
 use crate::app::view::header::spinner;
@@ -20,6 +28,8 @@ use crate::app::view::theme::{agent_color, hue, ColorMode, T};
 
 /// The column of the text of NOW, after the head.
 const TEXT_DX: i32 = 11;
+/// The lines that one step of the wheel scrolls the activity.
+const WHEEL_LINES: usize = 3;
 
 pub fn now(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData, now: &Now, live: &Live) {
     let x = l.mid_x();
@@ -31,6 +41,12 @@ pub fn now(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData, now: &Now, 
     let t = app.clock.seconds();
     match now.kind {
         Kind::Needs | Kind::Paused => {
+            // While the line of `t` is open, a key goes into the line: then the box is no part.
+            if let Some((key, _)) = now.key.filter(|_| live.tell.is_none()) {
+                if let [(_, _, k)] = keys_of(key).as_slice() {
+                    c.click(x, 3, w, 5, Act::Key(*k));
+                }
+            }
             c.wipe(x, 3, w, 5, T.warn_bg);
             c.frame(x, 3, w, 5, T.warn);
             let badge = if now.kind == Kind::Paused {
@@ -157,13 +173,21 @@ pub fn feed(app: &App, c: &mut Canvas, l: &Layout, live: &Live, now: &Now) {
         ink(T.line),
     );
     let feed = &live.feed;
+    c.wheel(x, ACTIVITY_Y, w, l.bottom() - ACTIVITY_Y + 1, WHEEL_LINES);
     if !feed.follow {
         let mark = format!(" ▲ {} below · G goes to the end ", feed.back);
-        c.right(x + w - 1, ACTIVITY_Y, &mark, ink(T.accent));
+        let mx = c.right(x + w - 1, ACTIVITY_Y, &mark, ink(T.accent)) + 1;
+        // While the line of `t` is open, `G` goes into the line: then the mark is no part.
+        if live.tell.is_none() {
+            let act = Act::Key(Key::Char('G'));
+            c.click(mx, ACTIVITY_Y, width(&mark) as i32, 1, act);
+        }
     }
+    // The marks show the tab before and the tab after, as `F` and `f` do.
     let tabs = l.tabs(&feed.counts(), app.activity);
     if tabs.left {
         c.put(x, TABS_Y, "‹", ink(T.dim));
+        c.click(x, TABS_Y, 1, 1, Act::Tab(app.activity.back()));
     }
     for (filter, tx, text) in &tabs.tabs {
         let style = if *filter == app.activity {
@@ -172,9 +196,11 @@ pub fn feed(app: &App, c: &mut Canvas, l: &Layout, live: &Live, now: &Now) {
             ink(T.dim)
         };
         c.put(*tx, TABS_Y, text, style);
+        c.click(*tx, TABS_Y, width(text) as i32, 1, Act::Tab(*filter));
     }
     if tabs.right {
         c.put(x + w - 1, TABS_Y, "›", ink(T.dim));
+        c.click(x + w - 1, TABS_Y, 1, 1, Act::Tab(app.activity.next()));
     }
     // The lines come from the cache of the feed: only a change wraps them again.
     let lines = feed.shared_lines(l.feed_text_w(), app.clock.offset_seconds, app.activity);

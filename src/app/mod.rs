@@ -5,9 +5,10 @@
 //! The code has three layers that stay apart:
 //!
 //! - [`model`]: plain data, [`model::App`].
-//! - [`update`]: a function that takes a [`msg::Msg`] (a key, a tick of the clock, a result of
-//!   a background thread), changes the model, and gives the [`msg::Effect`]s to run.
-//! - [`view`]: a function from the model to a ratatui frame.
+//! - [`update`]: a function that takes a [`msg::Msg`] (a key, a click, a tick of the clock, a
+//!   result of a background thread), changes the model, and gives the [`msg::Effect`]s to run.
+//! - [`view`]: a function from the model to a ratatui frame. It also gives the parts of the
+//!   frame that the mouse can hit ([`hits`]), and the runtime keeps them in the model.
 //!
 //! The update and the view do no input or output, read no clock, and read no file, so each
 //! screen can be tested without a terminal. [`runtime`] runs the effects: the reads of Home and
@@ -18,6 +19,7 @@
 pub mod chain;
 pub mod drafts;
 pub mod feed;
+pub mod hits;
 pub mod line;
 pub mod live;
 pub mod load;

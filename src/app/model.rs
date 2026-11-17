@@ -8,6 +8,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 
 use super::chain::Chain;
+use super::hits::{card_place, Act, Armed, HitMap};
 use super::model_table::ModelsState;
 use super::msg::{Job, JobKind};
 use super::needs::NeedsCard;
@@ -496,6 +497,13 @@ pub struct App {
     /// The last number given to a load of the needs or to a chain.
     pub seq: u64,
     pub notice: Option<Notice>,
+    /// The parts of the last frame that the mouse can hit. The runtime keeps them after each
+    /// draw, as it sets the clock before each message, and a change of the window size clears
+    /// them.
+    pub hits: HitMap,
+    /// The part that a first click armed, for a part that sends something or records a
+    /// decision. See [`App::armed_act`].
+    pub armed: Option<Armed>,
     /// The app leaves.
     pub quit: bool,
     /// Something that the view shows changed since the last draw.
@@ -525,9 +533,20 @@ impl App {
             picture_fit: None,
             seq: 0,
             notice: None,
+            hits: HitMap::default(),
+            armed: None,
             quit: false,
             dirty: true,
         }
+    }
+
+    /// What the armed part does, while a second click on it acts: before the end of its time,
+    /// and while the same screen and the same card show.
+    pub fn armed_act(&self) -> Option<&Act> {
+        let armed = self.armed.as_ref()?;
+        let card = self.card.as_ref().map(card_place);
+        let same = armed.screen == self.screen && armed.card == card;
+        (same && self.clock.elapsed < armed.until).then_some(&armed.act)
     }
 
     /// The tickets in progress, or none before the first load.

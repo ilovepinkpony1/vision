@@ -123,7 +123,7 @@ pub fn model_lines() -> Vec<ModelLine> {
 }
 
 /// Home, then `m`, then the model table.
-fn models_open(size: (u16, u16)) -> App {
+pub fn models_open(size: (u16, u16)) -> App {
     let mut app = home(size);
     let fx = key(&mut app, 2.0, Key::Char('m'));
     assert_eq!(app.screen, Screen::Models);
@@ -202,7 +202,7 @@ pub fn stats_data(week: bool) -> StatsData {
     }
 }
 
-fn stats_open(size: (u16, u16)) -> App {
+pub fn stats_open(size: (u16, u16)) -> App {
     let mut app = home(size);
     let fx = key(&mut app, 2.0, Key::Char('s'));
     assert_eq!(app.screen, Screen::Stats);
@@ -231,6 +231,78 @@ fn the_screen_models() {
         Msg::Models(Box::new(Err("the configuration is not valid TOML".into()))),
     );
     assert_snapshot("models_error", &screen(&app));
+}
+
+/// The model table that `vision model` gives with the demo adapter: each agent of Vision with
+/// its default model, its effort, and its reason, and no measured turn.
+pub fn all_agents() -> Vec<ModelLine> {
+    vision::models::AGENTS
+        .iter()
+        .map(|a| line(a.name, a.model, a.effort.as_str(), a.reason))
+        .collect()
+}
+
+/// Home, then `m`, then the model table of each agent of Vision.
+pub fn models_many(size: (u16, u16)) -> App {
+    let mut app = home(size);
+    key(&mut app, 2.0, Key::Char('m'));
+    send(&mut app, 2.1, Msg::Models(Box::new(Ok(all_agents()))));
+    app
+}
+
+/// The rows of the frame from the table to the box of the recommendation, as text: the rows of
+/// the agents that show.
+fn agent_rows(app: &App) -> Vec<String> {
+    let text = screen(app);
+    let rows: Vec<&str> = text.lines().collect();
+    let first = rows.iter().position(|r| r.contains("AGENT")).unwrap() + 2;
+    let boxed = rows
+        .iter()
+        .position(|r| r.contains("╭─ recommendation"))
+        .unwrap_or_else(|| panic!("no box of the recommendation:\n{text}"));
+    rows[first..boxed].iter().map(|r| r.to_string()).collect()
+}
+
+#[test]
+fn the_screen_models_with_more_agents_than_rows_shows_a_window_that_follows_the_selection() {
+    let mut app = models_many(SMALL);
+    let names: Vec<&str> = vision::models::AGENTS.iter().map(|a| a.name).collect();
+    assert_eq!(names.len(), 15);
+    assert_snapshot("models_many_100x28", &screen(&app));
+    // At each selection, the rows of seven agents show between the table and the box, the
+    // selected agent is one of them, and the box and the footer keep their rows.
+    let shown = 7;
+    for selected in 0..names.len() {
+        let rows = agent_rows(&app);
+        assert_eq!(rows.len(), shown * 2, "selection {selected}");
+        let text = screen(&app);
+        let lines: Vec<&str> = text.lines().collect();
+        let (h, box_y) = (usize::from(SMALL.1), usize::from(SMALL.1) - 7);
+        assert!(lines[box_y].contains("╭─ recommendation for"), "{text}");
+        assert!(lines[h - 2].starts_with(" ↑↓ agent"), "{text}");
+        // The column of the agent has 11 cells, so `critic-narrow` shows as `critic-narr`.
+        let selected_row = rows.iter().find(|r| r.starts_with("  ▸ ")).unwrap();
+        let name: String = names[selected].chars().take(11).collect();
+        assert!(
+            selected_row.starts_with(&format!("  ▸ {name}")),
+            "selection {selected}:\n{text}"
+        );
+        // The marks say how many agents are out of view above and below.
+        let offset = (selected + 1).saturating_sub(shown);
+        let below = names.len() - offset - shown;
+        let up = format!("▲ {offset} more");
+        let down = format!("▼ {below} more");
+        assert_eq!(lines[6].contains(&up), offset > 0, "{text}");
+        assert_eq!(lines[box_y].contains(&down), below > 0, "{text}");
+        key(&mut app, 3.0, Key::Down);
+    }
+    assert_snapshot("models_many_end_100x28", &screen(&app));
+    // Up from the end moves the selection, and the window follows it to the top.
+    for _ in 0..names.len() {
+        key(&mut app, 3.5, Key::Up);
+    }
+    assert_eq!(app.models.selected, 0);
+    assert_eq!(screen(&app), screen(&models_many(SMALL)));
 }
 
 #[test]

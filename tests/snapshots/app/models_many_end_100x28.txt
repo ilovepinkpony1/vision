@@ -1,0 +1,28 @@
+ ◆ VISION ▸ models                                engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Each agent keeps its model until you change it. A change holds for the next turn of the agent,
+  not for a turn that runs now.
+    AGENT        MODEL                  EFFORT  SOURCE                                    MEASURED
+  ───────────────────────────────────────────────────────────────────────────────────── ▲ 8 more ─
+    cause        gpt-6.1-sol            high    default                                no turn yet
+                 A second model finds the cause on its own, so its guess does not follow the oth…
+    history      claude-sonnet-5-5      medium  default                                no turn yet
+                 It reads commit messages and blame output, which needs little reasoning, so its…
+    points       claude-opus-5-5        high    default                                no turn yet
+                 It tests each point of the ticket against the code. A point that it misses cost…
+    scope        claude-opus-5-5        high    default                                no turn yet
+                 It finds each place that a chore touches. A place that it misses breaks the bui…
+    analyst      claude-opus-5-5        xhigh   default                                no turn yet
+                 It checks each finding against the code and writes the plan and the questions. …
+    critic       gpt-6.1-sol            xhigh   default                                no turn yet
+                 A wide plan touches many files, the database, or security. A second model at it…
+  ▸ critic-narr‹ gpt-6.1-sol ›          high    default                                no turn yet
+                 A narrow plan has less to miss, so the critic reads it one notch lower.
+  ╭─ recommendation for critic-narrow ───────────────────────────────────────────────────────────╮
+  │  Fewer than 20 measured turns for a second model, so the default stays.                      │
+  │                                                                                              │
+  │  No turn of this agent ended yet, so nothing is measured.                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+ ↑↓ agent   ←→ model   e effort   enter pin   u back to the default   esc home   ? keys
+

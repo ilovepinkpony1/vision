@@ -99,6 +99,30 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
     }
 }
 
+/// A click on the agent of the row `i`: the first click selects it, as the arrows do. The
+/// selected agent with a change that is not pinned is a part that pins the change, as Enter
+/// does: it arms on the first click and pins on the second, and the view records it as that
+/// part. So a click here on the selected agent finds no change to pin, and it only says how to
+/// make one.
+pub fn click_row(app: &mut App, i: usize) {
+    if app.screen != Screen::Models || app.card.is_some() || i >= app.models.lines().len() {
+        return;
+    }
+    if app.models.selected != i {
+        app.models.selected = i;
+        chain::drop_ended(app);
+        return;
+    }
+    let agent = &app.models.lines()[i].agent;
+    if !app.models.edits.contains_key(agent) {
+        notice(
+            app,
+            "No change to pin. Change the model with ‹ › or the effort with e, then click the agent again.",
+            Tone::Info,
+        );
+    }
+}
+
 /// The owner of the chain of the selected agent.
 fn owner_of(app: &App) -> Owner {
     let agent = app

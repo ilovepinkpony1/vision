@@ -1283,7 +1283,7 @@ If standard input and standard output are both terminals, `vision` with no argum
 
 ### 15.1 The layers
 
-The app has three layers. The model is plain data. The update takes a message, changes the model, and gives the effects to run. A message is a key, a tick of the clock, or the result of a background thread. The view draws the model. The update and the view read no clock and no file. So each screen has a text snapshot in `tests/snapshots/app/`, and no test needs a terminal.
+The app has three layers. The model is plain data. The update takes a message, changes the model, and gives the effects to run. A message is a key, a click or a step of the mouse wheel, a tick of the clock, or the result of a background thread. The view draws the model. The view also gives the parts of the frame that the mouse can hit. The runtime keeps the parts of the last frame in the model after each draw, as it sets the clock before each message. The update and the view read no clock and no file. So each screen has a text snapshot in `tests/snapshots/app/`, and no test needs a terminal.
 
 The data of Home and of the live view comes from the loader, one thread that keeps one connection to the ledger. Each other read runs in a thread of its own, through the functions that the commands use: the rows of `vision pick`, the report, the plan, the commit list, the model table, and the adapter. The cards read the questions, the operations that wait, and the proposals of the Curator in the same way. Each change of the state runs its command as a child process of the same binary, with no standard input. The app shows its own notice for a success, and the text of standard error for a failure. One tested path does each change, no text of a command reaches the screen, and a crash of an action cannot stop the app.
 
@@ -1382,9 +1382,25 @@ The send is one action: `vision answer --file` with the draft of each question (
 
 The drafts stay in `tickets/<KEY>/answer-drafts.json`, in the format of `vision answer --file`. The app writes the file after each change of a draft, so the drafts survive a close of the form and a restart of the app. The send removes the drafts of its questions. If the Judge or another command answers a question of the form, the question leaves the form with a note, and its draft goes.
 
-The view places each part that a click can hit in the same code that draws it. These parts are a tab of the question row, a choice, a row of the review page, and the send.
+The view records each part that a click can hit in the same code that draws it. A click on a key hint acts as that key. This holds for each hint of a footer and of a card, such as `n needs` or `enter open`. A hint of more keys, such as `↑↓` or `g G`, has a part for each key, and its label is no part.
+
+A click on a row of a list selects the row. A click on the selected row opens it, as Enter does. The lists are the tickets of Home, the agents of Models, the rows of the log, and the rows of the review page. On Models, two clicks on the selected agent pin its change, as Enter does. If the agent has no change, the click says how to make one.
+
+A click on a choice of the question form takes that choice, as its letter does. An open line of the reason keeps its text. A click on a tab of the question row opens that page, and two clicks on the send send the form. A click on a choice of a write card acts as its letter.
+
+A click on a tab of the activity shows that tab. The marks `‹` and `›` show the tab before and the tab after. The mark `▲ N below` acts as `G`. The bar "needs you" of Home acts as `n`. In NOW, the box of a ticket that needs the person acts as its key. On the selected agent of Models, `‹` and `›` act as the arrows, and the effort acts as `e`. A click on the loader skips it.
+
+The wheel acts as the up and down arrows on the part under the pointer. One step scrolls three lines of the activity, of a pager, or of the body of a card. On Home, on Models, and on the review page, one step moves the selection one row.
+
+A part that sends something or records a decision acts only on a second click. The first click arms the part. Its label says `click again`, and nothing else changes. A second click on the same part within 3 seconds acts as its key. A click elsewhere, a key, a paste, a step of the wheel, and the end of the 3 seconds take the arm away. The arm ends on the first message after its time, such as the tick of each second, so no fast loop runs for it. A typed key acts at once, as before. If a different thing replaces the card between the two clicks, the arm goes, so a second click never acts on a thing that the first click did not see.
+
+Enter arms on the cards that start, resume, stop, or retry a ticket, on the kill switch, on the quit card, and on the card after a session. On the open card, Enter and `o` arm. On the card of the things that wait, `a` of a plan, `y` and `a` of a write, `r` of a rule, and Enter of a paused ticket and of a notice arm. The send of the question form, the send of the line of `t`, and Enter and `u` of Models arm too.
+
+A card takes each click, and the parts of the screen under it do not act. A click outside each part does nothing. A click with Shift, Alt, or Ctrl does nothing. While a line is open, a key goes into the line. So the box of NOW and the mark `▲ N below` are no parts while the line of `t` is open. The keys card of `?` has three more lines: what a click does, which keys need two clicks, and how to select text.
 
 A key of a card can start a chain. A chain is a list of steps that run one after the other. A step is a command, a pass of the engine, or a check. A check reads the ledger and the configuration while no job runs, and no job starts during the read. The card shows each step with its mark. If a step fails, the chain stops, and the card says why and what is true for the ticket now. If the person quits the app, the rest of the chain does not run.
+
+The foot of a card of the things that wait does not scroll. If a long reason of a failure does not fit, the card shows its first lines and says that the rest is cut. The state and the keys always stay in the window.
 
 The app acts only on the exact thing that the card showed. The approval of a plan names its full hash. The approval of a write names its operation with `--op`. Before it, a check reads that the same operation still waits, with the same commit and the same arguments. If the thing changed, the app approves nothing, and the card shows the new thing with a note.
 
@@ -1401,7 +1417,7 @@ If the pass did not ask for the write yet, one more pass runs, up to three passe
 
 While a turn runs, the card of `o` has a second `o`. It stops the turn with `vision stop` and gives the terminal to `vision open`. The turn that ran is lost, and its session keeps what the agent did. After the session, the card says that the ticket is stopped and paused. Enter continues it with `vision take` and then `vision retry`. The next turn then resumes the session of the person.
 
-`m` on Home opens Models. It has one row for each agent: its model, its effort, pinned or the default, and its measured turns with their mean cost. The left and right arrows change the model, and `e` changes the effort. Enter runs `vision model set`, and `u` runs `vision model reset`. A change that is not pinned has a mark, and Esc drops it. A change holds for the next turn of the agent, not for a turn that runs now.
+`m` on Home opens Models. It has one row for each agent: its model, its effort, pinned or the default, and its measured turns with their mean cost. With more agents than fit above the box of the recommendation, the rows show a window that follows the selection. A mark above and a mark below the rows say how many agents are out of view. The left and right arrows change the model, and `e` changes the effort. Enter runs `vision model set`, and `u` runs `vision model reset`. A change that is not pinned has a mark, and Esc drops it. A change holds for the next turn of the agent, not for a turn that runs now.
 
 `s` on Home opens Stats. It shows the cost, the tickets that finished, the questions that got an answer without the person, and the minutes of the person. A table lists the tickets. Bars show the time and the cost of each step, in the order of the adapter. A last line gives the cost of each agent. The cost of a turn with no ticket, such as a turn of the Curator, shows apart, because the report does not count it. `w` switches between the last 7 days and all time. Stats shows the line REVIEW ESCAPES once a review of a review bot was checked: the checked pull requests, the escapes by priority, and the escapes for each checked pull request. A notice of the gate cr can say that a finding keeps coming back after its fix, with its first line.
 
@@ -1411,7 +1427,13 @@ While the app owns the terminal, standard error goes to `log/app.err`. The termi
 
 For `o`, and for the review of a proposal, the app gives the terminal to a child: `vision open` or `vision memory review`. The thread of the keys stops first, and the app waits for that stop. So the app reads no key of the session. The app ignores SIGINT in that time, so a Ctrl-C ends only the session. Standard error goes back to the terminal for the session. When the session ends, the app puts back the terminal modes of before and drops the input that nobody read. Then it takes the terminal and draws the whole screen again.
 
-The thread of the keys waits in its poll until a key, a paste, or a change of the window comes. Before a child gets the terminal, the app sends SIGWINCH to itself. The signal wakes the poll, and the thread confirms its stop. The change of the window that the signal gives has the same size, so the screen does not change.
+The thread of the keys waits in its poll until a key, a paste, an event of the mouse, or a change of the window comes. Before a child gets the terminal, the app sends SIGWINCH to itself. The signal wakes the poll, and the thread confirms its stop. The change of the window that the signal gives has the same size, so the screen does not change.
+
+While the app owns the terminal, the terminal reports each press of a button and each step of the wheel, with the cells of SGR. The app uses the modes 1000 and 1006. It uses no report of a move, so a move of the mouse never wakes the app. Before the app turns on its modes, it turns off each mode of the mouse.
+
+Each way out turns off each mode of the mouse, and so does the hand-over to a child. So `vision open` and `vision memory review` get a terminal with the mouse off. After the child, the app turns on its modes again. With the mouse on, a terminal selects text only with a modifier. Most terminals use Shift, and some use Option.
+
+The thread of the keys sends a message only for a press of the left button and for a step of the wheel. A release, a move, a drag, another button, and an event with a modifier send nothing. A click acts on the parts of the last frame. A change of the window size clears the parts until the next frame. When a message changed the model and a click waits behind it, the loop draws first.
 
 The app needs 100 columns and 28 rows. In a smaller window, it shows the size that it needs. If `COLORTERM` says `truecolor` or `24bit`, the app uses 24-bit color. If not, it uses the nearest of the 256 colors. With `NO_COLOR`, it uses no color, and it draws no android and no picture.
 

@@ -5,8 +5,10 @@
 //! asks to resume a stopped ticket; `n` opens the card of the first thing that waits; `m` opens
 //! Models and `s` opens Stats; `p` pauses the engine; `r` loads the queue again; `K` opens the
 //! kill switch card; `?` shows the keys; `q` and Ctrl-C leave.
+//!
+//! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
 
-use super::super::model::{App, Card, Item, KillCard, ResumeCard, Run, StartCard, Tone};
+use super::super::model::{App, Card, Item, KillCard, ResumeCard, Run, Screen, StartCard, Tone};
 use super::super::msg::{Effect, Key};
 use super::{ask_quit, data, engine, models, needs, notice, stats};
 
@@ -16,6 +18,19 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         Key::Down | Key::Char('j') => step(app, 1),
         Key::Enter => open(app, fx),
         _ => common(app, key, fx),
+    }
+}
+
+/// A click on the ticket `key`: the first click selects it, and a click on the selected ticket
+/// opens it as Enter does.
+pub fn click_row(app: &mut App, key: &str, fx: &mut Vec<Effect>) {
+    if app.screen != Screen::Home || app.card.is_some() {
+        return;
+    }
+    if app.home.selected.as_deref() == Some(key) {
+        open(app, fx);
+    } else if app.items().iter().any(|i| i.key() == key) {
+        app.home.selected = Some(key.to_string());
     }
 }
 

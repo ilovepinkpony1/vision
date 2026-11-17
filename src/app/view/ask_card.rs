@@ -16,11 +16,13 @@
 
 use super::canvas::{ink, Ink};
 use super::cards::Rows;
-use super::need_card::{Area, Hit, Parts, TEXT};
+use super::need_card::{Parts, TEXT};
 use super::theme::{agent_color, T};
 use crate::app::chain::{End, Owner};
+use crate::app::hits::{Act, AGAIN};
 use crate::app::line::Line;
 use crate::app::model::App;
+use crate::app::msg::Key;
 use crate::app::needs::{enter_reply, Draft, Input, Mark, NeedsCard, QuestionSet, Reply, Target};
 use crate::app::recipes::needless_words;
 use crate::app::text::{count, cut, width, wrap};
@@ -78,13 +80,8 @@ fn tabs(card: &NeedsCard, set: &QuestionSet, parts: &mut Parts) {
             style
         };
         let w = width(&text) as i32;
-        parts.hits.push(Hit {
-            target: Target::Page(i),
-            area: Area::Head,
-            row: 0,
-            x,
-            w,
-        });
+        let at = parts.head.rows.len();
+        parts.head.hit(at, x, w, Act::Form(Target::Page(i)));
         row.push((x, text, style));
         x += w + 3;
     }
@@ -275,13 +272,10 @@ fn choices(parts: &mut Parts, card: &NeedsCard, view: &CardView, draft: Option<&
         }
         let rows = 1 + lines.len().saturating_sub(1);
         for line in 0..rows {
-            parts.hits.push(Hit {
-                target: Target::Choice(i),
-                area: Area::Body,
-                row: parts.body.rows.len() + line,
-                x: 3,
-                w: TEXT as i32,
-            });
+            let at = parts.body.rows.len() + line;
+            parts
+                .body
+                .hit(at, 3, TEXT as i32, Act::Form(Target::Choice(i)));
         }
         parts.body.rows.push(row);
         for line in lines.iter().skip(1) {
@@ -465,13 +459,9 @@ fn review(app: &App, card: &NeedsCard, set: &QuestionSet) -> Parts {
             }
         }
         for row in first..parts.body.rows.len() {
-            parts.hits.push(Hit {
-                target: Target::Row(i),
-                area: Area::Body,
-                row,
-                x: 1,
-                w: TEXT as i32 + 2,
-            });
+            parts
+                .body
+                .hit(row, 1, TEXT as i32 + 2, Act::Form(Target::Row(i)));
         }
     }
     let missing = set.missing(&card.drafts);
@@ -503,20 +493,31 @@ fn review(app: &App, card: &NeedsCard, set: &QuestionSet) -> Parts {
         1 => "send the answer".to_string(),
         n => format!("send the {n} answers"),
     };
-    parts.hits.push(Hit {
-        target: Target::Send,
-        area: Area::Foot,
-        row: parts.foot.rows.len(),
-        x: 3,
-        w: (width("s") + 1 + width(&send)) as i32,
-    });
-    parts.foot.keys(&[
-        ("s", &send),
-        ("enter", "open the question"),
-        ("↑↓", "choose"),
-        ("←→", "the pages"),
-        ("esc", "later"),
-    ]);
+    // The send sends the answers, so a click on it arms first, and its label says to click
+    // again while it is armed.
+    let armed = app.armed_act() == Some(&Act::Form(Target::Send));
+    let s = Act::Decide(Key::Char('s'));
+    let label = if armed {
+        AGAIN.to_string()
+    } else {
+        send.clone()
+    };
+    let at = parts.foot.rows.len();
+    parts.foot.keys_with(
+        &[
+            ("s", &send),
+            ("enter", "open the question"),
+            ("↑↓", "choose"),
+            ("←→", "the pages"),
+            ("esc", "later"),
+        ],
+        &[Key::Char('s')],
+        armed.then_some(&s),
+    );
+    // The send is the first key of its row. It comes after the keys, so that it wins over the
+    // part of the key `s` at the same place.
+    let w = (width("s") + 1 + width(&label)) as i32;
+    parts.foot.hit(at, 3, w, Act::Form(Target::Send));
     parts.title = title(set, &format!("your {}", count(set.len(), "answer")));
     parts
 }

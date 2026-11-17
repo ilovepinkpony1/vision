@@ -1,13 +1,20 @@
 //! The pager of the live view (`drawLog` of the design): the header with the key and the title,
 //! the names of the columns when the text has them, the lines with their colors, a mark of the
 //! position, and the keys. The log shows its cursor row.
+//!
+//! The wheel over the text scrolls it as the arrows do. A click on a row of the log puts the
+//! cursor on it, and a click on the row of the cursor opens it as Enter does.
 
 use super::canvas::{ink, Canvas};
 use super::header::{header, keys, spinner};
 use super::theme::{hue, T};
+use crate::app::hits::Act;
 use crate::app::model::App;
 use crate::app::pager::{body_rows, Pager, PagerKind, PagerLine, PagerState};
 use crate::app::text::{clip, cut, width, wrap};
+
+/// The lines that one step of the wheel scrolls.
+const WHEEL_LINES: usize = 3;
 
 pub fn draw(app: &App, c: &mut Canvas, key: &str, pager: &Pager) {
     header(app, c, Some((key, &pager.title)));
@@ -53,8 +60,12 @@ pub fn draw(app: &App, c: &mut Canvas, key: &str, pager: &Pager) {
     if pager.lines.is_empty() {
         c.put(2, y, "Nothing to show yet.", ink(T.dim));
     }
+    c.wheel(0, y, c.w, rows as i32, WHEEL_LINES);
     for (i, item) in pager.lines.iter().enumerate().skip(pager.top).take(rows) {
         let yy = y + (i - pager.top) as i32;
+        if pager.cursor.is_some() {
+            c.click(0, yy, c.w, 1, Act::Line(i));
+        }
         if pager.cursor == Some(i) {
             c.tint(1, yy, c.w - 2, T.sel);
             c.put(0, yy, "▸", ink(T.accent).bold());

@@ -3,14 +3,18 @@
 //! the take runs through the built binary and puts the ticket in progress with its title; one
 //! pass through the worker moves the ticket on. The live view follows a running turn: its model
 //! names the agent that works, its feed gets the events of the stream file, a text of `t`
-//! reaches the turn, and the state moves on after the turn.
+//! reaches the turn, and the state moves on after the turn. The runtime keeps the parts of each
+//! frame that the mouse can hit, and a click acts on them.
 
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
 use serde_json::json;
+use vision::app::hits::Act;
 use vision::app::model::{App, Card, Screen};
-use vision::app::msg::{Key, Msg};
+use vision::app::msg::{Key, Mouse, MouseKind, Msg};
 use vision::app::now::Kind;
 use vision::app::pager::{PagerKind, PagerState};
 use vision::app::runtime::Runtime;
@@ -330,4 +334,59 @@ fn the_live_view_follows_a_running_turn_and_tells_it_something() {
     assert_eq!(rt.app.screen, Screen::Home);
     assert_eq!(rt.following(), None);
     world.settle();
+}
+
+#[test]
+fn the_runtime_keeps_the_parts_of_each_frame_and_a_click_acts_on_them() {
+    let world = World::new();
+    simple_scenarios(&world);
+    let mut rt = runtime(&world);
+    rt.start();
+    assert!(
+        rt.run_until(LIMIT, |app| app.screen == Screen::Home
+            && app.local.data.is_some()
+            && app.queue.data.is_some()),
+        "the loader never ended: {:?}",
+        rt.app.boot
+    );
+    let mut terminal = Terminal::new(TestBackend::new(110, 32)).unwrap();
+    rt.draw(&mut terminal).unwrap();
+    assert!(!rt.app.dirty);
+    let row = rt
+        .app
+        .hits
+        .clicks()
+        .iter()
+        .find(|(_, act)| *act == Act::Ticket(KEY.into()))
+        .map(|(area, _)| *area)
+        .expect("the row of the demo ticket is a part of the frame");
+    let shown: String = (row.x..row.x + row.width)
+        .map(|x| terminal.backend().buffer()[(x, row.y)].symbol().to_string())
+        .collect();
+    assert!(shown.contains(KEY), "{shown:?}");
+    let click = Msg::Mouse(Mouse {
+        kind: MouseKind::Click,
+        column: row.x + 4,
+        row: row.y,
+    });
+    rt.handle(click.clone());
+    assert_eq!(rt.app.home.selected.as_deref(), Some(KEY));
+    rt.draw(&mut terminal).unwrap();
+    rt.handle(click);
+    assert!(
+        rt.run_until(LIMIT, |app| matches!(
+            &app.card,
+            Some(Card::Start(card)) if card.key == KEY && card.info.is_some()
+        )),
+        "the start card did not open: {:?}",
+        rt.app.card
+    );
+    // The card takes each click: the row under it is no part of the next frame.
+    rt.draw(&mut terminal).unwrap();
+    assert!(!rt
+        .app
+        .hits
+        .clicks()
+        .iter()
+        .any(|(_, act)| matches!(act, Act::Ticket(_))));
 }

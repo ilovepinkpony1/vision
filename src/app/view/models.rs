@@ -2,22 +2,40 @@
 //! effort, pinned or the default, and the measured turns of the model with their mean cost;
 //! under it the reason of the default. A change that is not pinned yet has a mark. The box at
 //! the bottom holds the recommendation for the selected agent.
+//!
+//! With more agents than fit above the box, the rows show a window that follows the selection,
+//! and a mark above and below the rows says how many agents are out of view.
+//!
+//! A click on an agent selects it. A click on the selected agent with a change that is not
+//! pinned acts as Enter, so it pins the change: it arms on the first click and pins on the
+//! second. A click on the selected agent with no change only says how to make one. On the
+//! selected row, `‹` and `›` act as the left and right arrows, and the effort acts as `e`. The
+//! wheel over the rows moves the selection as the arrows do.
 
 use super::canvas::{ink, Canvas};
-use super::cards::{show, Rows};
+use super::cards::Rows;
 use super::chain_rows;
-use super::header::{header, keys, spinner};
+use super::header::{header, keys_with, spinner};
+use super::home::{more_marks, window};
 use super::theme::{agent_color, T};
 use crate::app::chain::Owner;
+use crate::app::hits::Act;
 use crate::app::model::App;
 use crate::app::model_table::ModelLine;
-use crate::app::text::{cut, error_line, wrap};
+use crate::app::msg::Key;
+use crate::app::text::{cut, error_line, width, wrap};
 use crate::pipeline::money;
 
 const AGENT_X: i32 = 4;
 const MODEL_X: i32 = 15;
 const EFFORT_X: i32 = 40;
 const SOURCE_X: i32 = 48;
+/// The first row of the header of the table.
+const TABLE_Y: i32 = 5;
+/// The rows of the box of the recommendation, and the rows under it: the line over the footer
+/// and the footer.
+const BOX_H: i32 = 5;
+const UNDER_BOX: i32 = 2;
 
 pub fn draw(app: &App, c: &mut Canvas) {
     header(app, c, Some(("models", "")));
@@ -36,20 +54,41 @@ pub fn draw(app: &App, c: &mut Canvas) {
         footer(app, c);
         return;
     }
-    let y0 = 5;
+    let y0 = TABLE_Y;
     c.put(AGENT_X, y0, "AGENT", ink(T.dim).bold());
     c.put(MODEL_X + 2, y0, "MODEL", ink(T.dim).bold());
     c.put(EFFORT_X, y0, "EFFORT", ink(T.dim).bold());
     c.put(SOURCE_X, y0, "SOURCE", ink(T.dim).bold());
     c.right(c.w - 3, y0, "MEASURED", ink(T.dim).bold());
     c.put(2, y0 + 1, &"─".repeat((c.w - 4) as usize), ink(T.line));
-    for (i, line) in lines.iter().enumerate() {
-        row(app, c, line, y0 + 2 + i as i32 * 2, i == state.selected);
+    let (top, shown) = (y0 + 2, shown_agents(c.h).min(lines.len()));
+    let offset = window(Some(state.selected), lines.len(), shown);
+    c.wheel(2, top, c.w - 4, shown as i32 * 2, 1);
+    for (i, line) in lines.iter().enumerate().skip(offset).take(shown) {
+        let y = top + (i - offset) as i32 * 2;
+        let selected = i == state.selected;
+        // A click on the selected agent pins its change, so it arms first.
+        let act = if selected && state.edits.contains_key(&line.agent) {
+            Act::Decide(Key::Enter)
+        } else {
+            Act::Agent(i)
+        };
+        c.click(2, y, c.w - 4, 2, act);
+        row(app, c, line, y, selected);
     }
+    let box_y = c.h - BOX_H - UNDER_BOX;
     if let Some(line) = lines.get(state.selected) {
-        advice_box(app, c, line, y0 + 2 + lines.len() as i32 * 2);
+        advice_box(app, c, line, top + shown as i32 * 2);
     }
+    // The marks go on the line over the rows and on the top of the box.
+    more_marks(c, y0 + 1, box_y - y0, offset, shown, lines.len());
     footer(app, c);
+}
+
+/// The agents whose rows fit between the header of the table and the box of the
+/// recommendation in a window of `h` rows, two rows for each agent.
+fn shown_agents(h: i32) -> usize {
+    ((h - BOX_H - UNDER_BOX - (TABLE_Y + 2)) / 2).max(1) as usize
 }
 
 fn row(app: &App, c: &mut Canvas, line: &ModelLine, y: i32, selected: bool) {
@@ -77,18 +116,29 @@ fn row(app: &App, c: &mut Canvas, line: &ModelLine, y: i32, selected: bool) {
     } else {
         ink(T.fg)
     };
-    c.put(
-        MODEL_X,
-        y,
-        &cut(&shown, (EFFORT_X - MODEL_X - 1) as usize),
-        model_ink,
-    );
+    let shown = cut(&shown, (EFFORT_X - MODEL_X - 1) as usize);
+    let end = c.put(MODEL_X, y, &shown, model_ink);
     let effort_ink = if changed && effort != line.effort {
         ink(T.warn).bold()
     } else {
         ink(T.fg)
     };
     c.put(EFFORT_X, y, &effort, effort_ink);
+    // The arrows and the effort of the selected row act as their keys. They come after the row,
+    // so that they win over it.
+    if selected {
+        c.click(MODEL_X, y, 2, 1, Act::Key(Key::Left));
+        if shown.ends_with('›') {
+            c.click(end - 2, y, 2, 1, Act::Key(Key::Right));
+        }
+        c.click(
+            EFFORT_X,
+            y,
+            width(&effort) as i32,
+            1,
+            Act::Key(Key::Char('e')),
+        );
+    }
     let (source, color) = if changed {
         ("• not pinned".to_string(), T.warn)
     } else if line.pinned {
@@ -113,7 +163,10 @@ fn row(app: &App, c: &mut Canvas, line: &ModelLine, y: i32, selected: bool) {
         _ => "no turn yet".to_string(),
     };
     c.right(c.w - 3, y, &measured, ink(T.faint));
-    let reason = if changed {
+    let armed = selected && changed && app.armed_act() == Some(&Act::Decide(Key::Enter));
+    let reason = if armed {
+        "Click again to pin the change.".to_string()
+    } else if changed {
         "The change is not pinned yet. Enter pins it, and Esc drops it.".to_string()
     } else if line.pinned && line.adapter {
         format!(
@@ -167,7 +220,7 @@ pub fn advice(line: &ModelLine) -> String {
 }
 
 fn advice_box(app: &App, c: &mut Canvas, line: &ModelLine, below: i32) {
-    let y = (c.h - 7).max(below);
+    let y = (c.h - BOX_H - UNDER_BOX).max(below);
     let h = 5;
     c.frame(2, y, c.w - 4, h, T.line);
     c.put(
@@ -180,7 +233,7 @@ fn advice_box(app: &App, c: &mut Canvas, line: &ModelLine, below: i32) {
     let owner = Owner::Models(line.agent.clone());
     if let Some(chain) = app.chain_of(&owner) {
         let mut rows = Rows::default();
-        chain_rows::rows(app, chain, &mut rows, room);
+        chain_rows::rows(app, chain, &mut rows, room, usize::MAX);
         // The box has three rows: the step, then the reason and the state after a failure.
         rows.rows.retain(|row| {
             !row.is_empty() && !row.iter().any(|(_, text, _)| text == "It did not work:")
@@ -223,7 +276,9 @@ fn footer(app: &App, c: &mut Canvas) {
     } else {
         "drop the change"
     };
-    keys(
+    // Enter pins and `u` goes back to the default: each one records a change of the model, so a
+    // click on it arms first.
+    keys_with(
         c,
         &[
             ("↑↓", "agent"),
@@ -234,6 +289,8 @@ fn footer(app: &App, c: &mut Canvas) {
             ("esc", esc),
             ("?", "keys"),
         ],
+        &[Key::Enter, Key::Char('u')],
+        app.armed_act(),
     );
 }
 
@@ -254,14 +311,5 @@ pub fn help(c: &mut Canvas) {
 
 /// A keys card with this list.
 pub(super) fn help_rows(c: &mut Canvas, list: &[(&str, &str)]) {
-    let mut rows = Rows::default();
-    for (key, label) in list {
-        rows.rows.push(vec![
-            (3, key.to_string(), ink(T.fg).bold()),
-            (16, label.to_string(), ink(T.dim)),
-        ]);
-    }
-    rows.blank();
-    rows.text(3, "esc closes this list", ink(T.faint));
-    show(c, 70, "Keys", T.primary, rows);
+    super::cards::keys_card(c, list);
 }

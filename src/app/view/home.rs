@@ -2,11 +2,17 @@
 //! each ticket, the box READY TO START with the queue of the tracker, the line THIS WEEK, and
 //! the keys. The boxes take the full width of the window. When a box has more rows than fit, it
 //! shows the part around the selection and says how many rows are above and below.
+//!
+//! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
+//! The wheel over a box moves the selection as the arrows do, and a click on the bar "needs
+//! you" acts as `n`.
 
 use super::canvas::{ink, Canvas};
 use super::header::{dots, header, keys, spinner};
 use super::theme::{Rgb, T};
+use crate::app::hits::Act;
 use crate::app::model::{App, Held};
+use crate::app::msg::Key;
 use crate::app::now::{need_line, Tone};
 use crate::app::text::{count, cut, error_line, width, wrap};
 use crate::pipeline::commands::PickRow;
@@ -65,6 +71,7 @@ pub fn draw(app: &App, c: &mut Canvas) {
         let sel = selected.filter(|i| *i < held.len());
         let offset = window(sel, held.len(), show_held as usize);
         c.frame(1, y, c.w - 2, show_held * 3 + 1, T.line);
+        c.wheel(1, y, c.w - 2, show_held * 3 + 1, 1);
         more_marks(
             c,
             y,
@@ -97,6 +104,9 @@ pub fn draw(app: &App, c: &mut Canvas) {
     c.right(c.w - 3, y, &tail, ink(T.faint));
     y += 1;
     c.frame(1, y, c.w - 2, show_queue + 2, T.line);
+    if queue_lines.is_none() {
+        c.wheel(1, y, c.w - 2, show_queue + 2, 1);
+    }
     if let Some(lines) = &queue_lines {
         for (i, (text, color)) in lines.iter().enumerate().take(show_queue as usize) {
             c.put(5, y + 1 + i as i32, text, ink(*color));
@@ -146,9 +156,11 @@ pub fn draw(app: &App, c: &mut Canvas) {
     );
 }
 
-/// The bar "needs you": the first need and the count of the others.
+/// The bar "needs you": the first need and the count of the others. A click on it acts as the
+/// key that it names.
 fn needs_bar(app: &App, c: &mut Canvas, y: i32) {
     let needs = app.needs();
+    c.click(1, y, c.w - 2, 1, Act::Key(Key::Char('n')));
     c.wipe(1, y, c.w - 2, 1, T.warn_bg);
     c.put(3, y, " needs you ", ink(T.bg).on(T.warn).bold());
     let mut r = c.right(c.w - 4, y, "n needs", ink(T.warn).bold());
@@ -243,7 +255,7 @@ fn fit(held: i32, queue: i32, avail: i32) -> (i32, i32) {
 }
 
 /// The first row to show so that the selected row is in a window of `shown` rows.
-fn window(selected: Option<usize>, total: usize, shown: usize) -> usize {
+pub(super) fn window(selected: Option<usize>, total: usize, shown: usize) -> usize {
     match selected {
         Some(sel) if shown > 0 && sel >= shown => (sel + 1 - shown).min(total - shown),
         _ => 0,
@@ -251,7 +263,14 @@ fn window(selected: Option<usize>, total: usize, shown: usize) -> usize {
 }
 
 /// The marks on the border of a box that does not show each row.
-fn more_marks(c: &mut Canvas, y: i32, h: i32, offset: usize, shown: usize, total: usize) {
+pub(super) fn more_marks(
+    c: &mut Canvas,
+    y: i32,
+    h: i32,
+    offset: usize,
+    shown: usize,
+    total: usize,
+) {
     if offset > 0 {
         c.right(c.w - 4, y, &format!(" ▲ {offset} more "), ink(T.dim));
     }
@@ -288,6 +307,7 @@ pub fn since(app: &App, at: Option<&str>) -> String {
 
 fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected: bool) {
     let view = &ticket.view;
+    c.click(2, y, c.w - 4, 2, Act::Ticket(view.key.clone()));
     if selected {
         c.tint(2, y, c.w - 4, T.sel);
         c.tint(2, y + 1, c.w - 4, T.sel);
@@ -331,6 +351,7 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
 }
 
 fn queue_row(c: &mut Canvas, row: &PickRow, y: i32, kx: i32, selected: bool) {
+    c.click(2, y, c.w - 4, 1, Act::Ticket(row.key.clone()));
     if selected {
         c.tint(2, y, c.w - 4, T.sel);
         c.put(3, y, "▸", ink(T.accent).bold());

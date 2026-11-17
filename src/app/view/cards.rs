@@ -3,22 +3,93 @@
 //! and the card of a long error. A card keeps its width and stays in the center; the screen
 //! behind it dims. Each card is a list of rows, so that its height follows its text. The card
 //! of the things that wait has its own modules.
+//!
+//! The rows of a card also hold the parts that a click can hit, such as each key of its keys,
+//! and the code that puts the rows in the window records them there.
 
 use super::canvas::{ink, Canvas, Ink};
 use super::header::spinner;
 use super::theme::{agent_color, Rgb, T};
+use crate::app::hits::{hint, Act};
 use crate::app::model::{App, Card, KillCard, ResumeCard, Run, StartCard};
-use crate::app::text::{cut, wrap};
+use crate::app::msg::Key;
+use crate::app::text::{cut, width, wrap};
 
-/// The rows of a card: each row is a list of (column in the card, text, ink).
-#[derive(Default)]
+/// A part of a row of a card that a click can hit: its row, its column in the card, its
+/// width, and what a click does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct RowHit {
+    pub(super) row: usize,
+    pub(super) x: i32,
+    pub(super) w: i32,
+    pub(super) act: Act,
+}
+
+/// The rows of a card: each row is a list of (column in the card, text, ink), and the parts of
+/// the rows that a click can hit.
+#[derive(Clone, Default)]
 pub(super) struct Rows {
     pub(super) rows: Vec<Vec<(i32, String, Ink)>>,
+    pub(super) hits: Vec<RowHit>,
 }
 
 impl Rows {
     pub(super) fn text(&mut self, dx: i32, text: impl Into<String>, ink: Ink) {
         self.rows.push(vec![(dx, text.into(), ink)]);
+    }
+
+    /// Records a part of the row `row` that a click can hit.
+    pub(super) fn hit(&mut self, row: usize, x: i32, w: i32, act: Act) {
+        self.hits.push(RowHit { row, x, w, act });
+    }
+
+    /// Puts the rows of `other` after these rows, with their parts.
+    pub(super) fn append(&mut self, other: Rows) {
+        let offset = self.rows.len();
+        self.rows.extend(other.rows);
+        self.hits.extend(other.hits.into_iter().map(|mut hit| {
+            hit.row += offset;
+            hit
+        }));
+    }
+
+    /// Puts the rows in the window, with the first row at `y` and the column 0 of the card at
+    /// `x`, cut to a card of width `w`, and records their parts. Only `count` rows from the row
+    /// `from` show.
+    pub(super) fn put(&self, c: &mut Canvas, x: i32, y: i32, w: i32, from: usize, count: usize) {
+        let end = (from + count).min(self.rows.len());
+        for (i, row) in self.rows[from.min(end)..end].iter().enumerate() {
+            for (dx, text, style) in row {
+                let room = (w - dx - 2).max(0) as usize;
+                c.put(x + dx, y + i as i32, &cut(text, room), *style);
+            }
+        }
+        for (act, hx, hy, hw) in self.placed(x, y, w, from, count) {
+            c.click(hx, hy, hw, 1, act);
+        }
+    }
+
+    /// The parts of the rows that [`Rows::put`] puts with the same values: what a click does,
+    /// the column, the row, and the width of each part in the window. A part is cut as its text
+    /// is cut, and a part of a row that does not show is not in the list.
+    pub(super) fn placed(
+        &self,
+        x: i32,
+        y: i32,
+        w: i32,
+        from: usize,
+        count: usize,
+    ) -> Vec<(Act, i32, i32, i32)> {
+        let end = (from + count).min(self.rows.len());
+        self.hits
+            .iter()
+            .filter(|h| h.row >= from && h.row < end)
+            .filter_map(|hit| {
+                let hw = hit.w.min(w - hit.x - 2);
+                let hy = y + (hit.row - from) as i32;
+                (hw > 0).then(|| (hit.act.clone(), x + hit.x, hy, hw))
+            })
+            .collect()
     }
 
     pub(super) fn blank(&mut self) {
@@ -47,20 +118,35 @@ impl Rows {
     }
 
     /// The keys of a card: each key in bold, its label dim. A row that would pass the column
-    /// 89, the end of the text of the widest card, goes on in the next row.
+    /// 89, the end of the text of the widest card, goes on in the next row. A click on a key
+    /// acts as that key.
     pub(super) fn keys(&mut self, list: &[(&str, &str)]) {
+        self.keys_with(list, &[], None);
+    }
+
+    /// The keys of a card, with the keys of `decide`, which send something or record a
+    /// decision: a click on such a key arms it, and while `armed` is its part, its label says
+    /// to click again.
+    pub(super) fn keys_with(&mut self, list: &[(&str, &str)], decide: &[Key], armed: Option<&Act>) {
         let mut row = Vec::new();
         let mut x = 3;
         for (key, label) in list {
-            let wide = (crate::app::text::width(key) + 1 + crate::app::text::width(label)) as i32;
+            let label = hint(0, key, label, decide, armed).label;
+            let wide = (width(key) + 1 + width(&label)) as i32;
             if x > 3 && x + wide > 89 {
                 self.rows.push(std::mem::take(&mut row));
                 x = 3;
             }
+            let at = self.rows.len();
+            let shown = hint(x, key, &label, decide, armed);
+            for (hx, hw, act) in shown.parts {
+                self.hit(at, hx, hw, act);
+            }
+            let tone = if shown.armed { T.warn } else { T.dim };
             row.push((x, key.to_string(), ink(T.fg).bold()));
-            x += crate::app::text::width(key) as i32 + 1;
-            row.push((x, label.to_string(), ink(T.dim)));
-            x += crate::app::text::width(label) as i32 + 4;
+            x += width(key) as i32 + 1;
+            row.push((x, label.clone(), ink(tone)));
+            x += width(&label) as i32 + 4;
         }
         self.rows.push(row);
     }
@@ -79,7 +165,8 @@ fn lines_of(text: &str, w: usize) -> Vec<String> {
     text.lines().flat_map(|line| wrap(line, w)).collect()
 }
 
-/// Dims the screen, and draws an empty card of width `w` in the center with its rows.
+/// Dims the screen, and draws an empty card of width `w` in the center with its rows and their
+/// parts.
 pub(super) fn show(c: &mut Canvas, w: i32, title: &str, color: Rgb, rows: Rows) {
     let w = w.min(c.w - 2);
     let h = (rows.rows.len() as i32 + 4).min(c.h - 2);
@@ -94,16 +181,35 @@ pub(super) fn show(c: &mut Canvas, w: i32, title: &str, color: Rgb, rows: Rows) 
         &format!(" {} ", cut(title, (w - 6) as usize)),
         ink(T.fg).bold(),
     );
-    for (i, row) in rows.rows.iter().enumerate() {
-        let yy = y + 2 + i as i32;
-        if yy >= y + h - 1 {
-            break;
-        }
-        for (dx, text, style) in row {
-            let room = (w - dx - 2).max(0) as usize;
-            c.put(x + dx, yy, &cut(text, room), *style);
-        }
+    // The rows that fit above the last row of the frame.
+    let fit = (h - 3).max(0) as usize;
+    rows.put(c, x, y + 2, w, 0, fit);
+}
+
+/// The keys card of a screen (`mHelp` of the design): each key with what it does, the mouse,
+/// and how the card closes. A key that sends something or records a decision acts on a second
+/// click: the first click arms it.
+pub(super) fn keys_card(c: &mut Canvas, list: &[(&str, &str)]) {
+    let mut rows = Rows::default();
+    let mouse = [
+        ("click", "a key acts as that key; a row selects, then opens"),
+        (
+            "2 clicks",
+            "a key that sends something or records a decision",
+        ),
+        ("shift drag", "selects text; some terminals use Option"),
+    ];
+    for (key, label) in list.iter().chain(mouse.iter()) {
+        rows.rows.push(vec![
+            (3, key.to_string(), ink(T.fg).bold()),
+            (16, label.to_string(), ink(T.dim)),
+        ]);
     }
+    rows.blank();
+    let close = "esc closes this list";
+    rows.hit(rows.rows.len(), 3, width(close) as i32, Act::Key(Key::Esc));
+    rows.text(3, close, ink(T.faint));
+    show(c, 70, "Keys", T.primary, rows);
 }
 
 pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
@@ -127,10 +233,12 @@ pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
     }
 }
 
-/// The last rows of a card with an action: its keys, or what the action does now.
+/// The last rows of a card with an action: its keys, or what the action does now. Enter does
+/// the action, so a click on it arms first.
 pub(super) fn action_rows(app: &App, rows: &mut Rows, run: &Run, go: &str, running: &str) {
+    let armed = app.armed_act();
     match run {
-        Run::Idle => rows.keys(&[("enter", go), ("esc", "cancel")]),
+        Run::Idle => rows.keys_with(&[("enter", go), ("esc", "cancel")], &[Key::Enter], armed),
         Run::Waiting { .. } => {
             rows.busy(app, "waits for the job of the engine that runs now");
             rows.blank();
@@ -148,7 +256,11 @@ pub(super) fn action_rows(app: &App, rows: &mut Rows, run: &Run, go: &str, runni
                 rows.text(3, "The rest of the text is cut.", ink(T.faint));
             }
             rows.blank();
-            rows.keys(&[("enter", "try again"), ("esc", "close")]);
+            rows.keys_with(
+                &[("enter", "try again"), ("esc", "close")],
+                &[Key::Enter],
+                armed,
+            );
         }
     }
 }
@@ -329,7 +441,12 @@ fn quit(app: &App, c: &mut Canvas) {
         );
     }
     rows.blank();
-    rows.keys(&[("enter", "quit"), ("esc", "stay")]);
+    // The quit card shows only while a ticket moves, so its Enter arms first.
+    rows.keys_with(
+        &[("enter", "quit"), ("esc", "stay")],
+        &[Key::Enter],
+        app.armed_act(),
+    );
     show(c, 74, "Quit Vision?", T.primary, rows);
 }
 
@@ -357,16 +474,7 @@ fn help(c: &mut Canvas) {
         ("esc", "go back, or close a card"),
         ("q", "quit"),
     ];
-    let mut rows = Rows::default();
-    for (key, label) in list {
-        rows.rows.push(vec![
-            (3, key.to_string(), ink(T.fg).bold()),
-            (16, label.to_string(), ink(T.dim)),
-        ]);
-    }
-    rows.blank();
-    rows.text(3, "esc closes this list", ink(T.faint));
-    show(c, 70, "Keys", T.primary, rows);
+    keys_card(c, &list);
 }
 
 fn error(c: &mut Canvas, title: &str, text: &str) {

@@ -10,6 +10,7 @@ use ratatui::backend::TestBackend;
 use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::Terminal;
 use time::macros::datetime;
+use vision::app::hits::HitMap;
 use vision::app::model::{App, Clock, Held, Local, Setup, Week};
 use vision::app::msg::{ChildResult, Effect, JobDone, Msg};
 use vision::app::update::{start, update};
@@ -348,7 +349,24 @@ pub fn home(size: (u16, u16)) -> App {
 /// Draws the model into a test backend of its size.
 pub fn render(app: &App) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(app.size.0, app.size.1)).unwrap();
-    terminal.draw(|frame| view::draw(app, frame)).unwrap();
+    terminal
+        .draw(|frame| {
+            view::draw(app, frame);
+        })
+        .unwrap();
+    terminal.backend().buffer().clone()
+}
+
+/// Draws the model as the runtime does: the model keeps the parts of the frame that the mouse
+/// can hit, and the change is drawn.
+pub fn draw(app: &mut App) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(app.size.0, app.size.1)).unwrap();
+    let mut hits = HitMap::default();
+    terminal
+        .draw(|frame| hits = view::draw(app, frame))
+        .unwrap();
+    app.hits = hits;
+    app.dirty = false;
     terminal.backend().buffer().clone()
 }
 

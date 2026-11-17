@@ -8,6 +8,7 @@ use super::cards::Rows;
 use super::need_card::{Parts, TEXT};
 use super::theme::T;
 use crate::app::model::App;
+use crate::app::msg::Key;
 use crate::app::needs::{FlagItem, NeedsCard, PlanItem, ProposalItem};
 use crate::app::text::{count, wrap};
 use crate::ledger::notices::NoticeRow;
@@ -52,12 +53,17 @@ pub(super) fn plan(app: &App, _card: &NeedsCard, item: &PlanItem) -> Parts {
         TEXT,
         ink(T.faint),
     );
-    foot.keys(&[
-        ("↑↓", "scroll"),
-        ("a", "approve"),
-        ("x", "stop the ticket"),
-        ("esc", "later"),
-    ]);
+    // `a` approves the plan, so a click on it arms first. `x` only opens the stop card.
+    foot.keys_with(
+        &[
+            ("↑↓", "scroll"),
+            ("a", "approve"),
+            ("x", "stop the ticket"),
+            ("esc", "later"),
+        ],
+        &[Key::Char('a')],
+        app.armed_act(),
+    );
     let hash = &item.plan.hash;
     Parts {
         title: format!(
@@ -70,7 +76,7 @@ pub(super) fn plan(app: &App, _card: &NeedsCard, item: &PlanItem) -> Parts {
     }
 }
 
-pub(super) fn flag(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
+pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     let (key, step) = (&item.ticket, &item.step);
     let mut body = Rows::default();
     body.text(
@@ -118,7 +124,8 @@ pub(super) fn flag(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
         );
         keys.push(("x", "stop the ticket"));
         keys.push(("esc", "later"));
-        foot.keys(&keys);
+        // `r` starts the step again, so a click on it arms first. `o` and `x` only open a card.
+        foot.keys_with(&keys, &[Key::Char('r')], app.armed_act());
     }
     Parts {
         title: "a rule stopped the ticket".into(),
@@ -128,7 +135,7 @@ pub(super) fn flag(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     }
 }
 
-pub(super) fn paused(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
+pub(super) fn paused(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     let key = &item.ticket;
     let agent = item.agent.as_deref().unwrap_or("the agent");
     let mut body = Rows::default();
@@ -151,7 +158,11 @@ pub(super) fn paused(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     };
     body.para(3, &what, TEXT, ink(T.dim));
     let mut foot = Rows::default();
-    foot.keys(&[("enter", "continue"), ("esc", "later")]);
+    foot.keys_with(
+        &[("enter", "continue"), ("esc", "later")],
+        &[Key::Enter],
+        app.armed_act(),
+    );
     Parts {
         title: "you took over its session".into(),
         body,
@@ -200,7 +211,7 @@ pub(super) fn proposal(_app: &App, _card: &NeedsCard, item: &ProposalItem) -> Pa
     }
 }
 
-pub(super) fn notice(_app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
+pub(super) fn notice(app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
     let mut body = Rows::default();
     let n = item.issues.len();
     // A notice of the gate cr names the findings that keep coming back after their fix.
@@ -258,7 +269,11 @@ pub(super) fn notice(_app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
         ink(T.dim),
     );
     let mut foot = Rows::default();
-    foot.keys(&[("enter", "mark it read"), ("esc", "later")]);
+    foot.keys_with(
+        &[("enter", "mark it read"), ("esc", "later")],
+        &[Key::Enter],
+        app.armed_act(),
+    );
     Parts {
         title: format!("a notice · {}", item.name()),
         body,

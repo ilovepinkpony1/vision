@@ -11,13 +11,18 @@ use super::cards::Rows;
 use super::need_card::{Parts, TEXT};
 use super::theme::T;
 use crate::app::chain::commit_text;
+use crate::app::hits::{keys_of, Act, AGAIN};
 use crate::app::model::App;
+use crate::app::msg::Key;
 use crate::app::needs::{NeedsCard, WriteItem};
 use crate::app::recipes::{auto_words, can_ask, climb};
 use crate::app::text::{width, wrap};
 
+/// The keys of a write card that send the write: `y` and `a`. `n` only closes the card.
+const DECIDE: [Key; 2] = [Key::Char('y'), Key::Char('a')];
+
 /// The card of an operation that waits for `vision approve`.
-pub(super) fn approval(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts {
+pub(super) fn approval(app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts {
     let mut body = Rows::default();
     head(&mut body, item);
     if item.held.is_empty() {
@@ -61,7 +66,7 @@ pub(super) fn approval(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts
             String::new(),
         ));
     }
-    options(&mut body, &choices);
+    options(&mut body, &choices, app.armed_act());
     if auto && item.leaves {
         body.blank();
         body.para(
@@ -77,7 +82,7 @@ pub(super) fn approval(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts
         keys.push(("a", "approve, then auto"));
     }
     keys.push(("esc", "later"));
-    foot.keys(&keys);
+    foot.keys_with(&keys, &DECIDE, app.armed_act());
     Parts {
         title: format!("the write {} waits for your approval", item.verb),
         body,
@@ -87,7 +92,7 @@ pub(super) fn approval(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts
 }
 
 /// The card of a write that the mode shadow or hold kept from running.
-pub(super) fn first_write(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts {
+pub(super) fn first_write(app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts {
     let mut body = Rows::default();
     head(&mut body, item);
     body.para(
@@ -126,7 +131,7 @@ pub(super) fn first_write(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Pa
         "Do not send. The ticket stays as it is".into(),
         String::new(),
     ));
-    options(&mut body, &choices);
+    options(&mut body, &choices, app.armed_act());
     body.blank();
     let mut notes = String::from(
         "y and a change the mode of the verb for each later write of it, one step of the ladder at a time.",
@@ -137,7 +142,11 @@ pub(super) fn first_write(_app: &App, _card: &NeedsCard, item: &WriteItem) -> Pa
     body.para(3, &notes, TEXT, ink(T.faint));
     let mut foot = Rows::default();
     let keys: &str = if can_ask(item) { "y a n" } else { "a n" };
-    foot.keys(&[(keys, "choose"), ("esc", "later")]);
+    foot.keys_with(
+        &[(keys, "choose"), ("esc", "later")],
+        &DECIDE,
+        app.armed_act(),
+    );
     Parts {
         title: format!("the first write of {}", item.verb),
         body,
@@ -164,12 +173,26 @@ fn head(body: &mut Rows, item: &WriteItem) {
     );
 }
 
-/// The choices of a card: the key, the text, and the change of mode at the right.
-fn options(body: &mut Rows, choices: &[(&str, String, String)]) {
+/// The choices of a card: the key, the text, and the change of mode at the right. A click on a
+/// choice acts as its key. `y` and `a` send the write, so a click on them arms first. While a
+/// choice is armed, its first line says to click again and its other lines are empty: the card
+/// keeps its rows, so nothing moves.
+fn options(body: &mut Rows, choices: &[(&str, String, String)], armed: Option<&Act>) {
     let how_w = choices.iter().map(|c| width(&c.2)).max().unwrap_or(0);
     let text_w = TEXT - 5 - if how_w > 0 { how_w + 2 } else { 0 };
     for (key, text, how) in choices {
+        let keys = keys_of(key);
+        let act = match keys.as_slice() {
+            [(_, _, k)] if DECIDE.contains(k) => Some(Act::Decide(*k)),
+            [(_, _, k)] => Some(Act::Key(*k)),
+            _ => None,
+        };
+        let again = act.is_some() && armed == act.as_ref();
         for (i, line) in wrap(text, text_w).into_iter().enumerate() {
+            if let Some(act) = &act {
+                let at = body.rows.len();
+                body.hit(at, 5, TEXT as i32 - 2, act.clone());
+            }
             let mut row = Vec::new();
             if i == 0 {
                 row.push((5, key.to_string(), ink(T.accent).bold()));
@@ -177,7 +200,11 @@ fn options(body: &mut Rows, choices: &[(&str, String, String)]) {
                     row.push((3 + TEXT as i32 - how_w as i32, how.clone(), ink(T.dim)));
                 }
             }
-            row.push((8, line, ink(T.fg)));
+            match (again, i) {
+                (false, _) => row.push((8, line, ink(T.fg))),
+                (true, 0) => row.push((8, AGAIN.to_string(), ink(T.warn))),
+                (true, _) => {}
+            }
             body.rows.push(row);
         }
     }

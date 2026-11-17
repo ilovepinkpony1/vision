@@ -9,6 +9,7 @@ use super::chain_rows;
 use super::theme::T;
 use crate::app::chain::Owner;
 use crate::app::model::{App, OpenCard, OpenedCard, RetryCard, StopCard};
+use crate::app::msg::Key;
 
 pub fn stop(app: &App, card: &StopCard, c: &mut Canvas) {
     let mut rows = Rows::default();
@@ -91,6 +92,9 @@ pub fn retry(app: &App, card: &RetryCard, c: &mut Canvas) {
 
 pub fn open(app: &App, card: &OpenCard, c: &mut Canvas) {
     let mut rows = Rows::default();
+    // `o` stops a running turn, and Enter pauses the ticket, so a click on either arms first.
+    let armed = app.armed_act();
+    let o = [Key::Char('o')];
     match &card.running {
         Some(agent) => {
             rows.text(3, format!("{agent} works now."), ink(T.fg).bold());
@@ -110,20 +114,24 @@ pub fn open(app: &App, card: &OpenCard, c: &mut Canvas) {
             };
             match app.chain_of(&owner) {
                 Some(chain) => {
-                    chain_rows::rows(app, chain, &mut rows, 68);
+                    chain_rows::rows(app, chain, &mut rows, 68, usize::MAX);
                     rows.blank();
                     if chain.running() {
                         rows.keys(&[("esc", "close this card; the action goes on")]);
                     } else {
-                        rows.keys(&[("o", "try again"), ("esc", "close")]);
+                        rows.keys_with(&[("o", "try again"), ("esc", "close")], &o, armed);
                     }
                 }
                 None => {
                     rows.keys(&[("t", "tell"), ("x", "stop"), ("esc", "close")]);
-                    rows.keys(&[(
-                        "o",
-                        &format!("stop the turn of {agent} and open its session"),
-                    )]);
+                    rows.keys_with(
+                        &[(
+                            "o",
+                            &format!("stop the turn of {agent} and open its session"),
+                        )],
+                        &o,
+                        armed,
+                    );
                 }
             }
             show(
@@ -148,7 +156,11 @@ pub fn open(app: &App, card: &OpenCard, c: &mut Canvas) {
                 ink(T.dim),
             );
             rows.blank();
-            rows.keys(&[("enter", "open"), ("esc", "cancel")]);
+            rows.keys_with(
+                &[("enter", "open"), ("esc", "cancel")],
+                &[Key::Enter],
+                armed,
+            );
             show(
                 c,
                 76,
@@ -189,7 +201,11 @@ pub fn opened(app: &App, card: &OpenedCard, c: &mut Canvas) {
     rows.blank();
     match card.run {
         crate::app::model::Run::Idle => {
-            rows.keys(&[("enter", "continue"), ("esc", "keep it paused")]);
+            rows.keys_with(
+                &[("enter", "continue"), ("esc", "keep it paused")],
+                &[Key::Enter],
+                app.armed_act(),
+            );
         }
         _ => action_rows(
             app,
@@ -245,7 +261,7 @@ fn took_over(app: &App, card: &OpenedCard, agent: &str, c: &mut Canvas) {
     rows.blank();
     match app.chain_of(&Owner::Continue(key.clone())) {
         Some(chain) => {
-            chain_rows::rows(app, chain, &mut rows, 68);
+            chain_rows::rows(app, chain, &mut rows, 68, usize::MAX);
             rows.blank();
             if chain.running() {
                 rows.keys(&[("esc", "close this card; the action goes on")]);
@@ -253,7 +269,11 @@ fn took_over(app: &App, card: &OpenedCard, agent: &str, c: &mut Canvas) {
                 rows.keys(&[("esc", "close")]);
             }
         }
-        None => rows.keys(&[("enter", "continue"), ("esc", "keep it stopped")]),
+        None => rows.keys_with(
+            &[("enter", "continue"), ("esc", "keep it stopped")],
+            &[Key::Enter],
+            app.armed_act(),
+        ),
     }
     show(
         c,
@@ -286,14 +306,5 @@ pub fn help(c: &mut Canvas) {
         ("?", "this list of keys"),
         ("q", "quit"),
     ];
-    let mut rows = Rows::default();
-    for (key, label) in list {
-        rows.rows.push(vec![
-            (3, key.to_string(), ink(T.fg).bold()),
-            (16, label.to_string(), ink(T.dim)),
-        ]);
-    }
-    rows.blank();
-    rows.text(3, "esc closes this list", ink(T.faint));
-    show(c, 70, "Keys", T.primary, rows);
+    super::cards::keys_card(c, &list);
 }
