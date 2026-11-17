@@ -12,7 +12,7 @@
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
  ╰───────╭─ What waits for you ─────────────────────────────────────────────────────────────────────╮───────╯
          │                                                                                          │
-  READY T│  Vision could not read what waits for you:                                               │n start
+  MY TICK│  Vision could not read what waits for you:                                               │ 2 open
  ╭───────│  the ledger is locked                                                                    │───────╮
  │   DEMO│                                                                                          │ To Do │
  │   DEMO│  esc close                                                                               │equest │

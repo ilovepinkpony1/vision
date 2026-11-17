@@ -810,7 +810,9 @@ A job with `env = "full"` gets the environment of the tick instead. A variable w
 
 ```
 observe  {"what": "queue", "config": {}}
-      -> {"tickets": [{"key": "DEMO-12", "title": "...", "status": "To Do", "eligible": true, "reason": ""}]}
+      -> {"tickets": [{"key": "DEMO-12", "title": "...", "status": "To Do", "eligible": true, "reason": ""},
+                      {"key": "DEMO-14", "title": "...", "status": "In Review", "eligible": false,
+                       "reason": "...", "branch": "feature/demo-14", "pr": 9}]}
 observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 7, "clone": "/path",
           "seen": ["inline:501:501"], "config": {}}
       -> {"issue": {}, "tracker_status": "In Progress",
@@ -1143,6 +1145,14 @@ A `failed` operation is final for its key. `vision retry KEY` frees the key, so 
 
 `vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time. A clone can be a git worktree, and the take uses the clones in their order. Git lets one worktree hold a branch at a time. If another worktree holds the branch of the ticket, the take stops, names that worktree, and says how to free the branch. A continue of a stopped ticket does the same.
 
+A ticket can be in progress outside Vision: someone made a branch with its key by hand, and maybe opened a pull request. The queue gives such a ticket as not eligible, with its `branch`, and with `pr` for an open pull request. The branch of the pull request wins over another branch with the key. If git cannot take the text as the name of a branch, Vision drops the branch of that ticket.
+
+A plain `vision take KEY` of such a ticket calls `observe` one time, with that branch and that pull request. Then it reads the rules from the first step of the path. It prints where the ticket is, each fact, and the suggestion with its command. It changes nothing, and it exits with code 1. Vision has no clone of the ticket yet, so the facts have no head state. A rule that names the end step suggests nothing, because Vision takes no ticket that is done.
+
+`vision take KEY --step STEP` takes such a ticket at STEP, in a free clone, after a fetch. A branch that the clone does not have starts at the remote branch. A local branch that is behind the remote branch moves forward to it, and a local branch with its own commits keeps them. A local branch that went apart from the remote branch stops the take, and nothing moves. The take refuses the end step and a step that the adapter does not have. The steps before STEP do not run.
+
+The row of the ticket gets the branch, the number of the pull request, and the head. The event `take` has `outside`, `pr`, `facts`, and `suggestion`. From then on, Vision holds the ticket as any other ticket.
+
 The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. Any new commit voids the proof.
 
 The proof gets the approved plan in `args.plan`. A line `Proof: green` in the plan declares the whole proof green, for a change with no new behavior. The changed tests then only have to pass at the last commit. A line `Proof: green <path>` declares one test file green, and the proof does not run that file on the base commit.
@@ -1269,7 +1279,7 @@ vision on | off                    the kill switch
 vision doctor                      test the setup
 vision pick                        the eligible tickets, with the reason for each other one
 vision take KEY...                 start a ticket
-vision take KEY --step STEP        continue a stopped ticket at a step
+vision take KEY --step STEP        continue a stopped ticket, or take a ticket in progress outside Vision, at a step
 vision kind KEY NAME               set the kind of a ticket; an unknown kind is refused
 vision plan KEY                    show the plan
 vision approve-plan KEY HASH       approve the plan with that hash
@@ -1375,6 +1385,8 @@ The room for the picture is the rows above the title and the width of the window
 
 Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or the start card for a ticket of the queue. On a stopped or paused ticket, Enter opens the continue card. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
 
+The box MY TICKETS lists the queue that `queue_jql` asks for, such as each open ticket of the person. Its title line says how many tickets it lists. A ticket that can start shows its status. A ticket that is in progress outside Vision shows its status too, and Enter opens its start card (section 15.3). Each other ticket shows faint, with the reason that it cannot start.
+
 One state function says what happens to a ticket now, in the words of the app, and Home and the live view both use it. It reads facts that the pipeline gives as data: the turn that runs, the entry of the step that is not done, the wait of the step, and the limit. No text of it names a command.
 
 The live view shows one ticket. The path is on the left, with the time and the cost of each step, and the team is under it. The team ends above the line over the keys. If the team has more agents than rows, the agents that work and the agents that did a turn come first. The last row then says how many more there are. NOW is in the middle, with ACTIVITY under it. The cost, the questions, the marks, the limits, and the engine are on the right. While the view is open, the loader looks for a change of its data each second. The count of the commits that the forge does not have loads again each 10 seconds.
@@ -1402,6 +1414,8 @@ If the footer is too narrow, its hints change in this order until it fits: `d` a
 Enter on a stopped or paused ticket opens the continue card. This works on Home, in the live view, on the card of the things that wait, and on the card after a session. The card names the stored step. While `observe` runs, it says "Vision reads the facts of KEY now" with the time of the read so far. Under it, it says what the read asks for. The start card and the live view also say what they read and for how long, while they read. Then it shows the suggestion with its reason, or that Vision found nothing further, or why the check failed. Under it, the card lists each fact that Vision read, after "Vision read:". A suggestion that goes back shows in the color of a warning, with the sentence "This goes back from <step>: <why>". It lists the steps of the path, with the suggestion selected and the stored step marked. The window of the steps keeps the stored step and the selection in view while both fit. The arrows, the wheel, and a click select a step, and Enter continues there. Esc closes the card, and the ticket stays as it is. `v` closes the card and opens the live view of the ticket.
 
 For a stopped ticket, Enter runs `vision take KEY --step STEP`. Then a plain `vision retry KEY` follows at the stored step for a ticket that is also paused or that waits for the person. For a paused ticket, Enter runs `vision retry KEY --step STEP`. A clone that stays behind the remote after the fetch gets a line that says how to fix it. After a failed step of the chain, the card reads the ticket again.
+
+The same card starts a ticket that is in progress outside Vision, with the title "Start KEY". Its head names the branch and the pull request of the ticket. Its read is the read of a plain take (section 11.3), so it compares no branch. No step is the stored step, and the end step is not in the list. With no suggestion, the first step is selected. Enter runs `vision take KEY --step STEP`, and Home then selects the ticket. The card has no `v`, because the ticket has no live view yet.
 
 In the log, Enter on a turn shows the events of that turn. Esc closes a pager, and then the view.
 

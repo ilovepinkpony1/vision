@@ -12,7 +12,7 @@
  │  │  ISSUE-001  low  The export button has a typo                                            │  │
  ╰──│  ISSUE-002  low  The hover color of the export button differs from the color of each     │──╯
     │                  other button on the page of a report                                    │
-  RE│                                                                                          │rt
+  MY│                                                                                          │en
  ╭──│  A notice never stops a ticket. It stays until you mark it read. The turn was            │──╮
  │  │  20261116T143000Z-DEMO-12-qa-1.                                                          │o │
  │  │                                                                                          │t │

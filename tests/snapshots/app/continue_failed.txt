@@ -7,7 +7,7 @@
  │           │  Rename the setting of the weekly email                                          │           │
  ╰───────────│                                                                                  │───────────╯
              │  DEMO-3 is stopped at the step review.                                           │
-  READY TO ST│  Vision could not check the tracker and the pull request, so it suggests         │1 can start
+  MY TICKETS │  Vision could not check the tracker and the pull request, so it suggests         │er · 2 open
  ╭───────────│  nothing: bin/observe failed: the forge did not answer in 30 s                   │───────────╮
  │   DEMO-15 │                                                                                  │     To Do │
  │   DEMO-9  │    refine                                                                        │ll request │

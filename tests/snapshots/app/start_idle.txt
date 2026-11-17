@@ -10,7 +10,7 @@
  │             │                                                                              │             │
  ╰─────────────│  Keep the filter of the list when the page loads again                       │─────────────╯
                │                                                                              │
-  READY TO STAR│  clone     ~/clones/demo-2 is free                                           │· 1 can start
+  MY TICKETS   │  clone     ~/clones/demo-2 is free                                           │cker · 2 open
  ╭─────────────│  branch    vision/DEMO-15 from origin/main                                   │─────────────╮
  │ ▸ DEMO-15   │  path      13 steps: refine, plan, plan-ready, build, review, open-pr, ci,…  │       To Do │
  │   DEMO-9    │  first     refine: scout · claude-fable-5-2 · high                           │pull request │

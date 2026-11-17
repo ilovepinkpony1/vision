@@ -10,7 +10,7 @@
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                   ╭─ The kill switch ──────────────────────────────────────────────────────╮
-  READY TO START  │                                                                        │er · 1 can start
+  MY TICKETS      │                                                                        │tracker · 2 open
  ╭────────────────│  Turn Vision off?                                                      │────────────────╮
  │   DEMO-15   Kee│                                                                        │          To Do │
  │   DEMO-9    Fix│  The kill switch stops each running turn now, and no action runs       │en pull request │

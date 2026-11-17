@@ -201,7 +201,8 @@ pub enum PipelineCommand {
         /// The ticket keys, such as DEMO-12
         #[arg(required = true, num_args = 1..)]
         keys: Vec<TicketKey>,
-        /// Continue one stopped ticket at this step of the adapter, such as in-review
+        /// Continue one stopped ticket at this step of the adapter, such as in-review, or take
+        /// one ticket that is in progress outside Vision at this step
         #[arg(long, value_name = "STEP")]
         step: Option<String>,
     },

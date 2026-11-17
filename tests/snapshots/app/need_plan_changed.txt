@@ -12,7 +12,7 @@
  │       │  plan, then press a again.                                                               │       │
  ╰───────│                                                                                          │───────╯
          │  # Plan of DEMO-12                                                                       │
-  READY T│                                                                                          │n start
+  MY TICK│                                                                                          │ 2 open
  ╭───────│  ## Decisions                                                                            │───────╮
  │   DEMO│                                                                                          │ To Do │
  │   DEMO│  - The export sorts the columns by name.                                                 │equest │

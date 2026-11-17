@@ -12,7 +12,7 @@
  │       │                                                                                          │       │
  ╰───────│  the proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change             │───────╯
          │                                                                                          │
-  READY T│  r starts the step build again with a new turn of builder. Its message says why the      │n start
+  MY TICK│  r starts the step build again with a new turn of builder. Its message says why the      │ 2 open
  ╭───────│  step stopped.                                                                           │───────╮
  │   DEMO│  o opens the session of builder in this terminal. Vision pauses DEMO-12 while you work   │ To Do │
  │   DEMO│  in it, and asks afterwards whether it goes on.                                          │equest │

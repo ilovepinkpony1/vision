@@ -105,6 +105,27 @@ fn home_with_tickets() {
     check("home_tickets", &home(SIZE));
 }
 
+/// A ticket that is in progress outside Vision shows with its status, as a ticket that can
+/// start does, and Enter opens its start card: the read, the suggestion, and no step found.
+#[test]
+fn home_and_the_start_card_of_a_ticket_in_progress_outside_vision() {
+    let mut app = home_with(
+        SIZE,
+        local(two_tickets(), Vec::new()),
+        Some(queue_with_outside()),
+    );
+    check("home_outside", &app);
+    app.home.selected = Some("DEMO-21".into());
+    send(&mut app, 2.0, Msg::Key(Key::Enter));
+    assert!(matches!(&app.card, Some(Card::Continue(card)) if card.outside.is_some()));
+    send(&mut app, 3.5, Msg::Tick);
+    check("start_outside_reading", &app);
+    read_resume(&mut app, 3.6, "DEMO-21", Ok(outside_view(Some("ready"))));
+    check("start_outside_suggests", &app);
+    read_resume(&mut app, 3.7, "DEMO-21", Ok(outside_view(None)));
+    check("start_outside_nothing", &app);
+}
+
 #[test]
 fn home_with_the_bar_needs_you() {
     let tickets = vec![

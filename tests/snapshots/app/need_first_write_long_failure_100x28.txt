@@ -12,7 +12,7 @@
  │  │  It did not work:                                                                        │  │
  ╰──│  line 1 of a long error that the command wrote line 2 of a long error that the command   │──╯
     │  wrote line 3 of a long error that the command wrote line 4 of a long error that the     │
-  RE│  command wrote line 5 of a long error that the command wrote line 6 of a long error      │rt
+  MY│  command wrote line 5 of a long error that the command wrote line 6 of a long error      │en
  ╭──│  that the command wrote line 7 of a long error that the command wrote line 8 of a long   │──╮
  │  │  error that the command wrote line 9 of a long error that the command wrote line 10 of   │o │
  │  │  a long error that the command wrote line 11 of a long error that the command wrote      │t │

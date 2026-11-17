@@ -12,7 +12,7 @@
  │       │                                                                                          │       │
  ╰───────│  You took over the session of DEMO-12.                                                   │───────╯
          │                                                                                          │
-  READY T│  No new turn starts while the ticket is paused.                                          │n start
+  MY TICK│  No new turn starts while the ticket is paused.                                          │ 2 open
  ╭───────│  DEMO-12 is also stopped. Enter opens the card that continues it at the step build, or   │───────╮
  │   DEMO│  at a step that you pick. At its step, the next turn of builder resumes the session      │ To Do │
  │   DEMO│  that you worked in.                                                                     │equest │

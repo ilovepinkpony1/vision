@@ -200,10 +200,17 @@ pub struct StartCard {
 /// reads what the `[[resume]]` rules of the adapter find. Then it lists the steps of the path,
 /// with the suggestion selected and the stored step marked, and Enter continues at the
 /// selected step. The action is a chain of [`crate::app::recipes::resume`].
+///
+/// The same card starts a ticket that is in progress outside Vision, with [`Outside`]: it has
+/// no stored step, and Enter takes the ticket at the selected step, with the chain of
+/// [`crate::app::recipes::start_at`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContinueCard {
     pub key: String,
     pub title: String,
+    /// Where a ticket that is in progress outside Vision is, from the queue. `None` for a
+    /// ticket that Vision holds.
+    pub outside: Option<Outside>,
     /// The step that the ticket holds.
     pub stored: String,
     /// True for a stopped ticket, false for a paused one, as the card opened.
@@ -230,11 +237,21 @@ impl ContinueCard {
         ContinueCard {
             key: key.to_string(),
             title: title.to_string(),
+            outside: None,
             stored: stored.to_string(),
             stopped,
             view: None,
             selected: 0,
             since,
+        }
+    }
+
+    /// The start card of a ticket that is in progress outside Vision, while its read runs. Its
+    /// read started at `since`.
+    pub fn outside(key: &str, title: &str, outside: Outside, since: Duration) -> ContinueCard {
+        ContinueCard {
+            outside: Some(outside),
+            ..ContinueCard::new(key, title, "", false, since)
         }
     }
 
@@ -251,6 +268,15 @@ impl ContinueCard {
 
 /// What the read of the continue card gives: the view of the pipeline.
 pub type ContinueView = crate::pipeline::resume::View;
+
+/// A ticket that is in progress outside Vision, as the queue of the tracker lists it: its
+/// branch, its open pull request, and its status in the tracker.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Outside {
+    pub branch: String,
+    pub pr: Option<i64>,
+    pub status: String,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KillCard {

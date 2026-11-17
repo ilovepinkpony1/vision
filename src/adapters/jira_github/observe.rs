@@ -29,7 +29,8 @@ pub fn observe(call: &Map<String, Value>) -> Res<Value> {
 }
 
 /// The issues of queue_jql. An issue whose key a branch or an open pull request of the repo
-/// already has in its name is not eligible.
+/// already has in its name is not eligible: it is in progress outside Vision, and its row names
+/// its branch and its open pull request, so that a take can start it at the step where it is.
 fn queue(config: &Config) -> Res<Value> {
     let why = "the queue";
     let jql = config.text_need("queue_jql", why)?;
@@ -77,13 +78,26 @@ fn queue(config: &Config) -> Res<Value> {
         } else {
             String::new()
         };
-        tickets.push(json!({
+        let mut ticket = json!({
             "key": key,
             "title": truthy(fields.get("summary")).cloned().unwrap_or(json!("")),
             "status": jira::name_of(fields.get("status"), "name"),
             "eligible": reason.is_empty(),
             "reason": reason,
-        }));
+        });
+        // A ticket that is in progress outside Vision: its branch, and its open pull request.
+        // The branch of the pull request wins over another branch with the key.
+        let pull_branch = pull
+            .and_then(|p| truthy(p.get("head")))
+            .map(|h| text_of(h.get("ref")))
+            .filter(|b| !b.trim().is_empty());
+        if let Some(branch) = pull_branch.or_else(|| branch.cloned()) {
+            ticket["branch"] = json!(branch);
+        }
+        if let Some(number) = pull.and_then(|p| pr_number(p.get("number"))) {
+            ticket["pr"] = json!(number);
+        }
+        tickets.push(ticket);
     }
     Ok(json!({ "tickets": tickets }))
 }

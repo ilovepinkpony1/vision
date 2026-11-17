@@ -326,6 +326,20 @@ impl Runtime {
                         },
                     );
                 }
+                Effect::LoadOutside { key, branch, pr } => {
+                    let paths = self.paths.clone();
+                    let failed = key.clone();
+                    self.spawn(
+                        move || Msg::Resume {
+                            view: Box::new(load::outside(&paths, &key, &branch, pr)),
+                            key,
+                        },
+                        move |e| Msg::Resume {
+                            key: failed.clone(),
+                            view: Box::new(Err(e)),
+                        },
+                    );
+                }
                 Effect::LoadTicket(key) => {
                     let fresh = !self
                         .app

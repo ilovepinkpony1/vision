@@ -171,6 +171,23 @@ pub fn resume(paths: &Paths, key: &str) -> Result<ContinueView, String> {
     read().map_err(|e| format!("{e:#}"))
 }
 
+/// What the start card of a ticket that is in progress outside Vision shows. It makes the one
+/// call of observe of the `[[resume]]` rules of the adapter, with the branch and the pull
+/// request of the queue, and it changes nothing.
+pub fn outside(
+    paths: &Paths,
+    key: &str,
+    branch: &str,
+    pr: Option<i64>,
+) -> Result<ContinueView, String> {
+    let read = || -> anyhow::Result<ContinueView> {
+        let ctx = Ctx::new(paths.clone());
+        let key = TicketKey::parse(key)?;
+        crate::pipeline::resume::read_outside_view(&ctx, &key, branch, pr)
+    };
+    read().map_err(|e| format!("{e:#}"))
+}
+
 /// What the start card says about a ticket.
 pub fn start_info(paths: &Paths, key: &str) -> Result<StartInfo, String> {
     read_start_info(paths, key).map_err(|e| format!("{e:#}"))

@@ -77,6 +77,21 @@ pub struct PickRow {
     pub reason: String,
     /// The step of a ticket that Vision already holds.
     pub taken: Option<String>,
+    /// The branch of a ticket that is in progress outside Vision: a take starts it at the step
+    /// where it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The open pull request of such a ticket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<i64>,
+}
+
+impl PickRow {
+    /// True for a ticket that is in progress outside Vision: not eligible for a fresh start,
+    /// and a take starts it at the step where it is.
+    pub fn outside(&self) -> bool {
+        !self.eligible && self.branch.is_some()
+    }
 }
 
 /// The rows of `vision pick`: the queue of the tracker, with the step of each ticket that
@@ -95,6 +110,8 @@ pub fn pick_rows(ctx: &Ctx) -> Result<Vec<PickRow>> {
             status: t.status,
             eligible: t.eligible,
             reason: t.reason,
+            branch: t.branch,
+            pr: t.pr,
         })
         .collect())
 }
@@ -115,12 +132,16 @@ pub fn pick(ctx: &Ctx, json: bool) -> Result<()> {
         let take = match (&row.taken, row.eligible) {
             (Some(step), _) => format!("taken ({step})"),
             (None, true) => "yes".into(),
+            (None, false) if row.outside() => "yes, at the step where it is".into(),
             (None, false) => format!("no: {}", row.reason),
         };
         table.push([row.key.clone(), row.status.clone(), take, row.title.clone()]);
     }
     print!("{}", render_table(&table));
-    if rows.iter().any(|r| r.eligible && r.taken.is_none()) {
+    if rows
+        .iter()
+        .any(|r| (r.eligible || r.outside()) && r.taken.is_none())
+    {
         println!("\nStart one with `vision take KEY`.");
     }
     Ok(())
@@ -161,11 +182,12 @@ pub fn render_table<const N: usize>(rows: &[[String; N]]) -> String {
 // ----- take ------------------------------------------------------------------------------
 
 /// `vision take KEY...`, and `vision take KEY --step STEP`, which continues one stopped ticket
-/// at STEP (see [`restart`]).
+/// at STEP (see [`restart`]), or takes one ticket that is in progress outside Vision at STEP (see
+/// [`take_outside`]).
 pub fn take(ctx: &Ctx, keys: &[TicketKey], step: Option<&str>) -> Result<()> {
     ctx.require_setup()?;
     if step.is_some() && keys.len() != 1 {
-        bail!("`--step` continues one stopped ticket: name one key, such as `vision take DEMO-12 --step in-review`");
+        bail!("`--step` continues or takes one ticket: name one key, such as `vision take DEMO-12 --step in-review`");
     }
     let _lock = wait_for_lock(ctx)?;
     let ledger = ctx.ledger()?;
@@ -221,11 +243,6 @@ fn take_one(
             );
         }
     }
-    if step.is_some() {
-        bail!(
-            "`vision take --step` continues a stopped ticket, and Vision holds no ticket {key} in progress. Run `vision take {key}` to start it"
-        );
-    }
     if queue.is_none() {
         *queue = Some(executor::observe_queue(ctx)?);
     }
@@ -234,8 +251,23 @@ fn take_one(
         .and_then(|q| q.iter().find(|t| t.key == *key))
         .cloned();
     let Some(found) = found else {
+        if step.is_some() {
+            bail!(
+                "`vision take --step` continues a stopped ticket, or takes a ticket that is in progress outside Vision, and the queue of the tracker has no ticket {key}. `vision pick` lists the queue"
+            );
+        }
         bail!("the queue of the tracker has no ticket {key}. `vision pick` lists the queue");
     };
+    if !found.eligible {
+        if let Some(branch) = found.branch.clone() {
+            return take_outside(ctx, ledger, adapter, config, &found, &branch, step);
+        }
+    }
+    if step.is_some() {
+        bail!(
+            "`vision take --step` continues a stopped ticket, or takes a ticket that is in progress outside Vision, and {key} is neither. Run `vision take {key}` to start it"
+        );
+    }
     if !found.eligible {
         bail!(
             "{key} is not eligible: {}. `vision pick` lists the eligible tickets",
@@ -323,6 +355,179 @@ fn take_one(
         short(&head),
         entry.id
     ))
+}
+
+/// `vision take` of a ticket that is in progress outside Vision: it has a branch, and maybe an
+/// open pull request, that someone made by hand.
+///
+/// With no STEP, it reads the facts and the rules, prints where the ticket is and the step that
+/// the rules suggest, and changes nothing. With a STEP, it takes the ticket there: in a free
+/// clone, on the branch of the ticket with the commits of the remote, at that step. An end step
+/// is refused, because Vision takes no ticket that is done.
+fn take_outside(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    config: &Config,
+    found: &QueueTicket,
+    branch: &str,
+    to: Option<&str>,
+) -> Result<String> {
+    let key = &found.key;
+    // The facts and the rules: one call of observe with the branch and the pull request of the
+    // queue, before anything changes.
+    let checked = resume::check_outside(ctx, adapter, key, branch, found.pr);
+    let Some(name) = to else {
+        let text = resume::outside_text(key, branch, found.pr, checked.as_ref());
+        return Err(resume::Suggests(text).into());
+    };
+    let target = known_step(adapter, name)?;
+    if matches!(target.kind, StepKind::End) {
+        bail!(
+            "`{}` is the end step of the adapter {}, and Vision takes no ticket that is done. Name the step where {key} waits now",
+            target.id,
+            adapter.name
+        );
+    }
+    let clone = free_clone(ledger, config)?;
+    let clone_text = clone.display().to_string();
+    git::run(&clone, &["fetch", "--quiet", "--all", "--prune"])
+        .with_context(|| format!("could not fetch in the clone {clone_text}"))?;
+    let again = format!("vision take {key} --step {name}");
+    let remote = base_remote(&clone, adapter).unwrap_or_else(|| "origin".to_string());
+    switch_outside(&clone, &remote, branch, &again)?;
+    let head = head_of(&clone)?;
+    let now = time::now_rfc3339();
+    let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &target.id)?.len())?;
+    let mut counts = Counts::default();
+    let visit = counts.enter(&target, "take", &now, turns, Some(head.clone()), true);
+    let title = Some(found.title.trim().to_string()).filter(|t| !t.is_empty());
+    let pr = checked.as_ref().and_then(Checked::pr).or(found.pr);
+    let row = TicketRow {
+        key: key.to_string(),
+        title,
+        state: Some(target.id.clone()),
+        flags: Some(flags_text(&[])),
+        clone: Some(clone_text.clone()),
+        branch: Some(branch.to_string()),
+        pr,
+        head: Some(head.clone()),
+        taken: Some(now.clone()),
+        updated: Some(now.clone()),
+        counts: Some(counts.text()),
+    };
+    let dir = ctx.paths.ticket_dir(key);
+    std::fs::create_dir_all(&dir).with_context(|| format!("could not make {}", dir.display()))?;
+    let ticket = Ticket::of(row.clone())?;
+    let facts = checked.as_ref().map(Checked::words).unwrap_or_default();
+    let suggestion = checked
+        .as_ref()
+        .and_then(Checked::suggested)
+        .map(str::to_string);
+    in_tx(ledger, |ledger| {
+        ledger.put_ticket(&row)?;
+        ledger.close_spans(key.as_str(), &now)?;
+        ledger.open_span(&span(&ticket, &target, "take", &now))?;
+        ledger.add_event(
+            &Event::now("user", "take")
+                .ticket(key.as_str())
+                .detail(json!({
+                    "clone": clone_text, "branch": branch, "base": head, "step": target.id,
+                    "seq": visit.seq, "outside": true, "pr": pr, "suggestion": suggestion,
+                    "facts": facts,
+                })),
+        )?;
+        Ok(())
+    })?;
+    ctx.log(&format!(
+        "take: {key} from outside Vision in {clone_text} on {branch} at the step {} ({})",
+        target.id,
+        short(&head)
+    ));
+    Ok(format!(
+        "Took {key} in the clone {clone_text} on its branch {branch} ({}), {}. The next tick enters the step {}.",
+        short(&head),
+        match pr {
+            Some(n) => format!("with the pull request #{n}"),
+            None => "with no pull request".to_string(),
+        },
+        target.id
+    ))
+}
+
+/// The remote of the clone for the base ref of the adapter, such as `origin` of `origin/main`.
+/// A clone without that remote gives its first remote, and a clone with no remote gives `None`.
+fn base_remote(clone: &Path, adapter: &Adapter) -> Option<String> {
+    let remotes = git::run(clone, &["remote"]).unwrap_or_default();
+    let remotes: Vec<&str> = remotes
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .collect();
+    let wanted = adapter.base.split('/').next().unwrap_or("origin");
+    if remotes.contains(&wanted) {
+        Some(wanted.to_string())
+    } else {
+        remotes.first().map(|r| r.to_string())
+    }
+}
+
+/// Puts the clone on the branch of a ticket that is in progress outside Vision, with the commits
+/// of the remote. A branch that the clone does not have starts at the remote branch. A local
+/// branch that the remote branch is ahead of moves forward to it. A local branch with commits
+/// that the remote does not have keeps them, and the next push sends them. A local branch that
+/// went apart from the remote stops the take, and nothing moves. No commit goes away.
+fn switch_outside(clone: &Path, remote: &str, branch: &str, again: &str) -> Result<()> {
+    let at = |reference: String| {
+        git::run(clone, &["rev-parse", "--verify", "--quiet", &reference]).ok()
+    };
+    let local = at(format!("refs/heads/{branch}"));
+    let tracking = format!("{remote}/{branch}");
+    let theirs = at(format!("refs/remotes/{tracking}"));
+    let ancestor =
+        |a: &str, b: &str| git::run(clone, &["merge-base", "--is-ancestor", a, b]).is_ok();
+    let switch = |args: &[&str]| -> Result<()> {
+        git::run(clone, args).map(|_| ()).map_err(|e| {
+            switch_error(
+                e,
+                clone,
+                branch,
+                again,
+                format!(
+                    "could not switch the clone {} to the branch {branch}",
+                    clone.display()
+                ),
+            )
+        })
+    };
+    match (local, theirs) {
+        (None, None) => bail!(
+            "the branch {branch} is neither in the clone {} nor on {remote} after a fetch. Push it, then run `{again}` again",
+            clone.display()
+        ),
+        (None, Some(_)) => switch(&["switch", "--quiet", "--no-track", "-c", branch, &tracking]),
+        (Some(_), None) => switch(&["switch", "--quiet", branch]),
+        (Some(mine), Some(theirs)) => {
+            if mine != theirs && !ancestor(&mine, &theirs) && !ancestor(&theirs, &mine) {
+                bail!(
+                    "the branch {branch} in the clone {} and {tracking} went apart: neither holds the head of the other. Merge or reset the branch in the clone by hand, then run `{again}` again",
+                    clone.display()
+                );
+            }
+            switch(&["switch", "--quiet", branch])?;
+            if mine != theirs && ancestor(&mine, &theirs) {
+                git::run(clone, &["merge", "--ff-only", "--quiet", &theirs]).with_context(
+                    || {
+                        format!(
+                            "could not move the branch {branch} of the clone {} forward to {tracking}",
+                            clone.display()
+                        )
+                    },
+                )?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// The tickets that hold a clone: a row with a step that is not finished and not stopped.
@@ -1663,14 +1868,7 @@ pub fn diff_with(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, fetch: bool) -> Re
         .branch
         .clone()
         .unwrap_or_else(|| adapter.branch_for(key));
-    let remotes = git::run(&clone, &["remote"]).unwrap_or_default();
-    let remotes: Vec<&str> = remotes.lines().map(str::trim).collect();
-    let wanted = adapter.base.split('/').next().unwrap_or("origin");
-    let remote = if remotes.contains(&wanted) {
-        Some(wanted.to_string())
-    } else {
-        remotes.first().map(|r| r.to_string())
-    };
+    let remote = base_remote(&clone, &adapter);
     if let (Some(remote), true) = (&remote, fetch) {
         if let Err(e) = git::run(&clone, &["fetch", "--quiet", remote]) {
             eprintln!("warning: could not fetch {remote}, so the comparison uses the refs of the clone: {e:#}");
@@ -2364,5 +2562,109 @@ mod log_tests {
         assert_eq!(to(json!({"to": " ", "turn": "t1"})), "the running turn");
         assert_eq!(to(json!({"to": null, "turn": null})), "the next turn");
         assert_eq!(to(Value::Null), "the next turn");
+    }
+}
+
+#[cfg(test)]
+mod outside_tests {
+    use super::*;
+
+    const BRANCH: &str = "feature/demo-12";
+    const AGAIN: &str = "vision take DEMO-12 --step in-review";
+
+    fn git_in(dir: &Path, args: &[&str]) -> String {
+        let author = git::Author {
+            name: "test",
+            email: "test@example.invalid",
+        };
+        git::run_as(dir, args, author).unwrap()
+    }
+
+    /// A commit of one file in `dir`. Gives the commit.
+    fn commit(dir: &Path, name: &str) -> String {
+        std::fs::write(dir.join(name), name).unwrap();
+        git_in(dir, &["add", "--all"]);
+        git_in(dir, &["commit", "--quiet", "-m", name]);
+        git_in(dir, &["rev-parse", "HEAD"])
+    }
+
+    /// A commit of the person on the branch of the ticket, pushed, and fetched by the clone.
+    /// Gives the commit.
+    fn pushed(person: &Path, clone: &Path, name: &str) -> String {
+        let commit = commit(person, name);
+        git_in(person, &["push", "--quiet", "origin", BRANCH]);
+        git_in(clone, &["fetch", "--quiet", "--all"]);
+        commit
+    }
+
+    /// The branch that the clone is on, and its head.
+    fn on(clone: &Path) -> (String, String) {
+        (
+            git_in(clone, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            git_in(clone, &["rev-parse", "HEAD"]),
+        )
+    }
+
+    #[test]
+    fn the_clone_takes_the_branch_of_the_remote_and_keeps_its_own_commits() {
+        // A bare remote with main, a checkout of the person, and the clone of Vision on main.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let remote = root.join("remote.git");
+        let person = root.join("person");
+        let clone = root.join("clone");
+        let path = |p: &Path| p.to_str().unwrap().to_string();
+        git_in(root, &["init", "--quiet", "--bare", &path(&remote)]);
+        git_in(root, &["clone", "--quiet", &path(&remote), &path(&person)]);
+        commit(&person, "calc.sh");
+        git_in(&person, &["push", "--quiet", "origin", "HEAD:refs/heads/main"]);
+        git_in(&remote, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+        git_in(root, &["clone", "--quiet", &path(&remote), &path(&clone)]);
+        git_in(&person, &["switch", "--quiet", "-c", BRANCH]);
+
+        // A branch that the clone does not have starts at the remote branch.
+        let first = pushed(&person, &clone, "a.txt");
+        switch_outside(&clone, "origin", BRANCH, AGAIN).unwrap();
+        assert_eq!(on(&clone), (BRANCH.to_string(), first));
+
+        // A branch that the remote branch is ahead of moves forward to it.
+        git_in(&clone, &["switch", "--quiet", "main"]);
+        let second = pushed(&person, &clone, "b.txt");
+        switch_outside(&clone, "origin", BRANCH, AGAIN).unwrap();
+        assert_eq!(on(&clone), (BRANCH.to_string(), second));
+
+        // A branch with commits that the remote does not have keeps them.
+        let mine = commit(&clone, "c.txt");
+        git_in(&clone, &["switch", "--quiet", "main"]);
+        switch_outside(&clone, "origin", BRANCH, AGAIN).unwrap();
+        assert_eq!(on(&clone), (BRANCH.to_string(), mine.clone()));
+
+        // A branch that went apart from the remote stops the take, and nothing moves.
+        git_in(&clone, &["switch", "--quiet", "main"]);
+        pushed(&person, &clone, "d.txt");
+        let apart = format!(
+            "{:#}",
+            switch_outside(&clone, "origin", BRANCH, AGAIN).unwrap_err()
+        );
+        assert!(
+            apart.contains(&format!(
+                "the branch {BRANCH} in the clone {} and origin/{BRANCH} went apart",
+                clone.display()
+            )) && apart.ends_with(&format!("then run `{AGAIN}` again")),
+            "{apart}"
+        );
+        assert_eq!(on(&clone).0, "main");
+        assert_eq!(git_in(&clone, &["rev-parse", BRANCH]), mine);
+
+        // A branch that is neither in the clone nor on the remote stops the take.
+        let gone = format!(
+            "{:#}",
+            switch_outside(&clone, "origin", "feature/gone", AGAIN).unwrap_err()
+        );
+        assert!(
+            gone.contains("the branch feature/gone is neither in the clone")
+                && gone.ends_with(&format!("Push it, then run `{AGAIN}` again")),
+            "{gone}"
+        );
     }
 }

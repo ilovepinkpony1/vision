@@ -12,7 +12,7 @@
  │       │  Example       The table shows date, client, total. The file can keep that order or      │       │
  ╰───────│                sort the columns by name.                                                 │───────╯
          │                                                                                          │
-  READY T│    a  Keep the order  the file has the columns of the table, in the same    recommended  │n start
+  MY TICK│    a  Keep the order  the file has the columns of the table, in the same    recommended  │ 2 open
  ╭───────│                       order                                                              │───────╮
  │   DEMO│    b  Sort by name    the file sorts the columns by their names                          │ To Do │
  │   DEMO│                                                                                          │equest │

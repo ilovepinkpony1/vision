@@ -1,6 +1,8 @@
 //! Home (`drawHome` of the design): the bar "needs you", the box IN PROGRESS with two lines for
-//! each ticket, the box READY TO START with the queue of the tracker, the line THIS WEEK, and
-//! the keys. The boxes take the full width of the window. When a box has more rows than fit, it
+//! each ticket, the box MY TICKETS with the queue of the tracker, the line THIS WEEK, and the
+//! keys. A ticket of the queue that can start shows its status, and so does a ticket that is in
+//! progress outside Vision, because its start card takes it at its step. Each other ticket of
+//! the queue shows faint, with the reason that it cannot start. The boxes take the full width of the window. When a box has more rows than fit, it
 //! shows the part around the selection and says how many rows are above and below.
 //!
 //! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
@@ -93,11 +95,10 @@ pub fn draw(app: &App, c: &mut Canvas) {
     }
     y += 1;
 
-    // READY TO START
-    c.put(2, y, "READY TO START", ink(T.dim).bold());
-    let ready = queue.iter().filter(|r| r.eligible).count();
+    // MY TICKETS
+    c.put(2, y, "MY TICKETS", ink(T.dim).bold());
     let tail = if app.queue.data.is_some() {
-        format!("from the tracker · {ready} can start")
+        format!("from the tracker · {} open", queue.len())
     } else {
         "from the tracker".to_string()
     };
@@ -358,13 +359,17 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
     );
 }
 
+/// A row of the queue. A ticket that can start and a ticket that is in progress outside Vision
+/// show their status, because Enter starts both. Each other ticket shows faint, with the reason
+/// that it cannot start.
 fn queue_row(c: &mut Canvas, row: &PickRow, y: i32, kx: i32, selected: bool) {
     c.click(2, y, c.w - 4, 1, Act::Ticket(row.key.clone()));
     if selected {
         c.tint(2, y, c.w - 4, T.sel);
         c.put(3, y, "▸", ink(T.accent).bold());
     }
-    let key_color = if !row.eligible {
+    let starts = row.eligible || row.outside();
+    let key_color = if !starts {
         T.faint
     } else if selected {
         T.accent
@@ -372,19 +377,19 @@ fn queue_row(c: &mut Canvas, row: &PickRow, y: i32, kx: i32, selected: bool) {
         T.fg
     };
     let mut key_ink = ink(key_color);
-    if row.eligible {
+    if starts {
         key_ink = key_ink.bold();
     }
     c.put(5, y, &cut(&row.key, (kx - 6) as usize), key_ink);
-    let tail = if row.eligible {
+    let tail = if starts {
         row.status.clone()
     } else {
         row.reason.clone()
     };
     let tail = cut(&tail, ((c.w - 4 - kx) / 2).max(1) as usize);
-    let tail_color = if row.eligible { T.dim } else { T.faint };
+    let tail_color = if starts { T.dim } else { T.faint };
     let r = c.right(c.w - 4, y, &tail, ink(tail_color));
-    let title_color = if row.eligible { T.fg } else { T.faint };
+    let title_color = if starts { T.fg } else { T.faint };
     c.put(
         kx,
         y,

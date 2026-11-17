@@ -26,6 +26,11 @@ pub struct QueueTicket {
     pub eligible: bool,
     /// Why the ticket is not eligible. Empty for an eligible ticket.
     pub reason: String,
+    /// The branch of a ticket that is in progress outside Vision, which a take can start at
+    /// the step where it is. A name that git cannot take is left out.
+    pub branch: Option<String>,
+    /// The open pull request of such a ticket.
+    pub pr: Option<i64>,
 }
 
 /// The facts of one ticket.
@@ -116,6 +121,13 @@ pub fn observe_queue(ctx: &Ctx) -> Result<Vec<QueueTicket>> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             reason: clean::line(item.get("reason"), 300).unwrap_or_default(),
+            branch: item
+                .get("branch")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|b| crate::util::git::valid_branch(b))
+                .map(str::to_string),
+            pr: item.get("pr").and_then(Value::as_i64).filter(|n| *n > 0),
         });
     }
     Ok(tickets)
@@ -140,15 +152,46 @@ pub fn seen_comments(ctx: &Ctx, key: &TicketKey) -> Result<Vec<String>> {
 pub fn observe_ticket(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<TicketFacts> {
     let adapter = adapter::load(ctx)?;
     let ticket = TicketContext::load(ledger, &adapter, key)?;
+    let clone = ticket.clone_text();
+    observe_at(
+        ctx,
+        key,
+        &ticket.branch,
+        ticket.pr,
+        clone.as_deref(),
+        ticket.clone.as_deref(),
+    )
+}
+
+/// `observe {"what": "ticket", ...}` of a ticket that Vision does not hold yet, such as a ticket
+/// that is in progress outside Vision: its branch and its pull request come from the queue, and
+/// it has no clone.
+pub fn observe_outside(
+    ctx: &Ctx,
+    key: &TicketKey,
+    branch: &str,
+    pr: Option<i64>,
+) -> Result<TicketFacts> {
+    observe_at(ctx, key, branch, pr, None, None)
+}
+
+fn observe_at(
+    ctx: &Ctx,
+    key: &TicketKey,
+    branch: &str,
+    pr: Option<i64>,
+    clone_text: Option<&str>,
+    clone: Option<&Path>,
+) -> Result<TicketFacts> {
     let input = json!({
         "what": "ticket",
         "key": key.as_str(),
-        "branch": ticket.branch,
-        "pr": ticket.pr,
-        "clone": ticket.clone_text(),
+        "branch": branch,
+        "pr": pr,
+        "clone": clone_text,
         "seen": seen_comments(ctx, key)?,
     });
-    let answer = call(ctx, input, ticket.clone.as_deref())?;
+    let answer = call(ctx, input, clone)?;
     let wrong = |what: &str| format!("bin/observe answered {key} with a wrong {what}");
     let pr = match answer.get("pr") {
         None | Some(Value::Null) => None,

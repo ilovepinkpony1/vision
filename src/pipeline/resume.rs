@@ -1042,6 +1042,137 @@ fn capital(text: &str) -> String {
 #[error("{0}")]
 pub struct Suggests(pub String);
 
+// ----- A ticket that is in progress outside Vision -----------------------------------------
+
+/// Applies the rules of the adapter to a ticket that Vision does not hold yet, such as a ticket
+/// that someone works on outside Vision: one call of observe with the branch and the pull
+/// request of the queue. The search starts at the first step of the path, so each rule that
+/// holds names a later step. Vision has no clone of the ticket yet, so it reads no head. A rule
+/// that names an end step suggests nothing, because Vision takes no ticket that is done. `None`
+/// when the adapter has no `[[resume]]` rule.
+pub(crate) fn check_outside(
+    ctx: &Ctx,
+    adapter: &Adapter,
+    key: &TicketKey,
+    branch: &str,
+    pr: Option<i64>,
+) -> Option<Checked> {
+    if adapter.resume.is_empty() {
+        return None;
+    }
+    Some(match executor::observe_outside(ctx, key, branch, pr) {
+        Ok(facts) => {
+            let mut found = find(adapter, &adapter.entry().id, &facts, &Head::None);
+            if let Found::Step {
+                rule, step, reason, ..
+            } = &found
+            {
+                if adapter
+                    .step(step)
+                    .is_some_and(|s| matches!(s.kind, StepKind::End))
+                {
+                    found = Found::Nothing(format!(
+                        "the rule {rule} holds and names the end step {step}: {reason}. Vision takes no ticket that is done"
+                    ));
+                }
+            }
+            Checked {
+                found,
+                facts: Some(facts),
+                head: Head::None,
+            }
+        }
+        Err(e) => Checked {
+            found: Found::Failed(plain(&format!("{e:#}"), 300)),
+            facts: None,
+            head: Head::None,
+        },
+    })
+}
+
+/// Where a ticket that is in progress outside Vision is, in words: its branch, and its pull
+/// request when it has one.
+pub fn outside_place(branch: &str, pr: Option<i64>) -> String {
+    match pr {
+        Some(n) => format!("on the branch {branch}, with the pull request #{n}"),
+        None => format!("on the branch {branch}, with no pull request"),
+    }
+}
+
+/// What a plain `vision take` of a ticket that is in progress outside Vision prints: where it
+/// is, each fact that Vision read, what the rules found, and the command that takes it.
+pub fn outside_text(
+    key: &TicketKey,
+    branch: &str,
+    pr: Option<i64>,
+    checked: Option<&Checked>,
+) -> String {
+    let mut out = format!(
+        "{key} is in progress outside Vision, {}. Vision did not take it.\n",
+        outside_place(branch, pr)
+    );
+    let words = checked.map(Checked::words).unwrap_or_default();
+    if !words.is_empty() {
+        out.push_str("Vision read:\n");
+        for fact in words {
+            out.push_str(&format!("  {fact}\n"));
+        }
+    }
+    let any = format!("To take it at a step:  vision take {key} --step STEP");
+    match checked.map(|c| &c.found) {
+        Some(Found::Step {
+            rule, step, reason, ..
+        }) => out.push_str(&format!(
+            "Vision thinks that it is at the step {step}: {reason} (rule {rule}).\nTo take it there:      vision take {key} --step {step}"
+        )),
+        Some(Found::Nothing(why)) => {
+            out.push_str(&format!("Vision found no step: {why}.\n{any}"));
+        }
+        Some(Found::Failed(why)) => {
+            out.push_str(&format!("Vision could not read its facts: {why}.\n{any}"));
+        }
+        None => out.push_str(&format!(
+            "The adapter has no resume rules, so Vision read no fact.\n{any}"
+        )),
+    }
+    out
+}
+
+/// The view of the start card of a ticket that is in progress outside Vision: what the rules
+/// found from its facts, and the steps that the person can pick. It has no stored step, and no
+/// end step to pick. It makes the one call of observe of the rules, and it changes nothing.
+pub fn read_outside_view(
+    ctx: &Ctx,
+    key: &TicketKey,
+    branch: &str,
+    pr: Option<i64>,
+) -> Result<View> {
+    ctx.require_setup()?;
+    let adapter = crate::adapter::load_with(ctx.config()?, &ctx.paths)?;
+    let checked = check_outside(ctx, &adapter, key, branch, pr);
+    let steps = adapter
+        .steps
+        .iter()
+        .filter(|s| !matches!(s.kind, StepKind::End))
+        .map(|s| s.id.clone())
+        .collect();
+    Ok(View {
+        key: key.to_string(),
+        stored: String::new(),
+        steps,
+        rules: checked.is_some(),
+        pr: checked.as_ref().and_then(Checked::pr).or(pr),
+        facts: checked.as_ref().map(Checked::words).unwrap_or_default(),
+        back: None,
+        head: Head::None,
+        found: checked.map(|c| c.found),
+        clone: None,
+        stopped: false,
+        paused: false,
+        needs_you: false,
+    })
+}
+
 // ----- The continue card ---------------------------------------------------------------------
 
 /// What the continue card of the app shows for a stopped or paused ticket: what the rules

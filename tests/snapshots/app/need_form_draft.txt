@@ -12,7 +12,7 @@
  │       │                                                                                          │       │
  ╰───────│  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │───────╯
          │  Example       The table shows date, client, total. The file can keep that order or      │
-  READY T│                sort the columns by name.                                                 │n start
+  MY TICK│                sort the columns by name.                                                 │ 2 open
  ╭───────│                                                                                          │───────╮
  │   DEMO│    a  Keep the order  the file has the columns of the table, in the same    recommended  │ To Do │
  │   DEMO│                       order                                                              │equest │

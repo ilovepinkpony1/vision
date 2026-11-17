@@ -1854,6 +1854,155 @@ fn a_stopped_ticket_goes_on_where_the_rules_find_it_and_takes_the_head_that_the_
     );
 }
 
+/// The person starts a ticket by hand, outside Vision: a branch with its key, from another
+/// clone, and an open pull request that is ready. Gives the branch, its head, and the number of
+/// the pull request.
+fn started_outside_vision(p: &Project) -> (&'static str, String, i64) {
+    let branch = "feature/demo-12-subtract";
+    let root = p._dir.path();
+    let person = root.join("person");
+    git(
+        root,
+        &[
+            "clone",
+            "--quiet",
+            p.remote.to_str().unwrap(),
+            person.to_str().unwrap(),
+        ],
+    );
+    git(&person, &["config", "user.name", "person"]);
+    git(&person, &["config", "user.email", "person@example.invalid"]);
+    git(&person, &["switch", "--quiet", "-c", branch]);
+    std::fs::write(
+        person.join("calc.sh"),
+        format!("{TOY_CALC}\n# Gives a minus b.\nsubtract() {{ echo $(($1 - $2)); }}\n"),
+    )
+    .unwrap();
+    git(&person, &["commit", "--quiet", "-am", "Add subtract"]);
+    git(&person, &["push", "--quiet", "origin", branch]);
+    let head = git(&person, &["rev-parse", "HEAD"]);
+    let number = p.server.world.lock().unwrap().open_pull(branch);
+    (branch, head, number)
+}
+
+#[test]
+fn a_ticket_in_progress_outside_vision_is_taken_at_its_step() {
+    let p = Project::new();
+    let (branch, pushed, number) = started_outside_vision(&p);
+
+    // The queue lists the ticket as not eligible, with its branch and its pull request.
+    let pick = p.run(&["pick", "--json"]);
+    pick.expect_code(0);
+    let row = pick
+        .json()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["key"] == KEY)
+        .cloned()
+        .unwrap();
+    assert_eq!(row["eligible"], false);
+    assert_eq!(row["branch"], branch);
+    assert_eq!(row["pr"], json!(number));
+    let table = p.run(&["pick"]);
+    table.expect_code(0);
+    assert!(
+        table.stdout.contains("yes, at the step where it is"),
+        "{table:?}"
+    );
+
+    // A plain take reads the facts and the rules, prints the suggestion, and changes nothing.
+    let plain = p.run(&["take", KEY]);
+    plain.expect_code(1);
+    assert_eq!(
+        plain.stdout,
+        format!(
+            "DEMO-12 is in progress outside Vision, on the branch {branch}, with the pull request #{number}. Vision did not take it.\nVision read:\n  the tracker status is To Do\n  the pull request #{number} is open and ready\n  the review state is waiting and no review comment waits\n  CI has no run\nVision thinks that it is at the step in-review: the pull request #{number} is open and ready (rule 4).\nTo take it there:      vision take DEMO-12 --step in-review\n"
+        ),
+        "{plain:?}"
+    );
+    assert!(p.row().is_none(), "a plain take writes no row");
+    assert_eq!(
+        git(&p.clone, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "main",
+        "a plain take leaves the clone as it was"
+    );
+
+    // An end step is refused, and a step that the adapter does not have too.
+    let done = p.run(&["take", KEY, "--step", "done"]);
+    done.expect_code(1);
+    assert!(
+        done.stderr.contains(
+            "`done` is the end step of the adapter jira-github, and Vision takes no ticket that is done. Name the step where DEMO-12 waits now"
+        ),
+        "{done:?}"
+    );
+    let unknown = p.run(&["take", KEY, "--step", "nowhere"]);
+    unknown.expect_code(1);
+    assert!(
+        unknown
+            .stderr
+            .contains("the adapter jira-github has no step `nowhere`"),
+        "{unknown:?}"
+    );
+    assert!(p.row().is_none());
+
+    // The take at the step puts the clone on the branch of the pull request, at its head, and
+    // holds the ticket there with the pull request.
+    let taken = p.run(&["take", KEY, "--step", "in-review"]);
+    taken.expect_code(0);
+    let clone = p.clone.display().to_string();
+    assert_eq!(
+        taken.stdout,
+        format!(
+            "Took DEMO-12 in the clone {clone} on its branch {branch} ({}), with the pull request #{number}. The next tick enters the step in-review.\n",
+            &pushed[..12]
+        ),
+        "{taken:?}"
+    );
+    assert_eq!(
+        git(&p.clone, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        branch
+    );
+    assert_eq!(p.head(), pushed);
+    let row = p.row().unwrap();
+    assert_eq!(row.state.as_deref(), Some("in-review"));
+    assert_eq!(row.branch.as_deref(), Some(branch));
+    assert_eq!(row.pr, Some(number));
+    assert_eq!(row.head.as_deref(), Some(pushed.as_str()));
+    assert!(p.flags().is_empty());
+    let take = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "take")
+        .expect("the event take");
+    assert_eq!(take.actor, "user");
+    let detail: Value = serde_json::from_str(take.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["outside"], true);
+    assert_eq!(detail["pr"], json!(number));
+    assert_eq!(detail["suggestion"], "in-review");
+    assert_eq!(detail["step"], "in-review");
+    assert_eq!(detail["facts"][1], format!("the pull request #{number} is open and ready"));
+
+    // The next tick follows the review of the pull request: the lead asks for a change, and
+    // the ticket goes to the step comments.
+    p.server.team(
+        "comment",
+        json!({"number": number, "id": 601, "login": "lead", "path": "calc.sh", "line": 5,
+               "body": "Add a test for subtract."}),
+    );
+    p.tick();
+    assert_eq!(p.step().as_deref(), Some("comments"), "{}", p.report());
+    let again = p.run(&["take", KEY, "--step", "in-review"]);
+    again.expect_code(1);
+    assert!(
+        again.stderr.contains("DEMO-12 is not stopped"),
+        "Vision holds the ticket now: {again:?}"
+    );
+}
+
 #[test]
 fn waiting_comments_suggest_comments_and_an_observe_that_fails_suggests_nothing() {
     let p = Project::new();

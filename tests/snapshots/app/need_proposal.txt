@@ -12,7 +12,7 @@
  │       │                                                                                          │       │
  ╰───────│  Two answers of the person say the same thing as D-0004. The Curator merges them.        │───────╯
          │                                                                                          │
-  READY T│  Its replays still run, so the review shows their numbers when they end. You can review  │n start
+  MY TICK│  Its replays still run, so the review shows their numbers when they end. You can review  │ 2 open
  ╭───────│  the changes now.                                                                        │───────╮
  │   DEMO│                                                                                          │ To Do │
  │   DEMO│  Enter opens the review in this terminal. You accept or reject each change there, and    │equest │

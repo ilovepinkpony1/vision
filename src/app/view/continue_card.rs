@@ -4,6 +4,10 @@
 //! selected and the stored step marked. Its foot holds the keys, or the steps of the chain of
 //! Enter. `v` opens the live view of the ticket, unless the card shows over it.
 //!
+//! The same card starts a ticket that is in progress outside Vision, as "Start KEY": its head
+//! names the branch and the pull request of the ticket, no step is marked as the stored step,
+//! Enter takes the ticket at the selected step, and the ticket has no live view yet.
+//!
 //! [`rows`] makes the rows of the card in one place, with the window of the steps and the
 //! parts that a click hits, so the draw and the mouse see the same card.
 
@@ -28,11 +32,20 @@ const TEXT: usize = 78;
 const FAILURE_LINES: usize = 4;
 /// What the read of the card does, while it runs.
 pub const READING: &str = "It asks the tracker for the status, and the forge for the pull request, the review, CI, and each env. It also compares the branch with the clone. The steps show when the read ends.";
+/// What the read of the start card of a ticket that is in progress outside Vision does. Vision
+/// has no clone of the ticket yet, so it compares no branch.
+pub const READING_OUTSIDE: &str = "It asks the tracker for the status, and the forge for the pull request, the review, CI, and each env. The steps show when the read ends.";
+/// What the take of a ticket that is in progress outside Vision does, under its facts.
+pub const TAKES: &str = "Vision takes it in a free clone, on its branch with the commits of the remote. The steps before the step that you pick do not run.";
 
 pub fn draw(app: &App, card: &ContinueCard, c: &mut Canvas) {
     let rows = rows(app, card, c.h);
     let (x, y, w, h) = card_rect(c, WIDTH, rows.rows.len());
-    show(c, WIDTH, &format!("Continue {}", card.key), T.primary, rows);
+    let title = match card.outside {
+        Some(_) => format!("Start {}", card.key),
+        None => format!("Continue {}", card.key),
+    };
+    show(c, WIDTH, &title, T.primary, rows);
     // The wheel over the card acts as the up and down arrows: one step picks the next step.
     c.wheel(x, y, w, h, 1);
 }
@@ -78,12 +91,15 @@ fn head(app: &App, card: &ContinueCard) -> Rows {
         _ if card.stopped => "is stopped at",
         _ => "is paused at",
     };
-    rows.para(
-        3,
-        &format!("{} {state} the step {}.", card.key, card.stored),
-        TEXT,
-        ink(T.fg),
-    );
+    let first = match &card.outside {
+        Some(outside) => format!(
+            "{} is in progress outside Vision, {}.",
+            card.key,
+            crate::pipeline::resume::outside_place(&outside.branch, outside.pr)
+        ),
+        None => format!("{} {state} the step {}.", card.key, card.stored),
+    };
+    rows.para(3, &first, TEXT, ink(T.fg));
     let Some(view) = &card.view else {
         // The read can take some seconds: the card says what it reads and for how long.
         let ran = app.clock.elapsed.saturating_sub(card.since).as_secs();
@@ -96,7 +112,11 @@ fn head(app: &App, card: &ContinueCard) -> Rows {
                 ink(T.accent).bold(),
             ),
         ]);
-        rows.para(5, READING, TEXT - 2, ink(T.dim));
+        let reading = match card.outside {
+            Some(_) => READING_OUTSIDE,
+            None => READING,
+        };
+        rows.para(5, reading, TEXT - 2, ink(T.dim));
         return rows;
     };
     let view = match view {
@@ -111,7 +131,14 @@ fn head(app: &App, card: &ContinueCard) -> Rows {
             return rows;
         }
     };
+    let outside = card.outside.is_some();
     match &view.found {
+        None if outside => rows.para(
+            3,
+            "The adapter has no resume rules, so Vision read no fact. Pick the step where the ticket waits now.",
+            TEXT,
+            ink(T.dim),
+        ),
         None => rows.para(
             3,
             "The adapter has no resume rules, so Vision checks nothing. Pick the step where the ticket goes on.",
@@ -145,6 +172,12 @@ fn head(app: &App, card: &ContinueCard) -> Rows {
                 ink(T.warn).bold(),
             )
         }
+        Some(Found::Nothing(why)) if outside => rows.para(
+            3,
+            &format!("Vision found no step: {why}. Pick the step where the ticket waits now."),
+            TEXT,
+            ink(T.dim),
+        ),
         Some(Found::Nothing(why)) => rows.para(
             3,
             &format!("Vision found nothing further: {why}."),
@@ -166,6 +199,10 @@ fn head(app: &App, card: &ContinueCard) -> Rows {
         for fact in &view.facts {
             rows.para(3, &format!("· {fact}"), TEXT, ink(T.dim));
         }
+    }
+    if outside {
+        rows.para(3, TAKES, TEXT, ink(T.dim));
+        return rows;
     }
     let clone = view.clone.as_deref().unwrap_or("its clone");
     if let Some(problem) = view.head.problem(view.pr, clone) {
@@ -294,7 +331,8 @@ fn foot(app: &App, card: &ContinueCard) -> Rows {
     let mut rows = Rows::default();
     // The keys end before the frame of the card.
     let right = WIDTH - 2;
-    let live = (!over_live(app, card)).then_some(("v", "live view"));
+    // A ticket that is in progress outside Vision has no live view yet.
+    let live = (!over_live(app, card) && card.outside.is_none()).then_some(("v", "live view"));
     if let Some(chain) = app.chain_of(&Owner::Resume(card.key.clone())) {
         chain_rows::rows(app, chain, &mut rows, TEXT, FAILURE_LINES);
         rows.blank();
@@ -314,7 +352,10 @@ fn foot(app: &App, card: &ContinueCard) -> Rows {
     };
     match card.chosen() {
         Some(step) => {
-            let go = format!("continue at {step}");
+            let go = match card.outside {
+                Some(_) => format!("start at {step}"),
+                None => format!("continue at {step}"),
+            };
             let keys: Vec<(&str, &str)> = [
                 ("enter", go.as_str()),
                 ("↑↓", "pick a step"),

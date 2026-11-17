@@ -47,8 +47,8 @@ pub use jobs::{
     ReadAnswer, JOB_CHECK,
 };
 pub use observe::{
-    observe_queue, observe_ticket, seen_comments, CiFacts, PrFacts, QueueTicket, TicketFacts,
-    SEEN_COMMENTS,
+    observe_outside, observe_queue, observe_ticket, seen_comments, CiFacts, PrFacts, QueueTicket,
+    TicketFacts, SEEN_COMMENTS,
 };
 pub use ops::{
     approve, approve_command, args_hash, change_mode, commit_arg, demoted, idempotency_key, lookup,

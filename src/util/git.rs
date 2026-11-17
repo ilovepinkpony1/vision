@@ -15,6 +15,23 @@ pub struct Author<'a> {
     pub email: &'a str,
 }
 
+/// True when a text from outside, such as the branch of a pull request, can be the name of a
+/// local git branch that Vision passes to git: no space, no control character, no `..`, no
+/// leading `-` or `/`, and none of the characters that git refuses.
+pub fn valid_branch(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !name.starts_with(['-', '/', '.'])
+        && !name.ends_with(['/', '.'])
+        && !name.ends_with(".lock")
+        && !name.contains("..")
+        && !name.contains("@{")
+        && !name.contains("//")
+        && !name.contains(['~', '^', ':', '?', '*', '[', '\\'])
+        && name != "@"
+}
+
 /// Runs `git -C <dir> <args>` and gives its standard output without the last newline.
 pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
     let output = command(dir, None)
@@ -202,6 +219,39 @@ fn stdout_or_error(dir: &Path, args: &[&str], output: Output) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_branch_from_outside_must_be_a_name_that_git_takes() {
+        for good in ["feature/demo-12-export", "export", "vision/DEMO-12", "a.b", "fix_1"] {
+            assert!(valid_branch(good), "{good}");
+        }
+        let long = "a".repeat(201);
+        for bad in [
+            "",
+            "two words",
+            "tab\there",
+            "-delete",
+            "/root",
+            ".hidden",
+            "end/",
+            "end.",
+            "main.lock",
+            "a..b",
+            "a@{1}",
+            "a//b",
+            "a~1",
+            "a^",
+            "a:b",
+            "a?",
+            "a*",
+            "a[1]",
+            "a\\b",
+            "@",
+            long.as_str(),
+        ] {
+            assert!(!valid_branch(bad), "{bad:?}");
+        }
+    }
 
     const AUTHOR: Author<'static> = Author {
         name: "test",

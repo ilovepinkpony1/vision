@@ -89,9 +89,9 @@ Vision starts no new turn above the values of `[limits]` in `config.toml`. They 
 
 ## Use the app
 
-Type `vision` in a terminal, and press Enter. A loader shows while Vision reads the home folder, the ledger, and the queue of the tracker. Then Home lists the tickets in progress and the tickets that can start.
+Type `vision` in a terminal, and press Enter. A loader shows while Vision reads the home folder, the ledger, and the queue of the tracker. Then Home lists the tickets in progress and the tickets of the queue, under MY TICKETS.
 
-Press Enter on a ticket of the queue to start it. Press Enter on a ticket in progress to open its live view. These keys work on Home:
+Press Enter on a ticket of the queue to start it. Press Enter on a ticket in progress to open its live view. A ticket of the queue can already have a branch or a pull request that someone made by hand. Then Enter opens its start card. Vision reads every fact of the ticket and suggests the step where it really is. Take the suggestion or pick another step, and Vision takes the ticket there, on its own branch. These keys work on Home:
 
 - `n` opens what waits for you, one card at a time. You answer each card with one key.
 - `m` shows the model of each agent, and changes it.

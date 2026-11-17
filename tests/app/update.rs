@@ -340,6 +340,108 @@ fn the_continue_card_selects_the_stored_step_when_the_rules_find_nothing_or_the_
         .contains("Vision could not read where the ticket is: Vision has no ticket DEMO-3"));
 }
 
+/// Home with the queue of [`queue_with_outside`], and DEMO-21, which is in progress outside
+/// Vision, selected.
+fn outside_selected() -> vision::app::model::App {
+    let mut app = home_with(
+        SIZE,
+        local(two_tickets(), Vec::new()),
+        Some(queue_with_outside()),
+    );
+    for i in 0..4 {
+        key(&mut app, 2.0 + f64::from(i) / 10.0, Key::Down);
+    }
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-21"));
+    app
+}
+
+fn take_at(key: &str, step: &str) -> Action {
+    Action::TakeAt {
+        key: key.into(),
+        step: step.into(),
+    }
+}
+
+#[test]
+fn enter_on_a_ticket_in_progress_outside_vision_opens_its_start_card_and_takes_it_at_a_step() {
+    let mut app = outside_selected();
+    let read = Effect::LoadOutside {
+        key: "DEMO-21".into(),
+        branch: "feature/demo-21-export".into(),
+        pr: Some(31),
+    };
+    let fx = key(&mut app, 2.5, Key::Enter);
+    assert_eq!(fx, vec![read.clone()]);
+    let Some(Card::Continue(card)) = &app.card else {
+        panic!("no start card: {:?}", app.card);
+    };
+    let outside = card.outside.as_ref().expect("the card of a ticket outside Vision");
+    assert_eq!(
+        (outside.branch.as_str(), outside.pr, outside.status.as_str()),
+        ("feature/demo-21-export", Some(31), "In Review")
+    );
+    assert_eq!((card.stored.as_str(), card.view.is_none()), ("", true));
+    // The ticket has no live view yet, so v does nothing.
+    key(&mut app, 2.55, Key::Char('v'));
+    assert!(matches!(app.card, Some(Card::Continue(_))));
+    assert_eq!(app.screen, Screen::Home);
+
+    // The read selects the suggestion, and Enter takes the ticket there.
+    read_resume(&mut app, 2.6, "DEMO-21", Ok(outside_view(Some("ready"))));
+    assert_eq!(chosen(&app).as_deref(), Some("ready"));
+    key(&mut app, 2.65, Key::Char('k'));
+    assert_eq!(chosen(&app).as_deref(), Some("fix-ci"));
+    key(&mut app, 2.66, Key::Char('j'));
+    let fx = key(&mut app, 2.7, Key::Enter);
+    let kind = JobKind::Action(take_at("DEMO-21", "ready"));
+    assert_eq!(runs(&fx), vec![kind.clone()]);
+    assert_eq!(chain_actions(&app), vec![take_at("DEMO-21", "ready")]);
+
+    // A take that fails stops the chain: the card says why and reads the ticket again.
+    let job = app.chain.as_ref().and_then(|c| c.job).unwrap();
+    let failed = ChildResult {
+        code: Some(1),
+        stderr: "error: DEMO-21: no clone is free".into(),
+        ..ChildResult::default()
+    };
+    let fx = send(&mut app, 3.0, done(job, kind.clone(), failed));
+    assert!(fx.contains(&read), "{fx:?}");
+    assert!(screen(&app).contains("no clone is free"), "{}", screen(&app));
+    // The engine runs a pass after each action of a chain.
+    assert_eq!(runs(&fx), vec![JobKind::Pass]);
+    finish_jobs(&mut app, 3.05, &fx);
+
+    // After the read, Enter takes it again, and the take works: the card closes, Home selects
+    // the ticket when it shows, and a notice says what happened.
+    read_resume(&mut app, 3.1, "DEMO-21", Ok(outside_view(Some("ready"))));
+    let fx = key(&mut app, 3.2, Key::Enter);
+    assert_eq!(runs(&fx), vec![kind.clone()]);
+    let job = app.chain.as_ref().and_then(|c| c.job).unwrap();
+    send(&mut app, 3.5, done(job, kind, ok("Took DEMO-21 in the clone")));
+    assert_eq!(app.card, None);
+    assert_eq!(app.chain, None);
+    assert_eq!(app.home.select_next.as_deref(), Some("DEMO-21"));
+    assert_eq!(
+        app.notice.as_ref().map(|n| n.text.as_str()),
+        Some("Took DEMO-21 at the step ready. It goes on from there.")
+    );
+}
+
+#[test]
+fn the_start_card_of_a_ticket_outside_vision_selects_the_first_step_when_the_rules_find_none() {
+    let mut app = outside_selected();
+    key(&mut app, 2.5, Key::Enter);
+    read_resume(&mut app, 2.6, "DEMO-21", Ok(outside_view(None)));
+    assert_eq!(chosen(&app).as_deref(), Some(STEPS[0]));
+    // The read failed: the card says why, and Enter does nothing.
+    let mut app = outside_selected();
+    key(&mut app, 2.5, Key::Enter);
+    read_resume(&mut app, 2.6, "DEMO-21", Err("the forge did not answer".into()));
+    assert_eq!(chosen(&app), None);
+    assert!(runs(&key(&mut app, 2.7, Key::Enter)).is_empty());
+    assert_eq!(app.chain, None);
+}
+
 #[test]
 fn n_opens_the_card_of_the_needs_or_says_that_nothing_waits() {
     let mut app = home(SIZE);
@@ -948,6 +1050,8 @@ fn a_ticket_of_before_takes_its_title_from_the_queue() {
         eligible: false,
         reason: String::new(),
         taken: Some("build".into()),
+        branch: None,
+        pr: None,
     });
     let app = home_with(SIZE, local(tickets, Vec::new()), Some(rows));
     assert_eq!(app.title_of(&app.held()[0]), "The title from the tracker");

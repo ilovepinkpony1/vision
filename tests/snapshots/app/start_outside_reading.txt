@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │   DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
+ │                                                                                                          │
+ │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
+ │           ╭─ Start DEMO-21 ──────────────────────────────────────────────────────────────────╮           │
+ ╰───────────│                                                                                  │───────────╯
+             │  Export the report as a CSV file                                                 │
+  MY TICKETS │                                                                                  │er · 3 open
+ ╭───────────│  DEMO-21 is in progress outside Vision, on the branch feature/demo-21-export,    │───────────╮
+ │   DEMO-15 │  with the pull request #31.                                                      │     To Do │
+ │   DEMO-9  │                                                                                  │ll request │
+ │ ▸ DEMO-21 │  ⠇ Vision reads the facts of DEMO-21 now · 0:01                                  │ In Review │
+ ╰───────────│    It asks the tracker for the status, and the forge for the pull request, the   │───────────╯
+             │    review, CI, and each env. The steps show when the read ends.                  │
+             │                                                                                  │
+             │  esc cancel                                                                      │
+             │                                                                                  │
+             ╰──────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

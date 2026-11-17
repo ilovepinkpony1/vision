@@ -163,6 +163,13 @@ pub enum Effect {
     LoadStartInfo(String),
     /// Read what the continue card shows for a ticket: the call of observe of its rules.
     LoadResume(String),
+    /// Read what the start card of a ticket that is in progress outside Vision shows: the call
+    /// of observe of the rules, with the branch and the pull request of the queue.
+    LoadOutside {
+        key: String,
+        branch: String,
+        pr: Option<i64>,
+    },
     /// Load the data of the live view of a ticket.
     LoadTicket(String),
     /// Follow the stream files of a ticket in a thread, or stop that thread with `None`.
@@ -229,7 +236,8 @@ pub enum JobKind {
 pub enum Action {
     /// `vision take KEY`: start a ticket, or start a stopped ticket again.
     Take { key: String },
-    /// `vision take KEY --step STEP`: continue a stopped ticket at a step.
+    /// `vision take KEY --step STEP`: continue a stopped ticket at a step, or take a ticket
+    /// that is in progress outside Vision at a step.
     TakeAt { key: String, step: String },
     /// `vision off`: the kill switch.
     Off,

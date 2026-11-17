@@ -761,6 +761,55 @@ fn a_click_and_the_wheel_select_a_step_of_the_continue_card_and_two_clicks_on_it
     );
 }
 
+/// A ticket that is in progress outside Vision: two clicks on its row open its start card, a
+/// click picks a step, and two clicks on the selected step take the ticket there. The card has
+/// no part for the live view.
+#[test]
+fn two_clicks_open_the_start_card_of_a_ticket_outside_vision_and_two_clicks_on_a_step_take_it() {
+    let mut app = home_with(
+        SIZE,
+        local(two_tickets(), Vec::new()),
+        Some(queue_with_outside()),
+    );
+    let buf = draw(&mut app);
+    let row = find(&buf, "DEMO-21");
+    click(&mut app, 1.5, row);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-21"));
+    draw(&mut app);
+    let fx = click(&mut app, 1.6, row);
+    assert!(
+        fx.contains(&Effect::LoadOutside {
+            key: "DEMO-21".into(),
+            branch: "feature/demo-21-export".into(),
+            pr: Some(31),
+        }),
+        "{fx:?}"
+    );
+    read_resume(&mut app, 1.7, "DEMO-21", Ok(outside_view(Some("ready"))));
+    let buf = draw(&mut app);
+    assert!(!super::support::text(&buf).contains("live view"));
+    assert!(app
+        .hits
+        .clicks()
+        .iter()
+        .all(|(_, act)| *act != Act::Key(Key::Char('v'))));
+    // A click on another step selects it, and two clicks on it take the ticket there.
+    let step = find(&buf, "fix-ci");
+    assert!(jobs(&click(&mut app, 1.8, step)).is_empty());
+    draw(&mut app);
+    assert!(jobs(&click(&mut app, 1.9, step)).is_empty());
+    assert!(app.armed.is_some());
+    draw(&mut app);
+    let fx = click(&mut app, 2.0, step);
+    assert_eq!(
+        jobs(&fx).into_iter().map(|job| job.kind).collect::<Vec<_>>(),
+        vec![JobKind::Action(Action::TakeAt {
+            key: "DEMO-21".into(),
+            step: "fix-ci".into()
+        })]
+    );
+}
+
 #[test]
 fn a_click_on_v_of_the_continue_card_opens_the_live_view_as_the_key_does() {
     let tickets = vec![stopped(

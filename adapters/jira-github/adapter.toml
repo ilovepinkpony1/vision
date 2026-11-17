@@ -226,6 +226,12 @@
 # after the approval or a deploy. A push by hand takes it to ci-review: CI at the new head,
 # then a new review. A merged pull request goes to done.
 #
+# The same rules find the step of a ticket that is in progress outside Vision: the queue gives
+# its branch with the key, and its open pull request. The start card of Home, or a plain
+# `vision take KEY`, reads its facts with that branch, from the first step, and with no head
+# state, because Vision has no clone of it yet. A rule that names done suggests nothing.
+# `vision take KEY --step STEP` takes the ticket at STEP, on its branch.
+#
 # When the pull request is open, a continue also compares its head with the branch in the
 # clone. When the clone does not have the head, such as after a push of the person from another
 # checkout, the continue fetches first. When the head is a later commit of the branch, the

@@ -7,7 +7,7 @@
  │           │  Vision found nothing further: no rule holds.                                    │           │
  ╰───────────│  Vision read:                                                                    │───────────╯
              │  · the tracker status is In Review                                               │
-  READY TO ST│  · the pull request #7 is open and ready                                         │1 can start
+  MY TICKETS │  · the pull request #7 is open and ready                                         │er · 2 open
  ╭───────────│  · the review state is comments and 2 review comments wait                       │───────────╮
  │   DEMO-15 │  · CI is green at 3f2a1b4c5d6e                                                   │     To Do │
  │   DEMO-9  │  · the branch of the clone is at the head of the pull request                    │ll request │

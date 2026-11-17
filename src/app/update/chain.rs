@@ -238,6 +238,9 @@ fn finish(app: &mut App, fx: &mut Vec<Effect>) {
             if matches!(&app.card, Some(Card::Continue(card)) if card.key == *key) {
                 app.card = None;
             }
+            // Home selects the ticket, such as a ticket that was in progress outside Vision
+            // and is in progress in Vision now.
+            app.home.select_next = Some(key.clone());
             notice(app, chain.done.clone(), Tone::Ok);
         }
         Owner::Models(agent) => models::changed(app, agent, &chain.done, fx),

@@ -68,6 +68,14 @@ fn queue_eligible_and_not_eligible_issues() {
         .as_str()
         .unwrap()
         .contains("the pull request #4 already has DEMO-3"));
+    // A ticket that is in progress outside Vision names its branch, and its open pull request
+    // when it has one: the branch of the pull request wins.
+    assert_eq!(tickets[1]["branch"], "feature/demo-2-export");
+    assert_eq!(tickets[1].get("pr"), None);
+    assert_eq!(
+        (&tickets[2]["branch"], &tickets[2]["pr"]),
+        (&json!("export"), &json!(4))
+    );
     // vision/DEMO-12 does not hold DEMO-1: a key matches only as a whole.
     let searches = t.server.calls(Some("POST"), Some(SEARCH));
     assert_eq!(searches.len(), 2);

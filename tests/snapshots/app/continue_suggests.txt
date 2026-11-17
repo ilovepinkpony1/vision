@@ -7,7 +7,7 @@
  │           │  Vision thinks it is at comments: the pull request #7 is open and ready, and 2   │           │
  ╰───────────│  review comments wait.                                                           │───────────╯
              │  Vision read:                                                                    │
-  READY TO ST│  · the tracker status is In Review                                               │1 can start
+  MY TICKETS │  · the tracker status is In Review                                               │er · 2 open
  ╭───────────│  · the pull request #7 is open and ready                                         │───────────╮
  │   DEMO-15 │  · the review state is comments and 2 review comments wait                       │     To Do │
  │   DEMO-9  │  · CI is green at 3f2a1b4c5d6e                                                   │ll request │

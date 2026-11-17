@@ -125,9 +125,10 @@ pub fn on_queue(app: &mut App, result: Result<Vec<PickRow>, String>, fx: &mut Ve
     app.dirty = true;
     match result {
         Ok(rows) => {
+            // A ticket that is in progress outside Vision can start too: at its step.
             let ready = rows
                 .iter()
-                .filter(|r| r.eligible && r.taken.is_none())
+                .filter(|r| (r.eligible || r.outside()) && r.taken.is_none())
                 .count();
             let text = match (rows.len(), ready) {
                 (0, _) => "the queue is empty".to_string(),

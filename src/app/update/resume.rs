@@ -8,9 +8,14 @@
 //! selected step with the chain of [`recipes::resume`], and a click on the selected step acts
 //! as Enter on its second click. Esc closes the card, and the ticket stays as it is. `v` closes
 //! the card and opens the live view of the ticket.
+//!
+//! The same card starts a ticket that is in progress outside Vision: Enter on Home opens it
+//! with the branch and the pull request of the queue, and its read applies the rules to the
+//! facts of that branch. It has no stored step and no live view, and Enter takes the ticket
+//! at the selected step with the chain of [`recipes::start_at`].
 
 use super::super::chain::{Chain, Owner};
-use super::super::model::{App, Card, ContinueCard, ContinueView, Screen};
+use super::super::model::{App, Card, ContinueCard, ContinueView, Outside, Screen};
 use super::super::msg::{Effect, Key};
 use super::super::recipes;
 use super::chain;
@@ -32,6 +37,36 @@ pub fn open(
     )));
     app.dirty = true;
     fx.push(Effect::LoadResume(key.to_string()));
+}
+
+/// Opens the start card of a ticket that is in progress outside Vision, and starts its read.
+pub fn open_outside(
+    app: &mut App,
+    key: &str,
+    title: &str,
+    outside: Outside,
+    fx: &mut Vec<Effect>,
+) {
+    chain::drop_ended(app);
+    let since = app.clock.elapsed;
+    fx.push(load(key, Some(&outside)));
+    app.card = Some(Card::Continue(ContinueCard::outside(
+        key, title, outside, since,
+    )));
+    app.dirty = true;
+}
+
+/// The read of the card: the facts of a ticket that Vision holds, or of a ticket that is in
+/// progress outside Vision.
+fn load(key: &str, outside: Option<&Outside>) -> Effect {
+    match outside {
+        Some(outside) => Effect::LoadOutside {
+            key: key.to_string(),
+            branch: outside.branch.clone(),
+            pr: outside.pr,
+        },
+        None => Effect::LoadResume(key.to_string()),
+    }
 }
 
 /// Opens the card of a ticket in progress with what the local data knows of it. The read of
@@ -69,8 +104,9 @@ pub fn reload(app: &mut App, key: &str, fx: &mut Vec<Effect>) {
     };
     card.view = None;
     card.since = now;
+    let effect = load(key, card.outside.as_ref());
     app.dirty = true;
-    fx.push(Effect::LoadResume(key.to_string()));
+    fx.push(effect);
 }
 
 /// The read of the card ended: the suggestion is selected, else the stored step.
@@ -109,9 +145,10 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
 }
 
 /// `v`: closes the card and opens the live view of its ticket, or only closes the card over
-/// that live view. A chain of the card goes on, as after Esc.
+/// that live view. A chain of the card goes on, as after Esc. A ticket that is in progress
+/// outside Vision has no live view.
 fn live_view(app: &mut App, fx: &mut Vec<Effect>) {
-    let Some(Card::Continue(card)) = app.card.as_ref() else {
+    let Some(Card::Continue(card)) = app.card.as_ref().filter(|_| !outside_card(app)) else {
         return;
     };
     let key = card.key.clone();
@@ -151,7 +188,13 @@ pub fn click_pick(app: &mut App, i: usize) {
     }
 }
 
-/// Enter: continues at the selected step, once the read worked.
+/// True when the open card starts a ticket that is in progress outside Vision.
+pub fn outside_card(app: &App) -> bool {
+    matches!(&app.card, Some(Card::Continue(card)) if card.outside.is_some())
+}
+
+/// Enter: continues at the selected step, once the read worked. A ticket that is in progress
+/// outside Vision is taken at that step.
 fn go(app: &mut App) {
     let Some(Card::Continue(card)) = app.card.as_ref() else {
         return;
@@ -160,6 +203,12 @@ fn go(app: &mut App) {
     else {
         return;
     };
+    let outside = card.outside.is_some();
     let id = app.next_seq();
-    chain::start(app, recipes::resume(id, &view, &step));
+    let chain = if outside {
+        recipes::start_at(id, &view.key, &step)
+    } else {
+        recipes::resume(id, &view, &step)
+    };
+    chain::start(app, chain);
 }

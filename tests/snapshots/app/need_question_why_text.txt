@@ -12,7 +12,7 @@
  │       │                sort the columns by name.                                                 │       │
  ╰───────│                                                                                          │───────╯
          │    a  Keep the order  the file has the columns of the table, in the same    recommended  │
-  READY T│                       order                                                              │n start
+  MY TICK│                       order                                                              │ 2 open
  ╭───────│    b  Sort by name    the file sorts the columns by their names                          │───────╮
  │   DEMO│                                                                                          │ To Do │
  │   DEMO│  Recommended   a Keep the order: People compare the file with the table.                 │equest │

@@ -12,7 +12,7 @@
  │       │  round after round:                                                                      │       │
  ╰───────│                                                                                          │───────╯
          │  F1  major  1. [MAJOR][BLOCKING] app/models/report_export.rb:42: A retry sends the       │
-  READY T│             report twice                                                                 │n start
+  MY TICK│             report twice                                                                 │ 2 open
  ╭───────│                                                                                          │───────╮
  │   DEMO│  This finding keeps coming back after its fix.                                           │ To Do │
  │   DEMO│                                                                                          │equest │

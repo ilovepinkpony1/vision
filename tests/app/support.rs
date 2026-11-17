@@ -346,6 +346,8 @@ pub fn queue() -> Vec<PickRow> {
             eligible: true,
             reason: String::new(),
             taken: None,
+            branch: None,
+            pr: None,
         },
         PickRow {
             key: "DEMO-9".into(),
@@ -354,11 +356,62 @@ pub fn queue() -> Vec<PickRow> {
             eligible: false,
             reason: "it already has an open pull request".into(),
             taken: None,
+            branch: None,
+            pr: None,
         },
     ]
 }
 
 /// Hands a message to the update at a time.
+/// A ticket of the queue that is in progress outside Vision: a branch with its key, and an
+/// open pull request.
+pub fn outside_row() -> PickRow {
+    PickRow {
+        key: "DEMO-21".into(),
+        title: "Export the report as a CSV file".into(),
+        status: "In Review".into(),
+        eligible: false,
+        reason: "the branch feature/demo-21-export already has DEMO-21 in its name".into(),
+        taken: None,
+        branch: Some("feature/demo-21-export".into()),
+        pr: Some(31),
+    }
+}
+
+/// The queue of [`queue`] with [`outside_row`] at its end.
+pub fn queue_with_outside() -> Vec<PickRow> {
+    let mut rows = queue();
+    rows.push(outside_row());
+    rows
+}
+
+/// The read of the start card of [`outside_row`]: no stored step, no clone, and the suggestion
+/// `suggest` of the rule 4, or no rule that holds.
+pub fn outside_view(suggest: Option<&str>) -> ContinueView {
+    let mut view = continue_view("DEMO-21", "", None, false);
+    view.paused = false;
+    view.clone = None;
+    view.pr = Some(31);
+    view.found = Some(match suggest {
+        Some(step) => Found::Step {
+            rule: 4,
+            step: step.into(),
+            reason: "the pull request #31 is open and ready".into(),
+            back: None,
+        },
+        None => Found::Nothing("no rule holds".into()),
+    });
+    view.facts = [
+        "the tracker status is In Review",
+        "the pull request #31 is open and ready",
+        "the review state is waiting and no review comment waits",
+        "CI is green at 3f2a1b4c5d6e",
+    ]
+    .map(String::from)
+    .to_vec();
+    view
+}
+
 pub fn send(app: &mut App, at: f64, msg: Msg) -> Vec<Effect> {
     app.clock = clock(at);
     update(app, msg)

@@ -10,7 +10,7 @@
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
  ╰────────────────╭─ Quit Vision? ─────────────────────────────────────────────────────────╮────────────────╯
                   │                                                                        │
-  READY TO START  │  2 tickets are in progress.                                            │er · 1 can start
+  MY TICKETS      │  2 tickets are in progress.                                            │tracker · 2 open
  ╭────────────────│                                                                        │────────────────╮
  │   DEMO-15   Kee│  The running turn of builder finishes by itself. The system timer is   │          To Do │
  │   DEMO-9    Fix│  installed, so it keeps the work moving while this window is closed.   │en pull request │

@@ -1,14 +1,16 @@
 //! The keys of Home.
 //!
 //! The arrows and `k`/`j` move through both boxes; Enter opens the live view of a ticket in progress,
-//! opens the start card of a ticket that can start, says why another ticket cannot start, and
-//! opens the continue card of a stopped or paused ticket; `n` opens the card of the first thing that waits; `m` opens
+//! opens the start card of a ticket that can start, opens the start card of a ticket that is in
+//! progress outside Vision (the continue card with [`Outside`]), says why another ticket cannot
+//! start, and opens the continue card of a stopped or paused ticket; `n` opens the card of the
+//! first thing that waits; `m` opens
 //! Models and `s` opens Stats; `p` pauses the engine; `r` loads the queue again; `K` opens the
 //! kill switch card; `?` shows the keys; `q` and Ctrl-C leave.
 //!
 //! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
 
-use super::super::model::{App, Card, Item, KillCard, Run, Screen, StartCard, Tone};
+use super::super::model::{App, Card, Item, KillCard, Outside, Run, Screen, StartCard, Tone};
 use super::super::msg::{Effect, Key};
 use super::{ask_quit, data, engine, models, needs, notice, resume, stats};
 
@@ -72,6 +74,7 @@ fn open(app: &mut App, fx: &mut Vec<Effect>) {
         Continue(String),
         Detail(String),
         Start(Box<StartCard>),
+        Outside(String, String, Outside),
         Cannot(String),
     }
     let choice = match &app.items()[index] {
@@ -86,6 +89,15 @@ fn open(app: &mut App, fx: &mut Vec<Effect>) {
             run: Run::Idle,
             since: app.clock.elapsed,
         })),
+        Item::Queue(row) if row.outside() => Choice::Outside(
+            row.key.clone(),
+            row.title.clone(),
+            Outside {
+                branch: row.branch.clone().unwrap_or_default(),
+                pr: row.pr,
+                status: row.status.clone(),
+            },
+        ),
         Item::Queue(row) => {
             let reason = if row.reason.trim().is_empty() {
                 "the tracker gave no reason".to_string()
@@ -102,6 +114,7 @@ fn open(app: &mut App, fx: &mut Vec<Effect>) {
             fx.push(Effect::LoadStartInfo(card.key.clone()));
             app.card = Some(Card::Start(*card));
         }
+        Choice::Outside(key, title, outside) => resume::open_outside(app, &key, &title, outside, fx),
         Choice::Cannot(text) => notice(app, text, Tone::Info),
     }
 }

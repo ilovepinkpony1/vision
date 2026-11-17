@@ -471,6 +471,26 @@ pub fn resume(id: u64, view: &ContinueView, step: &str) -> Chain {
     Chain::new(id, Owner::Resume(key.clone()), steps, before, done)
 }
 
+/// The start card of a ticket that is in progress outside Vision: `vision take KEY --step
+/// STEP`, which takes the ticket in a free clone, on its branch, at the step.
+pub fn start_at(id: u64, key: &str, step: &str) -> Chain {
+    let take = Action::TakeAt {
+        key: key.to_string(),
+        step: step.to_string(),
+    };
+    Chain::new(
+        id,
+        Owner::Resume(key.to_string()),
+        vec![Step::new(
+            Work::Act(take),
+            format!("take {key} at the step {step}"),
+            format!("Vision holds {key} at the step {step}."),
+        )],
+        format!("Vision did not take {key}, and nothing changed."),
+        format!("Took {key} at the step {step}. It goes on from there."),
+    )
+}
+
 /// Models: Enter pins the values that show, with `vision model set`.
 pub fn model_set(id: u64, agent: &str, model: &str, effort: &str) -> Chain {
     Chain::new(

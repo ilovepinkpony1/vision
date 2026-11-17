@@ -12,7 +12,7 @@
  │  │▸ 1  Must the export keep the order of the columns?                                       │  │
  ╰──│     no draft yet · press 1 to answer it                                                  │──╯
     │  2  Must the file have a header row?                                                     │
-  RE│     no draft yet · press 2 to answer it                                                  │rt
+  MY│     no draft yet · press 2 to answer it                                                  │en
  ╭──│  3  Must the total row stay at the end of the file?                                      │──╮
  │  │     no draft yet · press 3 to answer it                                                  │o │
  │  │                                                                                          │t │

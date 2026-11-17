@@ -10,7 +10,7 @@
  │             │  clone     ~/clones/demo-2 is free                                           │             │
  ╰─────────────│  branch    vision/DEMO-15 from origin/main                                   │─────────────╯
                │  path      13 steps: refine, plan, plan-ready, build, review, open-pr, ci,…  │
-  READY TO STAR│  first     refine: scout · claude-fable-5-2 · high                           │· 1 can start
+  MY TICKETS   │  first     refine: scout · claude-fable-5-2 · high                           │cker · 2 open
  ╭─────────────│  writes    Of 5 write verbs, 4 in the mode auto and 1 in the mode ask.       │─────────────╮
  │ ▸ DEMO-15   │            Vision asks you before each write that is not in the mode auto.   │       To Do │
  │   DEMO-9    │                                                                              │pull request │
