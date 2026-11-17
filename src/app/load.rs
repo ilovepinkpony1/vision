@@ -48,6 +48,7 @@ pub fn setup(paths: &Paths) -> Result<Setup, SetupError> {
         home,
         adapter: adapter.name.clone(),
         steps: adapter.steps.iter().map(|s| s.id.clone()).collect(),
+        sections: config.app.sections.clone(),
     })
 }
 

@@ -11,12 +11,12 @@
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   MY TICKETS                                                                       from the tracker · 3 open
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │   DEMO-15   Keep the filter of the list when the page loads again                                  To Do │
+ ╭─ To Do · 2 ──────────────────────────────────────────────────────────────────────────────────────────────╮
+ │   DEMO-15   Keep the filter of the list when the page loads again                                        │
  │   DEMO-9    Fix the date format in the weekly email                  it already has an open pull request │
- │   DEMO-21   Export the report as a CSV file                                                    In Review │
+ ├─ In Review · 1 ──────────────────────────────────────────────────────────────────────────────────────────┤
+ │   DEMO-21   Export the report as a CSV file                                                              │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

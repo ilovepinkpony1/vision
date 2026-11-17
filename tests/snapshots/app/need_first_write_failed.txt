@@ -13,8 +13,8 @@
  ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
          │  The gates: passed.                                                                      │
   MY TICK│                                                                                          │ 2 open
- ╭───────│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
- │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │ To Do │
+ ╭─ To Do│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
+ │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │       │
  │   DEMO│                                                                     ▼ 5 more · ↑↓ scroll │equest │
  ╰───────│  ✗ move tracker.describe from shadow to ask                                              │───────╯
          │  · run the writes of the step refine of DEMO-12 again                                    │

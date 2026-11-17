@@ -706,6 +706,29 @@ fn a_click_selects_a_ticket_of_home_and_a_second_click_opens_it() {
     assert!(fx.contains(&Effect::LoadTicket("DEMO-7".into())));
 }
 
+/// MY TICKETS with sections: a click on a mark selects the next ticket out of view, past the
+/// titles, and a click on the line of a title does nothing.
+#[test]
+fn a_click_on_a_mark_of_my_tickets_selects_the_next_ticket_out_of_view_and_a_title_does_nothing() {
+    let mut app = sectioned_home((100, 28));
+    for _ in 0..10 {
+        send(&mut app, 1.1, Msg::Key(Key::Down));
+    }
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-40"));
+    let buf = draw(&mut app);
+    click(&mut app, 1.5, find(&buf, "▲ 3 more"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-41"));
+    let buf = draw(&mut app);
+    assert!(find_in(&buf, "In Progress · 3", find(&buf, "MY TICKETS").1 + 1).is_some());
+    click(&mut app, 1.6, find(&buf, "▼ 6 more"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-31"));
+    let buf = draw(&mut app);
+    let fx = click(&mut app, 1.7, find(&buf, "In Testing · 3"));
+    assert!(fx.is_empty(), "{fx:?}");
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-31"));
+    assert_eq!(app.card, None);
+}
+
 #[test]
 fn a_click_and_the_wheel_select_a_step_of_the_continue_card_and_two_clicks_on_it_continue() {
     let tickets = vec![stopped(
@@ -802,7 +825,10 @@ fn two_clicks_open_the_start_card_of_a_ticket_outside_vision_and_two_clicks_on_a
     draw(&mut app);
     let fx = click(&mut app, 2.0, step);
     assert_eq!(
-        jobs(&fx).into_iter().map(|job| job.kind).collect::<Vec<_>>(),
+        jobs(&fx)
+            .into_iter()
+            .map(|job| job.kind)
+            .collect::<Vec<_>>(),
         vec![JobKind::Action(Action::TakeAt {
             key: "DEMO-21".into(),
             step: "fix-ci".into()

@@ -13,8 +13,8 @@
  ╰───────│  A rule stopped DEMO-12 at the step build.                                               │───────╯
          │                                                                                          │
   MY TICK│  the proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change             │ 2 open
- ╭───────│                                                                                          │───────╮
- │   DEMO│  DEMO-12 is also stopped. Enter opens the card that continues it at the step build, or   │ To Do │
+ ╭─ To Do│                                                                                          │───────╮
+ │   DEMO│  DEMO-12 is also stopped. Enter opens the card that continues it at the step build, or   │       │
  │   DEMO│  at a step that you pick.                                                                │equest │
  ╰───────│                                                                                          │───────╯
          │  enter continue    esc later                                                             │

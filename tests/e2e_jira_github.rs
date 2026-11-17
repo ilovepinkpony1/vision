@@ -1984,7 +1984,10 @@ fn a_ticket_in_progress_outside_vision_is_taken_at_its_step() {
     assert_eq!(detail["pr"], json!(number));
     assert_eq!(detail["suggestion"], "in-review");
     assert_eq!(detail["step"], "in-review");
-    assert_eq!(detail["facts"][1], format!("the pull request #{number} is open and ready"));
+    assert_eq!(
+        detail["facts"][1],
+        format!("the pull request #{number} is open and ready")
+    );
 
     // The next tick follows the review of the pull request: the lead asks for a change, and
     // the ticket goes to the step comments.

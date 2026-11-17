@@ -222,7 +222,13 @@ mod tests {
 
     #[test]
     fn a_branch_from_outside_must_be_a_name_that_git_takes() {
-        for good in ["feature/demo-12-export", "export", "vision/DEMO-12", "a.b", "fix_1"] {
+        for good in [
+            "feature/demo-12-export",
+            "export",
+            "vision/DEMO-12",
+            "a.b",
+            "fix_1",
+        ] {
             assert!(valid_branch(good), "{good}");
         }
         let long = "a".repeat(201);

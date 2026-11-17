@@ -11,8 +11,8 @@
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                ╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮
   MY TICKETS   │                                                                              │cker · 2 open
- ╭─────────────│  Keep the filter of the list when the page loads again                       │─────────────╮
- │ ▸ DEMO-15   │                                                                              │       To Do │
+ ╭─ To Do · 2 ─│  Keep the filter of the list when the page loads again                       │─────────────╮
+ │ ▸ DEMO-15   │                                                                              │             │
  │   DEMO-9    │  ⠼ Vision reads the adapter and looks for a free clone · 0:00                │pull request │
  ╰─────────────│                                                                              │─────────────╯
                │  enter start    esc cancel                                                   │

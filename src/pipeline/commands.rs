@@ -478,9 +478,8 @@ fn base_remote(clone: &Path, adapter: &Adapter) -> Option<String> {
 /// that the remote does not have keeps them, and the next push sends them. A local branch that
 /// went apart from the remote stops the take, and nothing moves. No commit goes away.
 fn switch_outside(clone: &Path, remote: &str, branch: &str, again: &str) -> Result<()> {
-    let at = |reference: String| {
-        git::run(clone, &["rev-parse", "--verify", "--quiet", &reference]).ok()
-    };
+    let at =
+        |reference: String| git::run(clone, &["rev-parse", "--verify", "--quiet", &reference]).ok();
     let local = at(format!("refs/heads/{branch}"));
     let tracking = format!("{remote}/{branch}");
     let theirs = at(format!("refs/remotes/{tracking}"));
@@ -2617,7 +2616,10 @@ mod outside_tests {
         git_in(root, &["init", "--quiet", "--bare", &path(&remote)]);
         git_in(root, &["clone", "--quiet", &path(&remote), &path(&person)]);
         commit(&person, "calc.sh");
-        git_in(&person, &["push", "--quiet", "origin", "HEAD:refs/heads/main"]);
+        git_in(
+            &person,
+            &["push", "--quiet", "origin", "HEAD:refs/heads/main"],
+        );
         git_in(&remote, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         git_in(root, &["clone", "--quiet", &path(&remote), &path(&clone)]);
         git_in(&person, &["switch", "--quiet", "-c", BRANCH]);

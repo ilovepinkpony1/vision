@@ -40,13 +40,7 @@ pub fn open(
 }
 
 /// Opens the start card of a ticket that is in progress outside Vision, and starts its read.
-pub fn open_outside(
-    app: &mut App,
-    key: &str,
-    title: &str,
-    outside: Outside,
-    fx: &mut Vec<Effect>,
-) {
+pub fn open_outside(app: &mut App, key: &str, title: &str, outside: Outside, fx: &mut Vec<Effect>) {
     chain::drop_ended(app);
     let since = app.clock.elapsed;
     fx.push(load(key, Some(&outside)));

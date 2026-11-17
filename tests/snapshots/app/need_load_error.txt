@@ -13,8 +13,8 @@
  ╰───────╭─ What waits for you ─────────────────────────────────────────────────────────────────────╮───────╯
          │                                                                                          │
   MY TICK│  Vision could not read what waits for you:                                               │ 2 open
- ╭───────│  the ledger is locked                                                                    │───────╮
- │   DEMO│                                                                                          │ To Do │
+ ╭─ To Do│  the ledger is locked                                                                    │───────╮
+ │   DEMO│                                                                                          │       │
  │   DEMO│  esc close                                                                               │equest │
  ╰───────│                                                                                          │───────╯
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯

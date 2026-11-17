@@ -114,7 +114,9 @@ fn open(app: &mut App, fx: &mut Vec<Effect>) {
             fx.push(Effect::LoadStartInfo(card.key.clone()));
             app.card = Some(Card::Start(*card));
         }
-        Choice::Outside(key, title, outside) => resume::open_outside(app, &key, &title, outside, fx),
+        Choice::Outside(key, title, outside) => {
+            resume::open_outside(app, &key, &title, outside, fx)
+        }
         Choice::Cannot(text) => notice(app, text, Tone::Info),
     }
 }

@@ -13,8 +13,8 @@
  ╰───────│                                                                                          │───────╯
          │  # Plan of DEMO-12                                                                       │
   MY TICK│                                                                                          │ 2 open
- ╭───────│  ## Decisions                                                                            │───────╮
- │   DEMO│                                                                                          │ To Do │
+ ╭─ To Do│  ## Decisions                                                                            │───────╮
+ │   DEMO│                                                                                          │       │
  │   DEMO│  - The export sorts the columns by name.                                                 │equest │
  ╰───────│                                                                                          │───────╯
          │  To change the plan, edit ~/.vision/tickets/DEMO-12/plan.md, and approve the new plan    │

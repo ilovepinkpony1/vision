@@ -13,8 +13,8 @@
  ╰───────│                                                                                          │───────╯
          │  1  Must the export keep the order of the columns?                                       │
   MY TICK│     b  Sort by name · People compare the file with the table                             │ 2 open
- ╭───────│▸ 2  Must the file have a header row?                                                     │───────╮
- │   DEMO│     no draft yet · press 2 to answer it                                                  │ To Do │
+ ╭─ To Do│▸ 2  Must the file have a header row?                                                     │───────╮
+ │   DEMO│     no draft yet · press 2 to answer it                                                  │       │
  │   DEMO│  3  Must the total row stay at the end of the file?                                      │equest │
  ╰───────│     a  Keep the order                                                                    │───────╯
          │                                                                                          │

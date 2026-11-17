@@ -13,8 +13,8 @@
  ╰──│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │──╯
     │  The gates: passed.                                                                      │
   MY│                                                                                          │en
- ╭──│    y  Send it. Ask me each time for this verb                            shadow to ask   │──╮
- │  │    a  Send it. Never ask again for this verb                             shadow to auto  │o │
+ ╭─ │    y  Send it. Ask me each time for this verb                            shadow to ask   │──╮
+ │  │    a  Send it. Never ask again for this verb                             shadow to auto  │  │
  │  │    n  Do not send. The ticket stays as it is                                             │t │
  ╰──│                                                                                          │──╯
     │  y and a change the mode of the verb for each later write of it, one step of the ladder  │

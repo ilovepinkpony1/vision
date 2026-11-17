@@ -11,8 +11,8 @@
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                   ╭─ The kill switch ──────────────────────────────────────────────────────╮
   MY TICKETS      │                                                                        │tracker · 2 open
- ╭────────────────│  Turn Vision off?                                                      │────────────────╮
- │   DEMO-15   Kee│                                                                        │          To Do │
+ ╭─ To Do · 2 ────│  Turn Vision off?                                                      │────────────────╮
+ │   DEMO-15   Kee│                                                                        │                │
  │   DEMO-9    Fix│  The kill switch stops each running turn now, and no action runs       │en pull request │
  ╰────────────────│  until you turn Vision on again. Each ticket keeps its step.           │────────────────╯
                   │                                                                        │

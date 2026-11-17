@@ -53,6 +53,8 @@ pub struct Config {
     pub sessions: Sessions,
     /// The escape check: the findings of a review bot of the team that our review missed.
     pub escapes: Escapes,
+    /// The values of the full-screen app (section 15).
+    pub app: AppValues,
     /// Verb -> mode. Only `vision promote` and `vision demote` change them.
     pub modes: BTreeMap<String, Mode>,
     /// Name -> how the executor gets it. A session never gets one.
@@ -84,6 +86,7 @@ impl Default for Config {
             archive: Archive::default(),
             sessions: Sessions::default(),
             escapes: Escapes::default(),
+            app: AppValues::default(),
             modes: BTreeMap::new(),
             secrets: BTreeMap::new(),
             adapter: toml::Table::new(),
@@ -659,6 +662,21 @@ impl Escapes {
     }
 }
 
+/// The values of the full-screen app (section 15.3).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AppValues {
+    /// The statuses of the tracker whose sections come first in the box MY TICKETS of Home,
+    /// in this order. Each other status of the queue follows, in the order of the queue.
+    pub sections: Vec<String>,
+}
+
+/// True when two statuses of the tracker are the same: equal without the case and without
+/// the spaces at their ends, such as `In Review` and `in review`.
+pub fn same_status(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
 /// The archive of the sessions of Claude Code of the person (section 16). Claude Code deletes
 /// its session files after some days; Vision copies each finished file to the archive, and
 /// writes a short summary of each session to the journal.
@@ -908,6 +926,7 @@ impl Config {
         self.check_archive()?;
         self.check_sessions()?;
         self.check_escapes()?;
+        self.check_app()?;
         if self.codex.bin.trim().is_empty() || self.codex.bin.contains(['\0', '\n', '\r']) {
             bail!("codex.bin is the Codex binary, such as \"codex\"");
         }
@@ -1022,6 +1041,23 @@ impl Config {
                 "escapes.every is {}, but it must be at least 60 seconds",
                 escapes.every
             );
+        }
+        Ok(())
+    }
+
+    /// Each entry of `app.sections` is one line of text, and no status shows two times.
+    fn check_app(&self) -> Result<()> {
+        let sections = &self.app.sections;
+        for (at, status) in sections.iter().enumerate() {
+            if status.trim().is_empty() || status.contains(['\0', '\n', '\r']) {
+                bail!("app.sections has an empty or broken entry. Each entry is a status of the tracker, such as \"In Review\"");
+            }
+            if sections[..at].iter().any(|s| same_status(s, status)) {
+                bail!(
+                    "app.sections names the status \"{}\" two times",
+                    status.trim()
+                );
+            }
         }
         Ok(())
     }
@@ -1535,6 +1571,30 @@ board = "DEMO"
             let err = Config::parse(text).unwrap_err();
             assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
         }
+    }
+
+    #[test]
+    fn the_sections_of_the_app_are_empty_by_default_and_name_each_status_once() {
+        assert!(Config::default().app.sections.is_empty());
+        let config = Config::parse("[app]\nsections = [\"In Progress\", \"In Review\"]\n").unwrap();
+        assert_eq!(config.app.sections, ["In Progress", "In Review"]);
+        for (text, part) in [
+            ("[app]\nsections = [\"\"]\n", "app.sections has an empty"),
+            (
+                "[app]\nsections = [\"a\\nb\"]\n",
+                "app.sections has an empty",
+            ),
+            (
+                "[app]\nsections = [\"In Review\", \" in review\"]\n",
+                "app.sections names the status \"in review\" two times",
+            ),
+            ("[app]\norder = []\n", "order"),
+        ] {
+            let err = Config::parse(text).unwrap_err();
+            assert!(format!("{err:#}").contains(part), "{text}: {err:#}");
+        }
+        assert!(same_status(" In Review", "in review "));
+        assert!(!same_status("In Review", "In Testing"));
     }
 
     #[test]

@@ -13,8 +13,8 @@
  ╰───────│  │                                                                                    │  │───────╯
          │  │       The file keeps the order of the columns of the table.                        │  │
   MY TICK│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │ 2 open
- ╭───────│  The gates: passed.                                                                      │───────╮
- │   DEMO│                                                                                          │ To Do │
+ ╭─ To Do│  The gates: passed.                                                                      │───────╮
+ │   DEMO│                                                                                          │       │
  │   DEMO│    y  Send it. Ask me each time for this verb                            shadow to ask   │equest │
  ╰───────│    a  Send it. Never ask again for this verb                             shadow to auto  │───────╯
          │    n  Do not send. The ticket stays as it is                                             │

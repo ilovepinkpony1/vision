@@ -375,7 +375,10 @@ fn enter_on_a_ticket_in_progress_outside_vision_opens_its_start_card_and_takes_i
     let Some(Card::Continue(card)) = &app.card else {
         panic!("no start card: {:?}", app.card);
     };
-    let outside = card.outside.as_ref().expect("the card of a ticket outside Vision");
+    let outside = card
+        .outside
+        .as_ref()
+        .expect("the card of a ticket outside Vision");
     assert_eq!(
         (outside.branch.as_str(), outside.pr, outside.status.as_str()),
         ("feature/demo-21-export", Some(31), "In Review")
@@ -406,7 +409,11 @@ fn enter_on_a_ticket_in_progress_outside_vision_opens_its_start_card_and_takes_i
     };
     let fx = send(&mut app, 3.0, done(job, kind.clone(), failed));
     assert!(fx.contains(&read), "{fx:?}");
-    assert!(screen(&app).contains("no clone is free"), "{}", screen(&app));
+    assert!(
+        screen(&app).contains("no clone is free"),
+        "{}",
+        screen(&app)
+    );
     // The engine runs a pass after each action of a chain.
     assert_eq!(runs(&fx), vec![JobKind::Pass]);
     finish_jobs(&mut app, 3.05, &fx);
@@ -417,7 +424,11 @@ fn enter_on_a_ticket_in_progress_outside_vision_opens_its_start_card_and_takes_i
     let fx = key(&mut app, 3.2, Key::Enter);
     assert_eq!(runs(&fx), vec![kind.clone()]);
     let job = app.chain.as_ref().and_then(|c| c.job).unwrap();
-    send(&mut app, 3.5, done(job, kind, ok("Took DEMO-21 in the clone")));
+    send(
+        &mut app,
+        3.5,
+        done(job, kind, ok("Took DEMO-21 in the clone")),
+    );
     assert_eq!(app.card, None);
     assert_eq!(app.chain, None);
     assert_eq!(app.home.select_next.as_deref(), Some("DEMO-21"));
@@ -436,7 +447,12 @@ fn the_start_card_of_a_ticket_outside_vision_selects_the_first_step_when_the_rul
     // The read failed: the card says why, and Enter does nothing.
     let mut app = outside_selected();
     key(&mut app, 2.5, Key::Enter);
-    read_resume(&mut app, 2.6, "DEMO-21", Err("the forge did not answer".into()));
+    read_resume(
+        &mut app,
+        2.6,
+        "DEMO-21",
+        Err("the forge did not answer".into()),
+    );
     assert_eq!(chosen(&app), None);
     assert!(runs(&key(&mut app, 2.7, Key::Enter)).is_empty());
     assert_eq!(app.chain, None);

@@ -350,6 +350,8 @@ pub struct Setup {
     pub adapter: String,
     /// The step ids of the adapter, in order.
     pub steps: Vec<String>,
+    /// The statuses of the tracker whose sections come first in MY TICKETS (`app.sections`).
+    pub sections: Vec<String>,
 }
 
 /// Why the home folder cannot be used.
@@ -673,14 +675,22 @@ impl App {
             .map_or("", |r| r.title.as_str())
     }
 
-    /// The rows of the queue that are not in progress.
+    /// The rows of the queue that are not in progress, in the order of their sections
+    /// ([`super::sections`]).
     pub fn queue_rows(&self) -> Vec<&PickRow> {
         let Some(rows) = &self.queue.data else {
             return Vec::new();
         };
-        rows.iter()
+        let mut rows: Vec<&PickRow> = rows
+            .iter()
             .filter(|r| r.taken.is_none() && self.held_ticket(&r.key).is_none())
-            .collect()
+            .collect();
+        let first = self
+            .setup
+            .as_ref()
+            .map_or(&[][..], |s| s.sections.as_slice());
+        super::sections::order(&mut rows, first);
+        rows
     }
 
     /// The rows of both boxes of Home, in order.

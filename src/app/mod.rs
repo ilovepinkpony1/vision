@@ -39,6 +39,7 @@ pub mod pages;
 pub mod picture;
 pub mod recipes;
 pub mod runtime;
+pub mod sections;
 pub mod session;
 pub mod stats;
 pub mod stderr;

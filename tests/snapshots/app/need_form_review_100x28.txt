@@ -13,8 +13,8 @@
  ╰──│     no draft yet · press 1 to answer it                                                  │──╯
     │  2  Must the file have a header row?                                                     │
   MY│     no draft yet · press 2 to answer it                                                  │en
- ╭──│  3  Must the total row stay at the end of the file?                                      │──╮
- │  │     no draft yet · press 3 to answer it                                                  │o │
+ ╭─ │  3  Must the total row stay at the end of the file?                                      │──╮
+ │  │     no draft yet · press 3 to answer it                                                  │  │
  │  │                                                                                          │t │
  ╰──│  3 questions have no draft yet: 1, 2, 3. The send needs a draft for each question.       │──╯
     │  s send the 3 answers    enter open the question    ↑↓ choose    ←→ the pages            │

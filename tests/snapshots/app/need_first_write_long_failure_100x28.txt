@@ -13,8 +13,8 @@
  ╰──│  line 1 of a long error that the command wrote line 2 of a long error that the command   │──╯
     │  wrote line 3 of a long error that the command wrote line 4 of a long error that the     │
   MY│  command wrote line 5 of a long error that the command wrote line 6 of a long error      │en
- ╭──│  that the command wrote line 7 of a long error that the command wrote line 8 of a long   │──╮
- │  │  error that the command wrote line 9 of a long error that the command wrote line 10 of   │o │
+ ╭─ │  that the command wrote line 7 of a long error that the command wrote line 8 of a long   │──╮
+ │  │  error that the command wrote line 9 of a long error that the command wrote line 10 of   │  │
  │  │  a long error that the command wrote line 11 of a long error that the command wrote      │t │
  ╰──│  line 12 of a long error that the command wrote line 13 of a long error that the         │──╯
     │  command wrote line 14 of a long error that the command wrote line 15 of a long error    │

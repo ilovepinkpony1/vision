@@ -13,8 +13,8 @@
  ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
          │  The gates: passed.                                                                      │
   MY TICK│                                                                                          │ 2 open
- ╭───────│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
- │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │ To Do │
+ ╭─ To Do│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
+ │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │       │
  │   DEMO│    n  Do not send. The ticket stays as it is                                             │equest │
  ╰───────│                                                                                          │───────╯
          │  y and a change the mode of the verb for each later write of it, one step of the ladder  │

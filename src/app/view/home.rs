@@ -1,9 +1,13 @@
 //! Home (`drawHome` of the design): the bar "needs you", the box IN PROGRESS with two lines for
 //! each ticket, the box MY TICKETS with the queue of the tracker, the line THIS WEEK, and the
-//! keys. A ticket of the queue that can start shows its status, and so does a ticket that is in
-//! progress outside Vision, because its start card takes it at its step. Each other ticket of
-//! the queue shows faint, with the reason that it cannot start. The boxes take the full width of the window. When a box has more rows than fit, it
-//! shows the part around the selection and says how many rows are above and below.
+//! keys. MY TICKETS has one section for each status of the tracker ([`crate::app::sections`]):
+//! the top line of the box and each line between two sections show the status and its count.
+//! A ticket of the queue that can start shows bright, and so does a ticket that is in progress
+//! outside Vision, because its start card takes it at its step. Each other ticket of the queue
+//! shows faint, with the reason that it cannot start. The boxes take the full width of the
+//! window. When a box has more rows than fit, it shows the part around the selection and says
+//! how many rows are above and below. The top line of MY TICKETS then shows the status of the
+//! first row in view.
 //!
 //! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
 //! The wheel over a box moves the selection as the arrows do, a click on the mark of the rows
@@ -17,6 +21,7 @@ use crate::app::hits::Act;
 use crate::app::model::{App, Held};
 use crate::app::msg::Key;
 use crate::app::now::{need_line, Tone};
+use crate::app::sections::sections;
 use crate::app::text::{count, cut, error_line, width, wrap};
 use crate::pipeline::commands::PickRow;
 use crate::pipeline::money;
@@ -32,8 +37,14 @@ pub fn draw(app: &App, c: &mut Canvas) {
     let held = app.held();
     let queue = app.queue_rows();
     let kx = key_column(held, &queue);
-    let queue_lines = queue_message(app, c.w);
-    let queue_rows = queue_lines.as_ref().map_or(queue.len(), Vec::len).max(1) as i32;
+    let message = queue_message(app, c.w);
+    let lines = queue_lines(&queue);
+    // The title of the first section is on the top line of the box, so each other line is a
+    // row of the box.
+    let queue_rows = message
+        .as_ref()
+        .map_or(lines.len().saturating_sub(1), Vec::len)
+        .max(1) as i32;
     let held_rows = held.len() as i32;
     let avail = c.h - 6 - y + 1;
     let (show_held, show_queue) = fit(held_rows, queue_rows, avail);
@@ -105,34 +116,16 @@ pub fn draw(app: &App, c: &mut Canvas) {
     c.right(c.w - 3, y, &tail, ink(T.faint));
     y += 1;
     c.frame(1, y, c.w - 2, show_queue + 2, T.line);
-    if queue_lines.is_none() {
-        c.wheel(1, y, c.w - 2, show_queue + 2, 1);
-    }
-    if let Some(lines) = &queue_lines {
-        for (i, (text, color)) in lines.iter().enumerate().take(show_queue as usize) {
+    if let Some(message) = &message {
+        for (i, (text, color)) in message.iter().enumerate().take(show_queue as usize) {
             c.put(5, y + 1 + i as i32, text, ink(*color));
         }
     } else {
+        c.wheel(1, y, c.w - 2, show_queue + 2, 1);
         let sel = selected
             .filter(|i| *i >= held.len())
             .map(|i| i - held.len());
-        let offset = window(sel, queue.len(), show_queue as usize);
-        more_marks(
-            c,
-            y,
-            show_queue + 2,
-            (offset, show_queue as usize, queue.len()),
-            |i| queue.get(i).map(|r| Act::Ticket(r.key.clone())),
-        );
-        for (i, row) in queue
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .take(show_queue as usize)
-        {
-            let yy = y + 1 + (i - offset) as i32;
-            queue_row(c, row, yy, kx, sel == Some(i));
-        }
+        queue_box(c, &queue, &lines, (y, show_queue as usize), kx, sel);
     }
 
     week(app, c);
@@ -236,7 +229,98 @@ fn queue_message(app: &App, w: i32) -> Option<Vec<(String, Rgb)>> {
     None
 }
 
-/// How many tickets of each box fit in `avail` rows.
+/// One line of the box MY TICKETS: the title of a section with its count, or a row of the
+/// queue by its index.
+#[derive(Clone, Debug, PartialEq)]
+enum Line {
+    Title { status: String, count: usize },
+    Row(usize),
+}
+
+/// The lines of the box MY TICKETS: the title of each section, then its rows.
+fn queue_lines(queue: &[&PickRow]) -> Vec<Line> {
+    let mut lines = Vec::new();
+    for section in sections(queue) {
+        lines.push(Line::Title {
+            count: section.rows.len(),
+            status: section.status,
+        });
+        lines.extend(section.rows.map(Line::Row));
+    }
+    lines
+}
+
+/// The inside of the box MY TICKETS from its top line at `y`, with `shown` rows: the rows of
+/// the queue, and a line with the title of a section between two sections. The top line shows
+/// the title of the section of the first row in view. When the box shows only a part of the
+/// lines, the part holds the selected row, and a title at its top moves into the top line, so
+/// that no title shows two times. The marks on the border count only the tickets above and
+/// below.
+fn queue_box(
+    c: &mut Canvas,
+    queue: &[&PickRow],
+    lines: &[Line],
+    (y, shown): (i32, usize),
+    kx: i32,
+    sel: Option<usize>,
+) {
+    let Some((first, body)) = lines.split_first() else {
+        return;
+    };
+    let at = sel.and_then(|s| body.iter().position(|l| *l == Line::Row(s)));
+    let mut offset = window(at, body.len(), shown);
+    if matches!(body.get(offset), Some(Line::Title { .. })) {
+        offset += 1;
+    }
+    // `lines[offset]` is the line just before `body[offset]`.
+    let top = lines[..=offset]
+        .iter()
+        .rev()
+        .find(|l| matches!(l, Line::Title { .. }))
+        .unwrap_or(first);
+    title_line(c, y, top, false);
+    let end = (offset + shown).min(body.len());
+    let ticket = |line: &Line| match line {
+        Line::Row(i) => Some(Act::Ticket(queue[*i].key.clone())),
+        Line::Title { .. } => None,
+    };
+    let tickets = |part: &[Line]| part.iter().filter(|l| matches!(l, Line::Row(_))).count();
+    marks(
+        c,
+        y,
+        shown as i32 + 2,
+        (
+            tickets(&body[..offset]),
+            body[..offset].iter().rev().find_map(ticket),
+        ),
+        (tickets(&body[end..]), body[end..].iter().find_map(ticket)),
+    );
+    for (i, line) in body[offset..end].iter().enumerate() {
+        let yy = y + 1 + i as i32;
+        match line {
+            Line::Title { .. } => title_line(c, yy, line, true),
+            Line::Row(r) => queue_row(c, queue[*r], yy, kx, sel == Some(*r)),
+        }
+    }
+}
+
+/// A line of the box MY TICKETS with the title of a section on it, such as
+/// `├─ In Review · 3 ───┤`: the top line of the box, or a line inside it between two sections.
+fn title_line(c: &mut Canvas, y: i32, line: &Line, inside: bool) {
+    let Line::Title { status, count } = line else {
+        return;
+    };
+    if inside {
+        let rule = "─".repeat((c.w - 4).max(0) as usize);
+        c.put(1, y, &format!("├{rule}┤"), ink(T.line));
+    }
+    let room = ((c.w - 8) / 2).max(1) as usize;
+    let x = c.put(3, y, " ", ink(T.line));
+    let x = c.put(x, y, &cut(status, room), ink(T.dim).bold());
+    c.put(x, y, &format!(" · {count} "), ink(T.faint));
+}
+
+/// How many rows of each box fit in `avail` rows.
 fn fit(held: i32, queue: i32, avail: i32) -> (i32, i32) {
     let held_box = |n: i32| if n == 0 { 3 } else { n * 3 + 1 };
     let need = 1 + held_box(held) + 1 + 1 + queue + 2;
@@ -272,19 +356,34 @@ pub(super) fn more_marks(
     (offset, shown, total): (usize, usize, usize),
     pick: impl Fn(usize) -> Option<Act>,
 ) {
-    if offset > 0 {
-        let mark = format!(" ▲ {offset} more ");
-        let x = c.right(c.w - 4, y, &mark, ink(T.dim)) + 1;
-        if let Some(act) = pick(offset - 1) {
-            c.click(x, y, width(&mark) as i32, 1, act);
-        }
-    }
     let below = total.saturating_sub(offset + shown);
-    if below > 0 {
-        let mark = format!(" ▼ {below} more ");
-        let x = c.right(c.w - 4, y + h - 1, &mark, ink(T.dim)) + 1;
-        if let Some(act) = pick(offset + shown) {
-            c.click(x, y + h - 1, width(&mark) as i32, 1, act);
+    marks(
+        c,
+        y,
+        h,
+        (offset, offset.checked_sub(1).and_then(&pick)),
+        (below, (below > 0).then(|| pick(offset + shown)).flatten()),
+    );
+}
+
+/// The marks on the top line and the bottom line of a box at `y` with the height `h`: how
+/// many rows are above it and below it. A click on a mark acts as the act that comes with its
+/// count.
+fn marks(
+    c: &mut Canvas,
+    y: i32,
+    h: i32,
+    (above, up): (usize, Option<Act>),
+    (below, down): (usize, Option<Act>),
+) {
+    for (n, arrow, yy, act) in [(above, "▲", y, up), (below, "▼", y + h - 1, down)] {
+        if n == 0 {
+            continue;
+        }
+        let mark = format!(" {arrow} {n} more ");
+        let x = c.right(c.w - 4, yy, &mark, ink(T.dim)) + 1;
+        if let Some(act) = act {
+            c.click(x, yy, width(&mark) as i32, 1, act);
         }
     }
 }
@@ -359,9 +458,9 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
     );
 }
 
-/// A row of the queue. A ticket that can start and a ticket that is in progress outside Vision
-/// show their status, because Enter starts both. Each other ticket shows faint, with the reason
-/// that it cannot start.
+/// A row of the queue. Its section names its status. A ticket that can start and a ticket that
+/// is in progress outside Vision show bright, because Enter starts both. Each other ticket
+/// shows faint, with the reason that it cannot start.
 fn queue_row(c: &mut Canvas, row: &PickRow, y: i32, kx: i32, selected: bool) {
     c.click(2, y, c.w - 4, 1, Act::Ticket(row.key.clone()));
     if selected {
@@ -381,19 +480,18 @@ fn queue_row(c: &mut Canvas, row: &PickRow, y: i32, kx: i32, selected: bool) {
         key_ink = key_ink.bold();
     }
     c.put(5, y, &cut(&row.key, (kx - 6) as usize), key_ink);
-    let tail = if starts {
-        row.status.clone()
+    let end = c.w - 4;
+    let room = if starts {
+        end - kx + 1
     } else {
-        row.reason.clone()
+        let reason = cut(&row.reason, ((end - kx) / 2).max(1) as usize);
+        c.right(end, y, &reason, ink(T.faint)) - 2 - kx
     };
-    let tail = cut(&tail, ((c.w - 4 - kx) / 2).max(1) as usize);
-    let tail_color = if starts { T.dim } else { T.faint };
-    let r = c.right(c.w - 4, y, &tail, ink(tail_color));
     let title_color = if starts { T.fg } else { T.faint };
     c.put(
         kx,
         y,
-        &cut(&row.title, (r - 2 - kx).max(1) as usize),
+        &cut(&row.title, room.max(1) as usize),
         ink(title_color),
     );
 }

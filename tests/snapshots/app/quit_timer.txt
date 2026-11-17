@@ -11,8 +11,8 @@
  ╰────────────────╭─ Quit Vision? ─────────────────────────────────────────────────────────╮────────────────╯
                   │                                                                        │
   MY TICKETS      │  2 tickets are in progress.                                            │tracker · 2 open
- ╭────────────────│                                                                        │────────────────╮
- │   DEMO-15   Kee│  The running turn of builder finishes by itself. The system timer is   │          To Do │
+ ╭─ To Do · 2 ────│                                                                        │────────────────╮
+ │   DEMO-15   Kee│  The running turn of builder finishes by itself. The system timer is   │                │
  │   DEMO-9    Fix│  installed, so it keeps the work moving while this window is closed.   │en pull request │
  ╰────────────────│                                                                        │────────────────╯
                   │  Open Vision again to see the work.                                    │

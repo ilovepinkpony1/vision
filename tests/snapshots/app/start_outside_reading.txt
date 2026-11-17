@@ -11,12 +11,12 @@
  ╰───────────│                                                                                  │───────────╯
              │  Export the report as a CSV file                                                 │
   MY TICKETS │                                                                                  │er · 3 open
- ╭───────────│  DEMO-21 is in progress outside Vision, on the branch feature/demo-21-export,    │───────────╮
- │   DEMO-15 │  with the pull request #31.                                                      │     To Do │
+ ╭─ To Do · 2│  DEMO-21 is in progress outside Vision, on the branch feature/demo-21-export,    │───────────╮
+ │   DEMO-15 │  with the pull request #31.                                                      │           │
  │   DEMO-9  │                                                                                  │ll request │
- │ ▸ DEMO-21 │  ⠇ Vision reads the facts of DEMO-21 now · 0:01                                  │ In Review │
- ╰───────────│    It asks the tracker for the status, and the forge for the pull request, the   │───────────╯
-             │    review, CI, and each env. The steps show when the read ends.                  │
+ ├─ In Review│  ⠇ Vision reads the facts of DEMO-21 now · 0:01                                  │───────────┤
+ │ ▸ DEMO-21 │    It asks the tracker for the status, and the forge for the pull request, the   │           │
+ ╰───────────│    review, CI, and each env. The steps show when the read ends.                  │───────────╯
              │                                                                                  │
              │  esc cancel                                                                      │
              │                                                                                  │

@@ -13,8 +13,8 @@
  ╰───────│     a  Keep the order                                                                    │───────╯
          │     refused: Q-0002 already has an answer                                                │
   MY TICK│                                                                                          │ 2 open
- ╭───────│  ✗ send your answer to Q-0002                                                            │───────╮
- │   DEMO│                                                                                          │ To Do │
+ ╭─ To Do│  ✗ send your answer to Q-0002                                                            │───────╮
+ │   DEMO│                                                                                          │       │
  │   DEMO│  It did not work:                                                                        │equest │
  ╰───────│  no answer was recorded, because the answer to Q-0002 was refused: Q-0002 already has    │───────╯
          │  an answer                                                                               │

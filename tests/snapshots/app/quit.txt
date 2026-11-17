@@ -11,8 +11,8 @@
  ╰────────────────╭─ Quit Vision? ─────────────────────────────────────────────────────────╮────────────────╯
                   │                                                                        │
   MY TICKETS      │  2 tickets are in progress.                                            │tracker · 2 open
- ╭────────────────│                                                                        │────────────────╮
- │   DEMO-15   Kee│  The running turn of builder finishes by itself. The next step of      │          To Do │
+ ╭─ To Do · 2 ────│                                                                        │────────────────╮
+ │   DEMO-15   Kee│  The running turn of builder finishes by itself. The next step of      │                │
  │   DEMO-9    Fix│  each ticket waits until you open Vision again.                        │en pull request │
  ╰────────────────│                                                                        │────────────────╯
                   │  To let the work continue without this window, run vision install.     │

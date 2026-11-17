@@ -8,8 +8,8 @@
  ╰───────────│                                                                                  │───────────╯
              │  DEMO-3 is stopped at the step review.                                           │
   MY TICKETS │  Vision could not check the tracker and the pull request, so it suggests         │er · 2 open
- ╭───────────│  nothing: bin/observe failed: the forge did not answer in 30 s                   │───────────╮
- │   DEMO-15 │                                                                                  │     To Do │
+ ╭─ To Do · 2│  nothing: bin/observe failed: the forge did not answer in 30 s                   │───────────╮
+ │   DEMO-15 │                                                                                  │           │
  │   DEMO-9  │    refine                                                                        │ll request │
  ╰───────────│    plan                                                                          │───────────╯
              │    plan-ready                                                                    │

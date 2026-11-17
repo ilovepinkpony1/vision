@@ -218,6 +218,38 @@ fn home_at_other_sizes() {
     );
 }
 
+/// MY TICKETS has one section for each status: the statuses of `app.sections` first, then the
+/// others in the order of the queue. The arrows follow the sections. When the box shows a
+/// part, its top line names the section of the first row in view, a title at the top of the
+/// part moves into that line, and the marks count only tickets.
+#[test]
+fn home_with_a_section_for_each_status() {
+    let app = sectioned_home(SIZE);
+    let keys: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();
+    assert_eq!(
+        keys,
+        [
+            "DEMO-12", "DEMO-7", "DEMO-33", "DEMO-37", "DEMO-41", "DEMO-32", "DEMO-36", "DEMO-39",
+            "DEMO-31", "DEMO-34", "DEMO-40", "DEMO-30", "DEMO-38", "DEMO-35",
+        ]
+    );
+    check("home_sections", &app);
+    let mut app = sectioned_home((100, 28));
+    check("home_sections_100x28", &app);
+    // Ten moves down from DEMO-12 select DEMO-40. The part then starts at the title In Review,
+    // so that title moves into the top line.
+    for _ in 0..10 {
+        send(&mut app, 2.0, Msg::Key(Key::Down));
+    }
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-40"));
+    check("home_sections_scrolled_100x28", &app);
+    for _ in 0..3 {
+        send(&mut app, 2.1, Msg::Key(Key::Down));
+    }
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-35"));
+    check("home_sections_end_100x28", &app);
+}
+
 /// Home with the start card of DEMO-15 open and its facts read.
 pub fn start_card() -> App {
     let mut app = home(SIZE);

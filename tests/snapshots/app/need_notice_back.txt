@@ -13,8 +13,8 @@
  ╰───────│                                                                                          │───────╯
          │  F1  major  1. [MAJOR][BLOCKING] app/models/report_export.rb:42: A retry sends the       │
   MY TICK│             report twice                                                                 │ 2 open
- ╭───────│                                                                                          │───────╮
- │   DEMO│  This finding keeps coming back after its fix.                                           │ To Do │
+ ╭─ To Do│                                                                                          │───────╮
+ │   DEMO│  This finding keeps coming back after its fix.                                           │       │
  │   DEMO│                                                                                          │equest │
  ╰───────│  A notice never stops a ticket. It stays until you mark it read. The turn was            │───────╯
          │  20261116T150000Z-DEMO-12-review-5.                                                      │

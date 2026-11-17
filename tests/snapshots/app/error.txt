@@ -11,8 +11,8 @@
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   MY TICKETS   ╭─ The kill switch failed ─────────────────────────────────────────────────────╮cker · 2 open
- ╭─────────────│                                                                              │─────────────╮
- │   DEMO-15   │  Vision is not set up at /work/home. Run `vision init` first                 │       To Do │
+ ╭─ To Do · 2 ─│                                                                              │─────────────╮
+ │   DEMO-15   │  Vision is not set up at /work/home. Run `vision init` first                 │             │
  │   DEMO-9    │  warning: a second line of text                                              │pull request │
  ╰─────────────│                                                                              │─────────────╯
                │  esc close                                                                   │

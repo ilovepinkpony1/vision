@@ -13,8 +13,8 @@
  ╰───────│  Two answers of the person say the same thing as D-0004. The Curator merges them.        │───────╯
          │                                                                                          │
   MY TICK│  Its replays still run, so the review shows their numbers when they end. You can review  │ 2 open
- ╭───────│  the changes now.                                                                        │───────╮
- │   DEMO│                                                                                          │ To Do │
+ ╭─ To Do│  the changes now.                                                                        │───────╮
+ │   DEMO│                                                                                          │       │
  │   DEMO│  Enter opens the review in this terminal. You accept or reject each change there, and    │equest │
  ╰───────│  Vision comes back here when you leave it.                                               │───────╯
          │                                                                                          │

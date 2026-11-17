@@ -58,6 +58,7 @@ pub fn setup() -> Setup {
         home: "~/.vision".into(),
         adapter: "demo".into(),
         steps: STEPS.iter().map(|s| s.to_string()).collect(),
+        sections: Vec::new(),
     }
 }
 
@@ -449,8 +450,13 @@ pub fn booting(size: (u16, u16)) -> App {
 
 /// A model on Home after the loader, with the local data, the queue, and no job that runs.
 pub fn home_with(size: (u16, u16), local: Local, queue: Option<Vec<PickRow>>) -> App {
+    home_from(size, setup(), local, queue)
+}
+
+/// Home after the loader, with the setup `setup`.
+pub fn home_from(size: (u16, u16), setup: Setup, local: Local, queue: Option<Vec<PickRow>>) -> App {
     let mut app = booting(size);
-    send(&mut app, 0.1, Msg::Setup(Ok(setup())));
+    send(&mut app, 0.1, Msg::Setup(Ok(setup)));
     let fx = send(&mut app, 0.2, Msg::Local(Ok(local.clone())));
     finish_jobs(&mut app, 0.3, &fx);
     // The end of the first pass loads the local data again.
@@ -465,6 +471,103 @@ pub fn home_with(size: (u16, u16), local: Local, queue: Option<Vec<PickRow>>) ->
 /// The sample Home: two tickets in progress and a queue of two.
 pub fn home(size: (u16, u16)) -> App {
     home_with(size, local(two_tickets(), Vec::new()), Some(queue()))
+}
+
+/// The statuses of `app.sections` of [`sectioned_home`].
+pub const SECTIONS: [&str; 3] = ["In Progress", "In Review", "In Testing"];
+
+/// A queue of twelve tickets with five statuses, in the order of the tracker: three statuses
+/// of [`SECTIONS`], and `To Do` and `Backlog`, which are not in it.
+pub fn sectioned_queue() -> Vec<PickRow> {
+    [
+        (
+            "DEMO-30",
+            "To Do",
+            "Show the name of the shop in the subject of the email",
+        ),
+        (
+            "DEMO-31",
+            "In Testing",
+            "Count the visits of each page once a day",
+        ),
+        (
+            "DEMO-32",
+            "In Review",
+            "Sort the orders by the date of the payment",
+        ),
+        (
+            "DEMO-33",
+            "In Progress",
+            "Keep the last search of the person",
+        ),
+        (
+            "DEMO-34",
+            "In Testing",
+            "Hide the button of the export for a guest",
+        ),
+        (
+            "DEMO-35",
+            "Backlog",
+            "Let the person pick the first day of the week",
+        ),
+        (
+            "DEMO-36",
+            "In Review",
+            "Show the totals of the month in the footer",
+        ),
+        (
+            "DEMO-37",
+            "In Progress",
+            "Send the weekly email on the day that the person picks",
+        ),
+        (
+            "DEMO-38",
+            "To Do",
+            "Add a link to the help page in the menu",
+        ),
+        (
+            "DEMO-39",
+            "In Review",
+            "Fix the width of the table on a small screen",
+        ),
+        (
+            "DEMO-40",
+            "In Testing",
+            "Load the next page of the list when the person scrolls",
+        ),
+        (
+            "DEMO-41",
+            "In Progress",
+            "Mark the orders that came from a coupon",
+        ),
+    ]
+    .into_iter()
+    .map(|(key, status, title)| PickRow {
+        key: key.into(),
+        title: title.into(),
+        status: status.into(),
+        eligible: true,
+        reason: String::new(),
+        taken: None,
+        branch: None,
+        pr: None,
+    })
+    .collect()
+}
+
+/// Home with the two tickets in progress, `app.sections` of [`SECTIONS`], and
+/// [`sectioned_queue`].
+pub fn sectioned_home(size: (u16, u16)) -> App {
+    let setup = Setup {
+        sections: SECTIONS.iter().map(|s| s.to_string()).collect(),
+        ..setup()
+    };
+    home_from(
+        size,
+        setup,
+        local(two_tickets(), Vec::new()),
+        Some(sectioned_queue()),
+    )
 }
 
 /// Draws the model into a test backend of its size.

@@ -8,8 +8,8 @@
  ╰───────────│  Vision read:                                                                    │───────────╯
              │  · the tracker status is In Review                                               │
   MY TICKETS │  · the pull request #7 is open and ready                                         │er · 2 open
- ╭───────────│  · the review state is comments and 2 review comments wait                       │───────────╮
- │   DEMO-15 │  · CI is green at 3f2a1b4c5d6e                                                   │     To Do │
+ ╭─ To Do · 2│  · the review state is comments and 2 review comments wait                       │───────────╮
+ │   DEMO-15 │  · CI is green at 3f2a1b4c5d6e                                                   │           │
  │   DEMO-9  │  · the branch of the clone is at the head of the pull request                    │ll request │
  ╰───────────│                                                                                  │───────────╯
              │    refine                                                                        │

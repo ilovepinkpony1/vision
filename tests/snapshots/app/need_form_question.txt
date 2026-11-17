@@ -13,8 +13,8 @@
  ╰───────│  Example       The table shows date, client, total. The file can keep that order or      │───────╯
          │                sort the columns by name.                                                 │
   MY TICK│                                                                                          │ 2 open
- ╭───────│  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │───────╮
- │   DEMO│                       order                                                              │ To Do │
+ ╭─ To Do│  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │───────╮
+ │   DEMO│                       order                                                              │       │
  │   DEMO│    b  Sort by name    the file sorts the columns by their names                          │equest │
  ╰───────│                                                                                          │───────╯
          │  Recommended   a Keep the order: People compare the file with the table.                 │

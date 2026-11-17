@@ -13,8 +13,8 @@
  ╰───────│                                                                                          │───────╯
          │    a  Keep the order  the file has the columns of the table, in the same    recommended  │
   MY TICK│                       order                                                              │ 2 open
- ╭───────│  ▸ b  Sort by name    the file sorts the columns by their names                          │───────╮
- │   DEMO│                                                                                          │ To Do │
+ ╭─ To Do│  ▸ b  Sort by name    the file sorts the columns by their names                          │───────╮
+ │   DEMO│                                                                                          │       │
  │   DEMO│  Recommended   a Keep the order: People compare the file with the table.                 │equest │
  ╰───────│  Evidence      src/export.py:42                                                          │───────╯
          │  The Judge     was not sure: No decision of the memory covers the order of the columns.  │

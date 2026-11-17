@@ -13,8 +13,8 @@
  ╰───────│                sort the columns by name.                                                 │───────╯
          │                                                                                          │
   MY TICK│    a  Keep the order  the file has the columns of the table, in the same    recommended  │ 2 open
- ╭───────│                       order                                                              │───────╮
- │   DEMO│    b  Sort by name    the file sorts the columns by their names                          │ To Do │
+ ╭─ To Do│                       order                                                              │───────╮
+ │   DEMO│    b  Sort by name    the file sorts the columns by their names                          │       │
  │   DEMO│                                                                                          │equest │
  ╰───────│  Recommended   a Keep the order: People compare the file with the table.                 │───────╯
          │  Evidence      src/export.py:42                                                          │

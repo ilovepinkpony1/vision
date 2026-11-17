@@ -11,12 +11,12 @@
  ╰───────────│  · the pull request #31 is open and ready                                        │───────────╯
              │  · the review state is waiting and no review comment waits                       │
   MY TICKETS │  · CI is green at 3f2a1b4c5d6e                                                   │er · 3 open
- ╭───────────│  Vision takes it in a free clone, on its branch with the commits of the remote.  │───────────╮
- │   DEMO-15 │  The steps before the step that you pick do not run.                             │     To Do │
+ ╭─ To Do · 2│  Vision takes it in a free clone, on its branch with the commits of the remote.  │───────────╮
+ │   DEMO-15 │  The steps before the step that you pick do not run.                             │           │
  │   DEMO-9  │                                                                                  │ll request │
- │ ▸ DEMO-21 │    refine                                                                        │ In Review │
- ╰───────────│    plan                                                                          │───────────╯
-             │    plan-ready                                                                    │
+ ├─ In Review│    refine                                                                        │───────────┤
+ │ ▸ DEMO-21 │    plan                                                                          │           │
+ ╰───────────│    plan-ready                                                                    │───────────╯
              │    build                                                                         │
              │    review                                                                        │
              │    open-pr                                                                       │

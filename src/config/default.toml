@@ -88,6 +88,9 @@ lines = 3                     # a finding of ours matches a comment on the same 
 verb = "review.read"          # the read verb of the adapter that gives the review and its inline comments
 every = 900                   # seconds between two looks at a pull request while the review is missing
 
+[app]                         # the full-screen app
+sections = []                 # statuses of the tracker whose sections come first in MY TICKETS, in this order, such as ["In Progress", "In Review"]. Each other status follows in the order of the queue.
+
 [modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
 
 [secrets]                     # name -> how the executor gets it. A session never gets one.

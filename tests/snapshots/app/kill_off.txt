@@ -11,8 +11,8 @@
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                   ╭─ The kill switch ──────────────────────────────────────────────────────╮
   MY TICKETS      │                                                                        │tracker · 2 open
- ╭────────────────│  Vision is off.                                                        │────────────────╮
- │   DEMO-15   Kee│                                                                        │          To Do │
+ ╭─ To Do · 2 ────│  Vision is off.                                                        │────────────────╮
+ │   DEMO-15   Kee│                                                                        │                │
  │   DEMO-9    Fix│  No action runs now. Press Enter to turn Vision on, and the next pass  │en pull request │
  ╰────────────────│  acts again.                                                           │────────────────╯
                   │                                                                        │

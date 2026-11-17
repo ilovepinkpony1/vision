@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
+ │                                                                                                          │
+ │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
+ │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  MY TICKETS                                                                      from the tracker · 12 open
+ ╭─ In Progress · 3 ────────────────────────────────────────────────────────────────────────────────────────╮
+ │   DEMO-33   Keep the last search of the person                                                           │
+ │   DEMO-37   Send the weekly email on the day that the person picks                                       │
+ │   DEMO-41   Mark the orders that came from a coupon                                                      │
+ ├─ In Review · 3 ──────────────────────────────────────────────────────────────────────────────────────────┤
+ │   DEMO-32   Sort the orders by the date of the payment                                                   │
+ │   DEMO-36   Show the totals of the month in the footer                                                   │
+ │   DEMO-39   Fix the width of the table on a small screen                                                 │
+ ├─ In Testing · 3 ─────────────────────────────────────────────────────────────────────────────────────────┤
+ │   DEMO-31   Count the visits of each page once a day                                                     │
+ │   DEMO-34   Hide the button of the export for a guest                                                    │
+ │   DEMO-40   Load the next page of the list when the person scrolls                                       │
+ ├─ To Do · 2 ──────────────────────────────────────────────────────────────────────────────────────────────┤
+ ╰─────────────────────────────────────────────────────────────────────────────────────────────── ▼ 3 more ─╯
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

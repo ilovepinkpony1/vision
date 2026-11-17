@@ -8,8 +8,8 @@
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   MY TICKETS ╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮er · 2 open
- ╭───────────│                                                                                  │───────────╮
- │   DEMO-15 │  Rename the setting of the weekly email                                          │     To Do │
+ ╭─ To Do · 2│                                                                                  │───────────╮
+ │   DEMO-15 │  Rename the setting of the weekly email                                          │           │
  │   DEMO-9  │                                                                                  │ll request │
  ╰───────────│  DEMO-3 is stopped at the step review.                                           │───────────╯
              │                                                                                  │

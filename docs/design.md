@@ -209,6 +209,9 @@ allow_unix_sockets = []
 max_diff_lines = 3000
 sensitive = [".github/", "db/migrate/"]
 
+[app]                         # the full-screen app
+sections = []                 # statuses of the tracker whose sections come first in MY TICKETS, in this order, such as ["In Progress", "In Review"]. Each other status follows in the order of the queue.
+
 [modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
 
 [secrets]                     # name -> how the executor gets it. A session never gets one.
@@ -1385,7 +1388,9 @@ The room for the picture is the rows above the title and the width of the window
 
 Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or the start card for a ticket of the queue. On a stopped or paused ticket, Enter opens the continue card. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
 
-The box MY TICKETS lists the queue that `queue_jql` asks for, such as each open ticket of the person. Its title line says how many tickets it lists. A ticket that can start shows its status. A ticket that is in progress outside Vision shows its status too, and Enter opens its start card (section 15.3). Each other ticket shows faint, with the reason that it cannot start.
+The box MY TICKETS lists the queue that `queue_jql` asks for, such as each open ticket of the person. Its title line says how many tickets it lists. A ticket that can start shows bright. A ticket that is in progress outside Vision shows bright too, and Enter opens its start card (section 15.3). Each other ticket shows faint, with the reason that it cannot start.
+
+MY TICKETS has one section for each status of the tracker. The statuses of `app.sections` come first, in that order, and each other status follows in the order of the queue. The tickets of one status keep the order of the queue, and the arrows follow the same order. The top line of the box and each line between two sections show the status and its count, such as `In Review · 3`. When the box shows only a part of its rows, its top line names the section of the first row in view. The marks on its border count only tickets.
 
 One state function says what happens to a ticket now, in the words of the app, and Home and the live view both use it. It reads facts that the pipeline gives as data: the turn that runs, the entry of the step that is not done, the wait of the step, and the limit. No text of it names a command.
 

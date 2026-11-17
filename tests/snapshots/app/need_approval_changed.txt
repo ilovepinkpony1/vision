@@ -13,8 +13,8 @@
  ╰───────│                                                                                          │───────╯
          │  What it sends                                                                           │
   MY TICK│  ╭────────────────────────────────────────────────────────────────────────────────────╮  │ 2 open
- ╭───────│  │ text  Another text.                                                                │  │───────╮
- │   DEMO│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │ To Do │
+ ╭─ To Do│  │ text  Another text.                                                                │  │───────╮
+ │   DEMO│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │       │
  │   DEMO│                                                                                          │equest │
  ╰───────│    y  Approve it. Vision sends it now.                                                   │───────╯
          │    a  Approve it, and move tracker.describe to the mode auto, so that Vision never asks  │
