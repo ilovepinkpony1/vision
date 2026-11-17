@@ -116,7 +116,9 @@ pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
     live.data.at = Some(app.clock.elapsed);
     match data {
         Ok(data) => {
-            // The feed keeps only the last lines of the ledger: only those get their words.
+            // The feed keeps only the last lines of the ledger, and `Feed::set_moments` drops
+            // the others. The cut comes before the words of each line, so a long timeline costs
+            // no work for the lines that it drops.
             let mut moments: Vec<_> = data
                 .timeline
                 .iter()
@@ -334,7 +336,7 @@ fn retry_card(app: &mut App) {
         agent: data.facts.agent.clone(),
         paused,
         held: data.facts.held,
-        act: data.view.kind.as_deref() == Some("act"),
+        act: data.facts.act,
         reason,
         run: Run::Idle,
     };

@@ -4,6 +4,10 @@
 //! and the error names the card and the reason. The decision files then go to the memory in
 //! one commit. If that commit fails, each card waits for the person again.
 //!
+//! When the second transaction fails after that commit, each answer is saved: the memory has
+//! its decision file, and its row waits in `recording` until a tick finishes it. The error then
+//! starts with [`SAVED`] and says so.
+//!
 //! The file is a JSON object with one entry for each card id. The app keeps its drafts in the
 //! same form:
 //!
@@ -21,19 +25,18 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::card::Reply;
 use super::commands::{
-    answer_human, needless_human, next_line, prepare, saved_line, turn_complete, waiting, Answered,
-    PersonAnswer, Prepared,
+    agreed, answer_human, answered_event, needless_event, needless_human, needless_line, next_line,
+    prepare, saved_line, turn_complete, waiting, Answered, PersonAnswer, Prepared,
 };
 use super::{needless_name, record, Question};
 use crate::cli::Needless;
 use crate::ctx::Ctx;
 use crate::ledger::questions::HumanRow;
-use crate::ledger::{Event, Ledger};
-use crate::memory::{Memory, NewDecision, UseKind};
+use crate::ledger::Ledger;
+use crate::memory::{DecisionId, Memory, NewDecision, UseKind};
 use crate::util::time;
 
 /// One answer of the file.
@@ -180,6 +183,27 @@ impl Started {
     }
 }
 
+/// The words at the start of the error of a set when Vision saved each answer and only the end
+/// of their records in the ledger failed. The app reads them to tell this end from a refusal.
+pub const SAVED: &str = "Vision saved each answer of the set";
+
+/// The error of a set whose second transaction failed: the decision files `ids` are in the
+/// memory, the row of each answer waits in `recording`, and each needless mark is final.
+fn unfinished(ids: &[DecisionId], error: &anyhow::Error) -> String {
+    let names: Vec<String> = ids.iter().map(ToString::to_string).collect();
+    let minutes = record::RECORDING_GRACE_SECS / 60;
+    match names.as_slice() {
+        [] => format!("{SAVED}, but the ledger could not add their events: {error:#}"),
+        [one] => format!(
+            "{SAVED}, and the memory has the decision file {one}. The ledger could not finish its record: {error:#}. A tick after {minutes} minutes finishes it"
+        ),
+        many => format!(
+            "{SAVED}, and the memory has the decision files {}. The ledger could not finish their records: {error:#}. A tick after {minutes} minutes finishes them",
+            many.join(", ")
+        ),
+    }
+}
+
 /// The reason in front of each refusal of a set.
 fn refused(id: &str) -> String {
     format!("no answer was recorded, because the answer to {id} was refused")
@@ -189,14 +213,10 @@ fn refused(id: &str) -> String {
 fn start(ledger: &Ledger, memory: &Memory, answer: &SetAnswer, at: &str) -> Result<Started> {
     match &answer.reply {
         SetReply::Answer(given) => {
-            if let Reply::Text(text) = &given.reply {
-                if text.trim().is_empty() {
-                    bail!("the text of the answer is empty");
-                }
-            }
+            // `prepare` refuses an empty text, and the memory tests the decision when it
+            // writes it.
             let prepared = prepare(ledger, memory, &answer.id, given)?;
             let decision = record::new_decision(memory, &prepared.question, &prepared.answer)?;
-            crate::memory::store::check_new_decision(&decision)?;
             let human = answer_human(&prepared.question, &prepared.answer, at, given.seconds);
             Ok(Started::Answer {
                 prepared: Box::new(prepared),
@@ -295,22 +315,20 @@ pub fn answer_set(
             ));
         }
     };
-    let mut decisions = decisions.into_iter().map(|d| d.id);
+    let ids: Vec<DecisionId> = decisions.into_iter().map(|d| d.id).collect();
+    let mut decisions = ids.iter().copied();
     let mut out = Vec::new();
-    ledger.in_transaction(|ledger| {
+    let finished = ledger.in_transaction(|ledger| {
         for item in &started {
             let question = item.question();
             let id = question.row.id.clone();
-            let ticket = question.row.ticket.as_str();
             match item {
                 Started::Answer { prepared, .. } => {
                     let decision = decisions
                         .next()
                         .context("the memory gave fewer decision files than answers")?;
                     ledger.finish_recording(&id, &decision.to_string())?;
-                    ledger.add_event(&Event::now("user", "card-answered").ticket(ticket).detail(
-                        json!({"card": id, "decision": decision.to_string(), "took_proposal": prepared.took}),
-                    ))?;
+                    ledger.add_event(&answered_event(question, decision, prepared.took))?;
                     out.push(Answered {
                         id,
                         decision: Some(decision),
@@ -319,11 +337,7 @@ pub fn answer_set(
                     });
                 }
                 Started::Needless { name, .. } => {
-                    ledger.add_event(
-                        &Event::now("user", "card-needless")
-                            .ticket(ticket)
-                            .detail(json!({"card": id, "reason": name})),
-                    )?;
+                    ledger.add_event(&needless_event(question, name))?;
                     out.push(Answered {
                         id,
                         decision: None,
@@ -334,37 +348,33 @@ pub fn answer_set(
             }
         }
         Ok(())
-    })?;
-    let mut agreed = Vec::new();
+    });
+    // The answers are saved now: an error says so, and a tick finishes each record.
+    if let Err(e) = finished {
+        let text = unfinished(&ids, &e);
+        ctx.log(&format!("questions: {text}"));
+        bail!(text);
+    }
+    let mut principles = Vec::new();
     for (item, answered) in started.iter().zip(&mut out) {
         let question = item.question();
         match (item, &answered.decision) {
             (Started::Answer { prepared, .. }, Some(decision)) => {
-                ctx.log(&format!(
-                    "questions: {} answered by {} as {decision}",
-                    answered.id, prepared.answer.by
+                ctx.log(&record::answered_line(
+                    &answered.id,
+                    &prepared.answer.by,
+                    *decision,
                 ));
-                if prepared.took == Some(true) {
-                    let sources = question
-                        .view
-                        .judge
-                        .as_ref()
-                        .map(|e| e.sources.clone())
-                        .unwrap_or_default();
-                    agreed.extend(record::principles(memory, &sources));
-                }
+                principles.extend(agreed(memory, question, prepared.took));
             }
             (Started::Needless { name, .. }, _) => {
-                ctx.log(&format!(
-                    "questions: {} marked as needless ({name})",
-                    answered.id
-                ));
+                ctx.log(&needless_line(&answered.id, name));
             }
             _ => {}
         }
         answered.turn_complete = turn_complete(ledger, &question.row.turn)?;
     }
-    record::count_ids(ctx, memory, &agreed, UseKind::Agreed, memory.person());
+    record::count_ids(ctx, memory, &principles, UseKind::Agreed, memory.person());
     Ok(out)
 }
 
@@ -409,6 +419,7 @@ pub fn answer_file_command(ctx: &Ctx, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn entry(json: serde_json::Value) -> Entry {
         serde_json::from_value(json).unwrap()

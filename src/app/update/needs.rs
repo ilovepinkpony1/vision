@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use super::super::model::{App, Card, Tone};
 use super::super::msg::{Effect, Key};
-use super::super::needs::{Input, NeedItem, NeedsCard, Target};
+use super::super::needs::{Gone, Input, NeedItem, NeedsCard, Target};
 use super::super::view::need_card::body_size;
 use super::{act, ask, ask_quit, chain, notice};
 
@@ -220,32 +220,58 @@ fn left_note(ids: &[&str]) -> String {
     }
 }
 
-/// At the first load: the drafts of the files whose questions no longer wait go, with a note.
+/// At the first load: the drafts of the files whose questions have a final answer go, with a
+/// note that says who answered them.
 fn note_gone(app: &mut App, fx: &mut Vec<Effect>) {
     let Some(card) = card(app) else {
         return;
     };
-    let mut gone: Vec<String> = Vec::new();
+    let mut gone: Vec<(String, Gone)> = Vec::new();
     for set in card.items.iter().flatten().filter_map(NeedItem::set) {
         if !set.gone.is_empty() {
             gone.extend(set.gone.iter().cloned());
             fx.push(Effect::DropDrafts {
                 ticket: set.ticket.clone(),
-                ids: set.gone.clone(),
+                ids: set.gone.iter().map(|(id, _)| id.clone()).collect(),
             });
         }
     }
     if !gone.is_empty() && card.note.is_none() {
-        let ids: Vec<&str> = gone.iter().map(String::as_str).collect();
-        card.note = Some(match ids.as_slice() {
-            [one] => format!(
-                "{one} got an answer from the Judge or another command, so its draft is gone."
-            ),
-            many => format!(
-                "{} got answers from the Judge or another command, so their drafts are gone.",
-                many.join(", ")
-            ),
-        });
+        let parts: Vec<String> = [Gone::Judge, Gone::Person, Gone::Other]
+            .into_iter()
+            .filter_map(|who| {
+                let ids: Vec<&str> = gone
+                    .iter()
+                    .filter(|(_, by)| *by == who)
+                    .map(|(id, _)| id.as_str())
+                    .collect();
+                (!ids.is_empty()).then(|| gone_note(&ids, who))
+            })
+            .collect();
+        card.note = Some(parts.join(" "));
+    }
+}
+
+/// The note about the drafts of the questions `ids` that `who` answered.
+fn gone_note(ids: &[&str], who: Gone) -> String {
+    match (ids, who) {
+        ([one], Gone::Judge) => {
+            format!("{one} got an answer from the Judge, so its draft is gone.")
+        }
+        (many, Gone::Judge) => format!(
+            "{} got answers from the Judge, so their drafts are gone.",
+            many.join(", ")
+        ),
+        ([one], Gone::Person) => format!("{one} got your answer, so its draft is gone."),
+        (many, Gone::Person) => format!(
+            "{} got your answers, so their drafts are gone.",
+            many.join(", ")
+        ),
+        ([one], Gone::Other) => format!("{one} no longer waits, so its draft is gone."),
+        (many, Gone::Other) => format!(
+            "{} no longer wait, so their drafts are gone.",
+            many.join(", ")
+        ),
     }
 }
 
@@ -274,8 +300,8 @@ pub fn sent(app: &mut App, ticket: &str, ids: Vec<String>, fx: &mut Vec<Effect>)
 /// A chain of an item ended well: the item goes away, and the next one shows, or the card
 /// closes with the notice. A proposal stays until the next load says that no change of it
 /// waits.
-pub fn done(app: &mut App, item: &str, text: &str, fx: &mut Vec<Effect>) {
-    notice(app, text.to_string(), Tone::Ok);
+pub fn done(app: &mut App, item: &str, text: &str, tone: Tone, fx: &mut Vec<Effect>) {
+    notice(app, text.to_string(), tone);
     let keep = item.starts_with("proposal:");
     let Some(card) = card(app) else {
         return;

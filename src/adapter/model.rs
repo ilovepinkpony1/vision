@@ -792,6 +792,20 @@ impl Adapter {
             .find(|path| path.is_file())
     }
 
+    /// What a load tests on the disk besides the parse of `adapter.toml`, as a path and true for
+    /// a folder: the scripts folder must be a folder, and [`Adapter::check_agents`] looks for
+    /// the role file of each agent of `[agents]` in two places. A reader that keeps a loaded
+    /// adapter keeps it only while each test gives the same answer ([`disk_answers`]).
+    pub fn disk_tests(&self) -> Vec<(PathBuf, bool)> {
+        let mut tests = vec![(self.scripts.clone(), true)];
+        for agent in self.agents.values() {
+            for dir in [&self.dir, &self.scripts] {
+                tests.push((dir.join(&agent.role), false));
+            }
+        }
+        tests
+    }
+
     /// Each agent that the adapter defines must have its role file.
     pub fn check_agents(&self) -> Result<()> {
         for agent in self.agents.values() {
@@ -807,6 +821,20 @@ impl Adapter {
         }
         Ok(())
     }
+}
+
+/// The answer of each test of [`Adapter::disk_tests`] now: the path is a folder, or a file.
+pub fn disk_answers(tests: &[(PathBuf, bool)]) -> Vec<bool> {
+    tests
+        .iter()
+        .map(|(path, folder)| {
+            if *folder {
+                path.is_dir()
+            } else {
+                path.is_file()
+            }
+        })
+        .collect()
 }
 
 fn names<'a>(keys: impl Iterator<Item = &'a String>) -> String {

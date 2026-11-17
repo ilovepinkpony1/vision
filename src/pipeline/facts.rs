@@ -41,6 +41,8 @@ pub struct StateFacts {
     /// The last turn of the visit held its end facts, so a retry runs the writes of the step
     /// again instead of a new turn.
     pub held: bool,
+    /// An act step: it runs no turn, so a retry runs only its writes again.
+    pub act: bool,
     /// The first `before` or `after` entry of the step that is not done, or the first entry of
     /// `run` of an act step.
     pub entry: Option<EntryFact>,
@@ -74,6 +76,14 @@ pub struct StateFacts {
     /// A team step: each member whose `when` holds, with its state: `done`, `runs`, `waits`,
     /// `failed`, or `not started`.
     pub team: Vec<(String, String)>,
+}
+
+impl StateFacts {
+    /// The step does only its writes now, and no turn: the last turn of the visit held its end
+    /// facts, or the step is an act step. So a retry runs only the writes of the step again.
+    pub fn writes_only(&self) -> bool {
+        self.held || self.act
+    }
 }
 
 /// A turn that runs now.
@@ -318,6 +328,7 @@ fn facts_of(
         turns: work_ids.len(),
         agents,
         ticket_kind: ticket.counts.kind.clone(),
+        act: visit.kind == "act",
         ..StateFacts::default()
     };
     if visit.kind == "turn" && visit.agent.is_none() {

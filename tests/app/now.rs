@@ -35,6 +35,7 @@ fn base(kind: &str, step: &str) -> (vision::pipeline::TicketView, StateFacts) {
     v.kind = Some(kind.into());
     let facts = StateFacts {
         key: "DEMO-12".into(),
+        act: kind == "act",
         ..StateFacts::default()
     };
     (v, facts)

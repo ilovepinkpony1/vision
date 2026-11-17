@@ -15,6 +15,8 @@ mod colors;
 mod e2e;
 #[path = "app/feed.rs"]
 mod feed;
+#[path = "app/fifo.rs"]
+mod fifo;
 #[path = "app/form.rs"]
 mod form;
 #[path = "app/input.rs"]

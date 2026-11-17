@@ -162,7 +162,7 @@ pub fn write(mode: &str) -> WriteItem {
         intent: None,
         held: Vec::new(),
         step: "refine".into(),
-        turn_held: true,
+        writes_only: true,
     }
 }
 
@@ -199,6 +199,7 @@ pub fn flag_item(stopped: bool) -> FlagItem {
         branch: Some("vision/DEMO-12".into()),
         held: false,
         act: false,
+        writes_only: false,
         stopped,
     }
 }

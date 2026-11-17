@@ -134,11 +134,13 @@ pub(crate) fn record(
         }
     };
     ledger.finish_recording(&question.row.id, &id.to_string())?;
-    ctx.log(&format!(
-        "questions: {} answered by {} as {id}",
-        question.row.id, answer.by
-    ));
+    ctx.log(&answered_line(&question.row.id, &answer.by, id));
     Ok(id)
+}
+
+/// The line of the log of an answer whose record ended with its decision file.
+pub(crate) fn answered_line(card: &str, by: &str, decision: DecisionId) -> String {
+    format!("questions: {card} answered by {by} as {decision}")
 }
 
 /// Ends each recording that a different process started more than

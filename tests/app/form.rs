@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use vision::app::chain::{Check, CheckFacts};
 use vision::app::model::App;
 use vision::app::msg::{ChildResult, Effect, JobDone, Key, Msg};
-use vision::app::needs::{Draft, NeedItem, Reply, Target};
+use vision::app::needs::{Draft, Gone, NeedItem, Reply, Target};
 use vision::app::view::need_card::hits;
 
 use super::need_support::*;
@@ -306,7 +306,7 @@ fn drafts_of_questions_that_no_longer_wait_go_at_the_first_load_with_a_note() {
     let NeedItem::Questions(mut set) = form(three()) else {
         unreachable!()
     };
-    set.gone = vec!["Q-0001".into()];
+    set.gone = vec![("Q-0001".into(), Gone::Judge)];
     let mut app = home_with(
         SIZE,
         local(two_tickets(), vec![card_need("DEMO-12")]),
@@ -327,7 +327,7 @@ fn drafts_of_questions_that_no_longer_wait_go_at_the_first_load_with_a_note() {
     )));
     assert_eq!(
         need_card(&app).note.as_deref(),
-        Some("Q-0001 got an answer from the Judge or another command, so its draft is gone.")
+        Some("Q-0001 got an answer from the Judge, so its draft is gone.")
     );
 }
 
@@ -372,4 +372,156 @@ fn the_parts_that_a_click_can_hit_are_where_the_view_draws_them() {
         .copied()
         .unwrap();
     assert!(cell(x, y, 40).contains("Must the file have a header row?"));
+}
+
+#[test]
+fn the_drafts_file_is_written_away_from_the_loop_and_a_load_of_the_card_waits_for_it() {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+    use vision::app::runtime::Runtime;
+    use vision::app::view::theme::ColorMode;
+    use vision::app::worker::WorkerConfig;
+    use vision::paths::{Paths, TicketKey};
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::new(dir.path().join("home"));
+    let ticket = TicketKey::parse("DEMO-12").unwrap();
+    std::fs::create_dir_all(paths.ticket_dir(&ticket)).unwrap();
+    let worker = WorkerConfig {
+        exe: "/usr/bin/true".into(),
+        home: paths.home().to_path_buf(),
+        env: Some(Vec::new()),
+    };
+    let mut rt = Runtime::new(paths.clone(), worker, SIZE, ColorMode::Plain);
+    // The form of one question, its draft, and its send.
+    let mut app = open_with(SIZE, vec![one(false)]);
+    answer(&mut app, 3.0, 'a', "Keep it");
+    let job = jobs(&key(&mut app, 3.1, Key::Char('s')))
+        .pop()
+        .expect("the send runs");
+    rt.app = app;
+    // The drafts file is a FIFO: its read waits for a writer, which comes 2 seconds later.
+    let drafts = vision::app::drafts::path(&paths, &ticket);
+    let made = std::process::Command::new("mkfifo")
+        .arg(&drafts)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let opener = {
+        let drafts = drafts.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(2));
+            let until = Instant::now() + Duration::from_secs(20);
+            loop {
+                let open = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&drafts);
+                match open {
+                    Ok(_) => return Some(Instant::now()),
+                    Err(_) if Instant::now() < until => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(_) => return None,
+                }
+            }
+        })
+    };
+    // The send ended well, so its drafts go from the file: the loop does not wait for it.
+    let started = Instant::now();
+    rt.handle(Msg::JobDone(JobDone {
+        id: job.id,
+        kind: job.kind,
+        result: ChildResult {
+            code: Some(0),
+            ..ChildResult::default()
+        },
+    }));
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_secs(1),
+        "the loop waited {took:?} for the drafts file"
+    );
+    // A load of the card reads the drafts files: it starts after the write before it.
+    rt.handle(Msg::Key(Key::Char('n')));
+    let until = Instant::now() + Duration::from_secs(20);
+    let loaded = loop {
+        let left = until.saturating_duration_since(Instant::now());
+        match rt.wait(left) {
+            Some(Msg::Needs { .. }) => break Some(Instant::now()),
+            Some(_) => continue,
+            None => break None,
+        }
+    };
+    let opened = opener
+        .join()
+        .unwrap()
+        .expect("nothing read the drafts file");
+    let loaded = loaded.expect("the load of the card never ended");
+    assert!(
+        loaded >= opened,
+        "the load started before the write of the drafts ended"
+    );
+    assert!(
+        !drafts.exists(),
+        "the drop of the last draft removes the file"
+    );
+}
+
+#[test]
+fn a_send_that_saved_each_answer_but_not_their_records_says_so_and_keeps_the_drafts() {
+    let mut app = open_with(SIZE, vec![one(false), plan_item(false)]);
+    answer(&mut app, 3.0, 'a', "Keep it");
+    let fx = key(&mut app, 3.1, Key::Char('s'));
+    let job = jobs(&fx).pop().expect("the send runs");
+    // `vision answer --file` saved the decision file, but the ledger did not end the record.
+    let mut effects = send(
+        &mut app,
+        3.2,
+        Msg::JobDone(JobDone {
+            id: job.id,
+            kind: job.kind.clone(),
+            result: ChildResult {
+                code: Some(1),
+                stderr: "error: Vision saved each answer of the set, and the memory has the decision file D-0003. The ledger could not finish its record: database is locked. A tick after 2 minutes finishes it\n".into(),
+                ..ChildResult::default()
+            },
+        }),
+    );
+    let says = |app: &App| format!("{}\n{}", screen(app), notice(app));
+    let text = says(&app);
+    assert!(!text.contains("Nothing was recorded"), "{text}");
+    assert!(
+        notice(&app).starts_with("Vision saved your answer"),
+        "{text}"
+    );
+    // The question no longer waits: the next load of the card has only the plan. It does not
+    // say that the Judge or another command answered it.
+    if let Some(load) = effects.iter().find_map(|e| match e {
+        Effect::LoadNeeds(load) => Some(*load),
+        _ => None,
+    }) {
+        effects.extend(send(
+            &mut app,
+            3.3,
+            Msg::Needs {
+                load,
+                items: Box::new(Ok(vec![plan_item(false)])),
+            },
+        ));
+    }
+    let text = says(&app);
+    assert!(!text.contains("another command"), "{text}");
+    assert!(!text.contains("Nothing was recorded"), "{text}");
+    // The draft stays until the answer is final.
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::DropDrafts { .. })),
+        "{effects:?}"
+    );
+    assert_eq!(
+        need_card(&app).drafts.get("Q-0002"),
+        Some(&choice(0, "Keep it"))
+    );
 }

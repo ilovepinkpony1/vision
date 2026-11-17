@@ -426,6 +426,23 @@ fn three_questions_world() -> World {
     world
 }
 
+/// The text of the drafts file once `holds` takes it, or `None` for no file: the writer of the
+/// drafts writes the file apart from the loop.
+fn wait_drafts(path: &std::path::Path, holds: impl Fn(Option<&str>) -> bool) -> Option<String> {
+    let until = std::time::Instant::now() + LIMIT;
+    loop {
+        let text = std::fs::read_to_string(path).ok();
+        if holds(text.as_deref()) {
+            return text;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "the drafts file never held it: {text:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// The open card of the needs.
 fn needs_card(app: &App) -> &vision::app::needs::NeedsCard {
     match &app.card {
@@ -459,8 +476,10 @@ fn a_form_of_three_questions_keeps_its_drafts_and_sends_each_answer_with_its_rea
     type_keys(&mut rt, "Integers are enough");
     rt.handle(Msg::Key(Key::Enter));
     assert_eq!(needs_card(&rt.app).page, 2);
-    let text = std::fs::read_to_string(&drafts_file).unwrap();
-    assert!(text.contains("Q-0001") && text.contains("Q-0002"), "{text}");
+    let text = wait_drafts(&drafts_file, |text| {
+        text.is_some_and(|t| t.contains("Q-0001") && t.contains("Q-0002"))
+    })
+    .unwrap();
     assert!(!text.contains("Q-0003"), "{text}");
     assert!(rows(&world).human.is_empty(), "nothing goes to Vision yet");
 
@@ -532,8 +551,9 @@ fn a_form_of_three_questions_keeps_its_drafts_and_sends_each_answer_with_its_rea
         "Sent your 3 answers. scout gets them at the next pass."
     );
     assert_eq!(rt.app.card, None);
-    assert!(
-        !drafts_file.exists(),
+    assert_eq!(
+        wait_drafts(&drafts_file, |text| text.is_none()),
+        None,
         "the send removes the drafts of its set"
     );
     let human: Vec<(String, String, Option<String>, Option<String>)> = rows(&world)
@@ -673,7 +693,7 @@ fn y_on_the_first_write_ends_with_the_write_sent_and_the_verb_in_the_mode_ask() 
     assert_eq!(write.verb, "tracker.describe");
     assert_eq!(write.mode, "shadow");
     assert_eq!(write.step, "refine");
-    assert!(write.turn_held);
+    assert!(write.writes_only);
     let intent = write.intent.clone().expect("the recorded intent");
     assert_eq!(intent["args"]["text"], "Add subtract(a, b).");
     rt.handle(Msg::Key(Key::Char('y')));
@@ -977,4 +997,174 @@ fn a_failed_take_after_the_session_says_the_state_and_n_continues_the_ticket() {
     assert!(world.flags().is_empty(), "{:?}", world.flags());
     resumes_the_session(&world);
     world.settle();
+}
+
+// ----- The drafts of questions that left the form ----------------------------------------
+
+/// The first load of a card with the real items of the home: the ids of the drafts that it
+/// drops, and the note of the card.
+fn first_load(world: &World) -> (Vec<String>, Option<String>) {
+    use super::need_support::press_n;
+    use super::support::{card_need, home_with, local, queue, send, two_tickets};
+    let items = vision::app::load_needs::needs(&world.ctx().paths).unwrap();
+    let mut app = home_with(
+        (110, 32),
+        local(two_tickets(), vec![card_need(KEY)]),
+        Some(queue()),
+    );
+    let load = press_n(&mut app);
+    let fx = send(
+        &mut app,
+        2.1,
+        Msg::Needs {
+            load,
+            items: Box::new(Ok(items)),
+        },
+    );
+    let dropped = fx
+        .iter()
+        .filter_map(|e| match e {
+            vision::app::msg::Effect::DropDrafts { ids, .. } => Some(ids.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let note = match &app.card {
+        Some(Card::Need(card)) => card.note.clone(),
+        _ => None,
+    };
+    (dropped, note)
+}
+
+#[test]
+fn a_draft_stays_while_the_record_of_its_answer_waits_and_the_note_names_who_answered() {
+    use vision::app::needs::{Draft, Reply};
+    let world = three_questions_world();
+    let paths = world.ctx().paths;
+    let draft = |n: usize| Draft::Answer {
+        reply: Reply::Choice(n),
+        why: "From the form".into(),
+    };
+    vision::app::drafts::save(
+        &paths,
+        KEY,
+        &[
+            ("Q-0001".into(), draft(0)),
+            ("Q-0002".into(), draft(1)),
+            ("Q-0003".into(), draft(0)),
+        ],
+    )
+    .unwrap();
+    // Q-0001 has the answer of the person in `recording`, as after a send whose records did
+    // not end. The Judge answered Q-0002. Q-0003 still waits, in a form of its own.
+    let answer = |by: &str| {
+        serde_json::to_string(&vision::questions::Answer {
+            choice: Some(0),
+            text: "Yes".into(),
+            by: by.into(),
+            why: String::new(),
+            when: String::new(),
+        })
+        .unwrap()
+    };
+    let conn = world.ledger();
+    conn.conn()
+        .execute(
+            "UPDATE questions SET state = 'recording', answer = ?1 WHERE id = 'Q-0001'",
+            [answer("user")],
+        )
+        .unwrap();
+    conn.conn()
+        .execute(
+            "UPDATE questions SET state = 'answered', answer = ?1 WHERE id = 'Q-0002'",
+            [answer("judge")],
+        )
+        .unwrap();
+    // The first load of a card drops only the draft of Q-0002, and says who answered it.
+    let (dropped, note) = first_load(&world);
+    assert_eq!(dropped, ["Q-0002"], "the record of Q-0001 is not final yet");
+    assert_eq!(
+        note.as_deref(),
+        Some("Q-0002 got an answer from the Judge, so its draft is gone.")
+    );
+    // A tick finishes the record of Q-0001: its draft goes, and the note names the person.
+    vision::app::drafts::drop(&paths, KEY, &["Q-0002".into()]).unwrap();
+    conn.conn()
+        .execute(
+            "UPDATE questions SET state = 'answered' WHERE id = 'Q-0001'",
+            [],
+        )
+        .unwrap();
+    let (dropped, note) = first_load(&world);
+    assert_eq!(dropped, ["Q-0001"]);
+    assert_eq!(
+        note.as_deref(),
+        Some("Q-0001 got your answer, so its draft is gone.")
+    );
+}
+
+#[test]
+fn a_send_whose_records_cannot_end_says_that_vision_saved_the_answers_and_keeps_the_drafts() {
+    let world = three_questions_world();
+    let drafts_file = world
+        .vision
+        .join("tickets")
+        .join(KEY)
+        .join("answer-drafts.json");
+    let mut rt = start(&world);
+    let NeedItem::Questions(_) = open_need(&mut rt) else {
+        panic!("not a form: {:?}", shown(&rt.app));
+    };
+    for (letter, why) in [('a', "One"), ('b', "Two"), ('a', "Three")] {
+        rt.handle(Msg::Key(Key::Char(letter)));
+        type_keys(&mut rt, why);
+        rt.handle(Msg::Key(Key::Enter));
+    }
+    assert!(needs_card(&rt.app).reviewing());
+    wait_drafts(&drafts_file, |text| {
+        text.is_some_and(|t| t.contains("Q-0003"))
+    });
+    // The ledger refuses the events of the answers: `vision answer --file` fails after the
+    // commit of the decision files.
+    world
+        .ledger()
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER refuse_answers BEFORE INSERT ON events WHEN NEW.kind = 'card-answered'
+             BEGIN SELECT RAISE(ABORT, 'the test refuses the event'); END;",
+        )
+        .unwrap();
+    rt.handle(Msg::Key(Key::Char('s')));
+    wait_chain(&mut rt);
+    assert_eq!(rt.app.chain, None);
+    assert_eq!(
+        notice(&rt.app),
+        "Vision saved your answers, and a later pass finishes their records. Your drafts stay until then."
+    );
+    assert_eq!(rt.app.card, None, "the form no longer waits");
+    let states = |world: &World| -> Vec<String> {
+        ["Q-0001", "Q-0002", "Q-0003"]
+            .iter()
+            .map(|id| world.ledger().question(id).unwrap().unwrap().state)
+            .collect()
+    };
+    assert_eq!(states(&world), ["recording", "recording", "recording"]);
+    let text = std::fs::read_to_string(&drafts_file).unwrap();
+    assert!(
+        ["Q-0001", "Q-0002", "Q-0003"]
+            .iter()
+            .all(|id| text.contains(id)),
+        "{text}"
+    );
+    // After the grace of a recording, a tick finishes each record.
+    world
+        .ledger()
+        .conn()
+        .execute_batch(
+            "DROP TRIGGER refuse_answers;
+             UPDATE questions SET answered = '2026-01-01T00:00:00Z' WHERE state = 'recording'",
+        )
+        .unwrap();
+    world.tick();
+    assert_eq!(states(&world), ["answered", "answered", "answered"]);
 }

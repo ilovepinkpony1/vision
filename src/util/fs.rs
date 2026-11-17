@@ -29,6 +29,15 @@ fn temp_path(path: &Path) -> Result<PathBuf> {
     )))
 }
 
+/// True when `name` is the name of a temporary file of a write of the file `file`, as
+/// [`atomic_write`] names it.
+pub fn is_temp_of(name: &str, file: &str) -> bool {
+    name.strip_prefix('.')
+        .and_then(|rest| rest.strip_prefix(file))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|rest| rest.ends_with(".tmp"))
+}
+
 /// Writes `bytes` to `path` through a temporary file in the same folder and a rename.
 /// The folder must exist.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -155,6 +164,18 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec!["state.json"], "no temporary file stays");
+    }
+
+    #[test]
+    fn the_name_of_a_temporary_file_names_its_file() {
+        let path = Path::new("/home/tickets/DEMO-12/answer-drafts.json");
+        let temp = temp_path(path).unwrap();
+        let name = temp.file_name().unwrap().to_str().unwrap();
+        assert!(is_temp_of(name, "answer-drafts.json"), "{name}");
+        assert!(!is_temp_of(name, "answer-send.json"));
+        assert!(!is_temp_of("answer-drafts.json", "answer-drafts.json"));
+        assert!(!is_temp_of(".answer-drafts.json", "answer-drafts.json"));
+        assert!(!is_temp_of(".answer-drafts.json.tmp", "answer-drafts.json"));
     }
 
     #[test]

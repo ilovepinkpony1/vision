@@ -144,6 +144,7 @@ fn the_next_step_starts_at_the_next_pass() {
 fn an_act_step_names_the_write_that_runs_next() {
     let mut held = resting("open-pr");
     held.view.kind = Some("act".into());
+    held.facts.act = true;
     held.view.pr = None;
     held.facts.agent = None;
     held.facts.run = vec!["git.push".into(), "pr.open".into()];

@@ -6,10 +6,11 @@
 //! data version of the ledger, the stamps of the files that the screens read, the job that a
 //! pass runs, the turns that run with their minutes, the timer, and the proposals. It reads the
 //! data again only when the check changed, when the update has no data, or when the last read
-//! is 15 seconds old. Else it answers with one small message. The configuration and the
-//! adapter are read again only when their files change, the proposals of the memory only
-//! after an action or a session ended, when the refs of the memory change, or each minute, and
-//! the count of the commits that the forge does not have each 10 seconds.
+//! is 15 seconds old. Else it answers with one small message. The configuration is read again
+//! only when its file changes, and the adapter only when what its load read changes: its
+//! `adapter.toml`, its scripts folder, or a role file of `[agents]`. The proposals of the memory
+//! are read again only after an action or a session ended, when the refs of the memory change,
+//! or each minute, and the count of the commits that the forge does not have each 10 seconds.
 
 use std::ffi::OsString;
 use std::panic::AssertUnwindSafe;
@@ -146,16 +147,26 @@ pub struct Reads {
     pub config: usize,
 }
 
+/// What the load of the adapter read: its folder, the stamp of its `adapter.toml`, and the
+/// answer of each test that the load makes on the disk ([`crate::adapter::Adapter::disk_tests`]).
+/// When it changes, the context forgets the adapter, and the next read loads it again.
+#[derive(Clone, Debug, PartialEq)]
+struct AdapterKey {
+    dir: PathBuf,
+    file: Option<Stamp>,
+    tests: Vec<bool>,
+}
+
 /// What a check found: when it differs from the check of the last read, the data is read again.
 #[derive(Clone, Debug, PartialEq)]
 struct Check {
     /// The data version of the ledger.
     version: i64,
-    /// `config.toml`, the folder and the `adapter.toml` of the adapter, and the file `off`.
+    /// `config.toml` and the file `off`.
     files: Vec<Option<Stamp>>,
-    adapter: Option<PathBuf>,
-    /// Each entry of the folder of each ticket that the data shows, such as `plan.md`.
-    folders: Vec<Vec<(OsString, Stamp)>>,
+    adapter: Option<AdapterKey>,
+    /// Each ticket that the data shows, with each entry of its folder, such as `plan.md`.
+    folders: Vec<(String, Vec<(OsString, Stamp)>)>,
     /// The job or the operation that a pass runs now.
     running: Option<Running>,
     /// Each turn that runs, with its phase and its minutes so far.
@@ -265,8 +276,12 @@ pub struct State {
     ctx: Ctx,
     /// The stamp of `config.toml` when the context was made.
     config: Option<Stamp>,
-    /// Where the adapter is and the stamp of its `adapter.toml`, when the context kept it.
-    adapter: Option<(PathBuf, Option<Stamp>)>,
+    /// What the load of the adapter read, when the context kept it.
+    adapter: Option<AdapterKey>,
+    /// The tests that a load of the adapter makes on the disk, from the parse of its
+    /// `adapter.toml` when the file changed last. `None` when there is no adapter, or when the
+    /// file does not parse.
+    disk_tests: Option<Vec<(PathBuf, bool)>>,
     ledger: Option<Ledger>,
     /// The stamp of the ledger file of the connection.
     ledger_file: Option<Stamp>,
@@ -284,6 +299,7 @@ impl State {
             ctx: Ctx::keeping_adapter(paths.clone()),
             config: stamp(&paths.config()),
             adapter: None,
+            disk_tests: None,
             ledger: None,
             ledger_file: None,
             proposals: Proposals::default(),
@@ -323,7 +339,7 @@ impl State {
             Ok(Some(local)) => Msg::Local(Ok(local)),
             Ok(None) => Msg::LocalSame,
             Err(e) => {
-                self.failed();
+                self.failed(&e);
                 self.local = Seen::default();
                 Msg::Local(Err(format!("{e:#}")))
             }
@@ -342,7 +358,7 @@ impl State {
                 key: key.to_string(),
             },
             Err(e) => {
-                self.failed();
+                self.failed(&e);
                 if let Some(live) = self.live.as_mut() {
                     live.seen = Seen::default();
                 }
@@ -354,20 +370,29 @@ impl State {
         }
     }
 
-    /// After a failed read, the next read opens a new connection.
-    fn failed(&mut self) {
-        self.ledger = None;
-        self.ledger_file = None;
+    /// After a read that failed with an error of SQLite or of the disk, the next read opens a
+    /// new connection. Another error, such as a ticket that the ledger no longer has, keeps the
+    /// connection.
+    fn failed(&mut self, error: &anyhow::Error) {
+        let broken = error
+            .chain()
+            .any(|cause| cause.is::<rusqlite::Error>() || cause.is::<std::io::Error>());
+        if broken {
+            self.ledger = None;
+            self.ledger_file = None;
+        }
     }
 
-    /// A new context when `config.toml` changed, and no kept adapter when the adapter is in
-    /// another folder or its `adapter.toml` changed. The adapter reads no other file.
+    /// A new context when `config.toml` changed, and no kept adapter when what its load read
+    /// changed: the adapter is in another folder, its `adapter.toml` changed, or a test that the
+    /// load makes on the disk gives another answer, such as a role file that went away.
     fn refresh_ctx(&mut self) {
         let config = stamp(&self.paths.config());
         if config != self.config {
             self.ctx = Ctx::keeping_adapter(self.paths.clone());
             self.config = config;
             self.adapter = None;
+            self.disk_tests = None;
             self.reads.config += 1;
         }
         // The adapter: where it is, by the configuration, and the stamp of its file.
@@ -380,9 +405,27 @@ impl State {
                 let file = located.dir.join(crate::adapter::FILE);
                 (located.dir, stamp(&file))
             });
-        if located != self.adapter {
+        // The tests come from a parse of the text of the file, which reads no other file, each
+        // time the file changes.
+        let same_file = match (&self.adapter, &located) {
+            (Some(kept), Some((dir, file))) => kept.dir == *dir && kept.file == *file,
+            _ => false,
+        };
+        if !same_file {
+            self.disk_tests = located.as_ref().and_then(|(dir, _)| {
+                let text = std::fs::read_to_string(dir.join(crate::adapter::FILE)).ok()?;
+                let adapter = crate::adapter::Adapter::parse(&text, dir).ok()?;
+                Some(adapter.disk_tests())
+            });
+        }
+        let key = located.map(|(dir, file)| AdapterKey {
+            dir,
+            file,
+            tests: crate::adapter::disk_answers(self.disk_tests.as_deref().unwrap_or_default()),
+        });
+        if key != self.adapter {
             self.ctx.forget_adapter();
-            self.adapter = located;
+            self.adapter = key;
         }
     }
 
@@ -420,17 +463,17 @@ impl State {
             .collect();
         let folders = keys
             .iter()
-            .filter_map(|key| TicketKey::parse(key).ok())
-            .map(|key| folder_stamp(&self.paths.ticket_dir(&key)))
+            .map(|key| {
+                let entries = TicketKey::parse(key)
+                    .map(|key| folder_stamp(&self.paths.ticket_dir(&key)))
+                    .unwrap_or_default();
+                (key.clone(), entries)
+            })
             .collect();
         Ok(Check {
             version,
-            files: vec![
-                self.config,
-                self.adapter.as_ref().and_then(|(_, file)| *file),
-                stamp(&self.paths.off()),
-            ],
-            adapter: self.adapter.as_ref().map(|(dir, _)| dir.clone()),
+            files: vec![self.config, stamp(&self.paths.off())],
+            adapter: self.adapter.clone(),
             folders,
             running: crate::running::read(&self.paths),
             turns,
@@ -460,13 +503,26 @@ impl State {
         let local = load::local_with(&self.ctx, ledger, crate::curator::needs_of(open), wall)?;
         self.reads.local += 1;
         let shown: Vec<String> = local.tickets.iter().map(|h| h.view.key.clone()).collect();
-        // The check of this read names the folders of the tickets that it shows.
+        // The check of this read names the folders of the tickets that it shows. Each other part
+        // stays as the check before the read found it, so a write during the read shows at the
+        // next look. A ticket that the check before the read did not name gets no entry of its
+        // folder, so the next look reads again when its folder has an entry.
         let check = if shown == keys {
             check
         } else {
+            let folders = shown
+                .iter()
+                .map(|key| {
+                    check
+                        .folders
+                        .iter()
+                        .find(|(named, _)| named == key)
+                        .cloned()
+                        .unwrap_or_else(|| (key.clone(), Vec::new()))
+                })
+                .collect();
             self.local_keys = shown;
-            let keys = self.local_keys.clone();
-            self.check(&keys, Some(self.proposals.generation))?
+            Check { folders, ..check }
         };
         self.local = Seen {
             check: Some(check),
@@ -523,13 +579,15 @@ impl State {
 
 /// The name and the stamp of each entry of a folder, by name. An entry that is written or
 /// renamed, a new entry, and a removed entry each change it. A folder that is not there gives
-/// no entry.
+/// no entry. The files of the question form are left out: no screen of the loader reads them,
+/// and the form writes its drafts file after each draft.
 fn folder_stamp(dir: &Path) -> Vec<(OsString, Stamp)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut out: Vec<(OsString, Stamp)> = entries
         .flatten()
+        .filter(|entry| !super::drafts::is_form_file(&entry.file_name()))
         .filter_map(|entry| {
             let path = entry.path();
             Some((entry.file_name(), stamp(&path)?))
@@ -537,4 +595,58 @@ fn folder_stamp(dir: &Path) -> Vec<(OsString, Stamp)> {
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A home that `vision init` made, with no ticket.
+    fn home() -> (tempfile::TempDir, Paths) {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path().join("home"));
+        crate::init::run(&Ctx::new(paths.clone())).unwrap();
+        (dir, paths)
+    }
+
+    fn error_of(msg: Msg) -> String {
+        match msg {
+            Msg::Ticket { data, .. } => (*data).unwrap_err(),
+            other => panic!("no error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_read_that_finds_no_ticket_keeps_the_connection_and_an_error_of_sqlite_drops_it() {
+        let (_dir, paths) = home();
+        let mut state = State::new(paths.clone());
+        // The live view of a ticket that the ledger does not have, each second.
+        for _ in 0..2 {
+            let error = error_of(state.ticket("DEMO-999", false));
+            assert!(error.contains("no ticket DEMO-999"), "{error}");
+            assert!(
+                state.ledger.is_some(),
+                "a read that finds no ticket keeps the connection"
+            );
+        }
+        // An error of SQLite drops the connection, and the next read opens a new one.
+        let other = Ledger::open(&paths.ledger()).unwrap();
+        other
+            .conn()
+            .execute_batch("ALTER TABLE tickets RENAME TO tickets_away")
+            .unwrap();
+        let error = error_of(state.ticket("DEMO-999", false));
+        assert!(error.contains("tickets"), "{error}");
+        assert!(
+            state.ledger.is_none(),
+            "an error of SQLite drops the connection"
+        );
+        other
+            .conn()
+            .execute_batch("ALTER TABLE tickets_away RENAME TO tickets")
+            .unwrap();
+        let error = error_of(state.ticket("DEMO-999", false));
+        assert!(error.contains("no ticket DEMO-999"), "{error}");
+        assert!(state.ledger.is_some());
+    }
 }

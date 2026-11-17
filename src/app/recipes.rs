@@ -283,7 +283,7 @@ pub fn first_write(id: u64, item: &WriteItem, auto: bool) -> Chain {
             "{verb} is in the mode {mode} now. {key} goes on at the step {step}, and the next pass asks for {verb} again. Nothing was sent yet."
         )
     };
-    let retry_label = if item.turn_held {
+    let retry_label = if item.writes_only {
         format!("run the writes of the step {step} of {key} again")
     } else {
         format!("start the step {step} of {key} again")
@@ -343,7 +343,7 @@ pub fn retry(id: u64, item: &FlagItem, paused: bool) -> Chain {
             format!("{key} is still paused."),
         )
     } else {
-        let label = if item.held || item.act {
+        let label = if item.writes_only {
             format!("run the writes of the step {step} of {key} again")
         } else {
             format!("start the step {step} of {key} again")

@@ -595,7 +595,7 @@ fn next(input: &Input, step: &str) -> Now {
             EntryState::Cannot(text) => format!("{label} cannot run: {}", cut_words(text, 60)),
             EntryState::Other(text) => format!("{label} is {text}"),
         }
-    } else if facts.held || kind == "act" {
+    } else if facts.writes_only() {
         // The turn held its end facts and each write after it is done, or each write of an
         // act step is done.
         "the next pass moves it to its next step".to_string()
@@ -620,7 +620,7 @@ fn next(input: &Input, step: &str) -> Now {
         Pass::Off => "Vision is off, so nothing starts. Press K on Home to turn it on.",
     };
     // An act step names its writes in their order: it runs no agent.
-    let rest = if kind == "act" && !facts.run.is_empty() {
+    let rest = if facts.act && !facts.run.is_empty() {
         format!(
             "No agent works. The step runs {}.",
             facts.run.join(", then ")

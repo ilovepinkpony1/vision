@@ -934,6 +934,79 @@ fn answer_file_records_each_answer_of_a_set_or_none() {
 }
 
 #[test]
+fn an_answer_file_whose_records_cannot_end_says_that_vision_saved_each_answer() {
+    let home = TestHome::new();
+    seed_memory(&home);
+    judge_scenario(
+        &home,
+        json!([judge_result(vec![
+            entry("Q-0001", "ask", "none", &[], false, None),
+            entry("Q-0002", "ask", "none", &[], false, None),
+        ])]),
+    );
+    ask(
+        &home,
+        "unfinished",
+        vec![card(1, &[]), card(2, &[])],
+        resumed_steps(),
+    );
+    judge_round(&home);
+    assert_eq!(states(&home), ["asked", "asked"]);
+    // The ledger refuses the events of the answers: the second transaction fails after the
+    // commit of the decision files.
+    home.ledger()
+        .conn()
+        .execute_batch(
+            "CREATE TRIGGER refuse_answers BEFORE INSERT ON events WHEN NEW.kind = 'card-answered'
+             BEGIN SELECT RAISE(ABORT, 'the test refuses the event'); END;",
+        )
+        .unwrap();
+    let before = decision_files(&home);
+    let file = home.vision.join("answers.json");
+    std::fs::write(
+        &file,
+        json!({"Q-0001": {"choice": 2, "why": "Sheets keep formulas."}, "Q-0002": {"needless": "code"}})
+            .to_string(),
+    )
+    .unwrap();
+    let run = home.run(&["answer", "--file", file.to_str().unwrap()]);
+    run.expect_code(1);
+    // The answer has its decision file, its row waits in `recording` for a tick, and the mark
+    // needless is final: the error says that Vision saved each answer, and how it ends.
+    let after = decision_files(&home);
+    assert_eq!(after.len(), before.len() + 1);
+    let decision = after.last().unwrap().trim_end_matches(".md").to_string();
+    assert!(memory_file(&home, &format!("decisions/{decision}.md")).contains("## Answer\nXLSX"));
+    assert_eq!(states(&home), ["recording", "needless"]);
+    assert!(!run.stderr.contains("no answer was recorded"), "{run:?}");
+    assert!(
+        run.stderr
+            .contains("Vision saved each answer of the set, and the memory has the decision file"),
+        "{run:?}"
+    );
+    assert!(run.stderr.contains(&decision), "{run:?}");
+    assert!(run.stderr.contains("the test refuses the event"), "{run:?}");
+    assert!(
+        run.stderr.contains("A tick after 2 minutes finishes it"),
+        "{run:?}"
+    );
+    // A tick finishes the record with the same decision file, once the grace of the recording
+    // passed.
+    home.ledger()
+        .conn()
+        .execute_batch(
+            "DROP TRIGGER refuse_answers;
+             UPDATE questions SET answered = '2026-01-01T00:00:00Z' WHERE id = 'Q-0001'",
+        )
+        .unwrap();
+    tick(&home);
+    let q1 = row(&home, "Q-0001");
+    assert_eq!(q1.state, "answered");
+    assert_eq!(q1.decision.as_deref(), Some(decision.as_str()));
+    assert_eq!(decision_files(&home), after);
+}
+
+#[test]
 fn a_correction_supersedes_the_judge_and_reaches_the_ticket() {
     let home = TestHome::new();
     seed_memory(&home);

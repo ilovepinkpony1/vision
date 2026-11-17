@@ -13,7 +13,9 @@ use crate::ctx::Ctx;
 use crate::ledger::questions::{HumanRow, STATE_ANSWERED, STATE_ASKED, STATE_PROPOSED};
 use crate::ledger::{Event, Ledger};
 use crate::memory::store::short;
-use crate::memory::{DecisionId, Memory, MemoryFile, MemoryId, NewDecision, Status, UseKind};
+use crate::memory::{
+    DecisionId, Memory, MemoryFile, MemoryId, NewDecision, PrincipleId, Status, UseKind,
+};
 use crate::paths::TicketKey;
 use crate::turn::{self, Told};
 use crate::util::time;
@@ -150,6 +152,46 @@ pub(super) fn needless_human(
     }
 }
 
+/// The event of an answer of the person whose record ended: the card, its decision file, and
+/// whether the person took the proposal of the Judge. `vision answer` and the answers of a set
+/// write the same event.
+pub(super) fn answered_event(
+    question: &Question,
+    decision: DecisionId,
+    took: Option<bool>,
+) -> Event {
+    Event::now("user", "card-answered")
+        .ticket(&question.row.ticket)
+        .detail(json!({"card": question.row.id, "decision": decision.to_string(), "took_proposal": took}))
+}
+
+/// The event of a needless mark, with the place where the answer already was.
+pub(super) fn needless_event(question: &Question, name: &str) -> Event {
+    Event::now("user", "card-needless")
+        .ticket(&question.row.ticket)
+        .detail(json!({"card": question.row.id, "reason": name}))
+}
+
+/// The line of the log of a needless mark.
+pub(super) fn needless_line(card: &str, name: &str) -> String {
+    format!("questions: {card} marked as needless ({name})")
+}
+
+/// The principles that an answer of the person agrees with: each principle that the proposal
+/// of the Judge named, when the person took the proposal unchanged.
+pub(super) fn agreed(memory: &Memory, question: &Question, took: Option<bool>) -> Vec<PrincipleId> {
+    if took != Some(true) {
+        return Vec::new();
+    }
+    let sources = question
+        .view
+        .judge
+        .as_ref()
+        .map(|e| e.sources.clone())
+        .unwrap_or_default();
+    record::principles(memory, &sources)
+}
+
 /// Records an answer of the person: a decision file with the person as the writer, the
 /// reason, and where it applies; the row; and one `human` row. When the person took the
 /// proposal of the Judge unchanged, each principle that the proposal named counts as agreed.
@@ -184,20 +226,14 @@ pub fn answer_card(
         }
     };
     crate::pipeline::crash_point("answer-recorded");
-    if took == Some(true) {
-        let sources = question
-            .view
-            .judge
-            .as_ref()
-            .map(|e| e.sources.clone())
-            .unwrap_or_default();
-        count(ctx, memory, &sources, UseKind::Agreed, memory.person());
-    }
-    ledger.add_event(
-        &Event::now("user", "card-answered")
-            .ticket(&question.row.ticket)
-            .detail(json!({"card": id, "decision": decision.to_string(), "took_proposal": took})),
-    )?;
+    record::count_ids(
+        ctx,
+        memory,
+        &agreed(memory, &question, took),
+        UseKind::Agreed,
+        memory.person(),
+    );
+    ledger.add_event(&answered_event(&question, decision, took))?;
     Ok(Answered {
         turn_complete: turn_complete(ledger, &question.row.turn)?,
         id,
@@ -223,12 +259,8 @@ pub fn mark_needless(
         bail!("{id} got an answer from a different command meanwhile");
     }
     ledger.add_human(&needless_human(&question, name, &at, seconds))?;
-    ledger.add_event(
-        &Event::now("user", "card-needless")
-            .ticket(&question.row.ticket)
-            .detail(json!({"card": id, "reason": name})),
-    )?;
-    ctx.log(&format!("questions: {id} marked as needless ({name})"));
+    ledger.add_event(&needless_event(&question, name))?;
+    ctx.log(&needless_line(&id, name));
     Ok(Answered {
         turn_complete: turn_complete(ledger, &question.row.turn)?,
         id,

@@ -11,6 +11,7 @@
 use super::super::chain::{judge, Chain, CheckFacts, End, Mark, Owner, Verdict, Work, MAX_PASSES};
 use super::super::model::{App, Card, OpenedCard, Run, Screen, Tone};
 use super::super::msg::{Action, ChildResult, Effect, Handoff, JobDone, JobKind};
+use super::super::needs::Draft;
 use super::super::text::{error_line, tidy};
 use super::{engine, models, needs, notice};
 
@@ -124,6 +125,12 @@ fn set_started(app: &mut App, job: Option<u64>) {
 
 /// The end of a job of the chain.
 pub fn on_done(app: &mut App, done: &JobDone, fx: &mut Vec<Effect>) {
+    if let JobKind::Action(Action::AnswerSet { ticket, answers }) = &done.kind {
+        if !done.result.ok() && done.result.stderr.contains(crate::questions::set::SAVED) {
+            saved(app, ticket, answers, fx);
+            return;
+        }
+    }
     if !done.result.ok() {
         let text = match done.kind {
             JobKind::Pass => format!("The pass failed: {}", error_line(&done.result.failure())),
@@ -224,7 +231,7 @@ fn finish(app: &mut App, fx: &mut Vec<Effect>) {
                     needs::sent(app, ticket, ids, fx);
                 }
             }
-            needs::done(app, item, &chain.done, fx)
+            needs::done(app, item, &chain.done, Tone::Ok, fx)
         }
         Owner::TakeOver { .. } => {}
         Owner::Continue(key) => {
@@ -235,6 +242,35 @@ fn finish(app: &mut App, fx: &mut Vec<Effect>) {
         }
         Owner::Models(agent) => models::changed(app, agent, &chain.done, fx),
     }
+}
+
+/// The send of a form saved each answer, but the ledger did not finish their records: the form
+/// goes, as after a send that worked, and the notice says it. A needless mark is final, so its
+/// draft goes. The draft of an answer stays until a pass finishes its record and a later load
+/// finds the answer final.
+fn saved(app: &mut App, ticket: &str, answers: &[(String, Draft)], fx: &mut Vec<Effect>) {
+    let Some(chain) = app.chain.take() else {
+        return;
+    };
+    let Owner::Need(item) = &chain.owner else {
+        return;
+    };
+    let marks: Vec<String> = answers
+        .iter()
+        .filter(|(_, draft)| matches!(draft, Draft::Needless(_)))
+        .map(|(id, _)| id.clone())
+        .collect();
+    let open = answers.len() - marks.len();
+    let text = match (open, answers.len()) {
+        (0, 1) => "Vision saved your answer.",
+        (0, _) => "Vision saved your answers.",
+        (_, 1) => "Vision saved your answer, and a later pass finishes its record. Your draft stays until then.",
+        _ => "Vision saved your answers, and a later pass finishes their records. Your drafts stay until then.",
+    };
+    if !marks.is_empty() {
+        needs::sent(app, ticket, marks, fx);
+    }
+    needs::done(app, item, text, Tone::Info, fx);
 }
 
 /// A step failed: the chain stops. Its card shows the reason and the state of the ticket; with

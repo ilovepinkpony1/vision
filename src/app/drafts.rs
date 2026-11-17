@@ -8,6 +8,7 @@
 //! that is not valid is left out. The next write replaces such a file.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -15,7 +16,7 @@ use anyhow::Result;
 use super::needs::Draft;
 use crate::paths::{Paths, TicketKey};
 use crate::questions::set::{parse_entries, render_entries};
-use crate::util::fs::{atomic_write, ensure_dir};
+use crate::util::fs::{atomic_write, ensure_dir, is_temp_of};
 
 /// The name of the drafts file in the folder of a ticket.
 pub const FILE: &str = "answer-drafts.json";
@@ -23,6 +24,18 @@ pub const FILE: &str = "answer-drafts.json";
 /// The name of the file of one send, in the folder of a ticket. The worker writes it before
 /// `vision answer --file` runs, and removes it after.
 pub const SEND_FILE: &str = "answer-send.json";
+
+/// True for the name of the drafts file, of the file of a send, or of a temporary file of a
+/// write of one of them. Only the question form reads these files, so the check of the loader
+/// leaves them out of the stamp of a ticket folder.
+pub fn is_form_file(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    [FILE, SEND_FILE]
+        .iter()
+        .any(|file| name == *file || is_temp_of(name, file))
+}
 
 /// The drafts file of a ticket.
 pub fn path(paths: &Paths, key: &TicketKey) -> PathBuf {

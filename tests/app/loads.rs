@@ -13,6 +13,7 @@ use vision::app::load_ticket::{self, EventLines};
 use vision::app::loader::State;
 use vision::app::model::{Held, Local, Week};
 use vision::app::msg::Msg;
+use vision::app::needs::Draft;
 use vision::ctx::Ctx;
 use vision::ledger::turns::{NewTurn, TurnEnd, Window};
 use vision::ledger::Event;
@@ -25,6 +26,7 @@ use vision::snapshot::{collect_needs, NeedKind};
 use vision::status::StatusView;
 use vision::util::time::rfc3339;
 
+use super::fifo::Fifo;
 use super::pipeline_support::{simple_scenarios, World, KEY};
 
 /// The finished tickets of the home: the first half finished a day ago, the rest a month ago.
@@ -486,14 +488,18 @@ fn the_loader_reads_again_only_after_a_change() {
     let mut state = State::new(paths.clone());
     let reads = |state: &State| state.reads().local;
 
-    // The first look reads; a look with no change gives a small message.
+    // The first look reads. Its check did not name the tickets that the read shows, so it
+    // has no stamps of their folders from before the read: the next look reads once more.
+    // After it, a look with no change gives a small message.
     local_of(state.local(wall, false));
     assert_eq!(reads(&state), 1);
+    local_of(state.local(wall, false));
+    assert_eq!(reads(&state), 2);
     assert_eq!(state.local(wall, false), Msg::LocalSame);
-    assert_eq!(reads(&state), 1);
+    assert_eq!(reads(&state), 2);
     // A look of an update with no data reads whatever the check says.
     local_of(state.local(wall, true));
-    assert_eq!(reads(&state), 2);
+    assert_eq!(reads(&state), 3);
 
     // A write of another connection to the ledger.
     world
@@ -501,7 +507,7 @@ fn the_loader_reads_again_only_after_a_change() {
         .add_event(&Event::now("user", "note").ticket(OTHER))
         .unwrap();
     local_of(state.local(wall, false));
-    assert_eq!(reads(&state), 3);
+    assert_eq!(reads(&state), 4);
     assert_eq!(state.local(wall, false), Msg::LocalSame);
 
     // A file of a ticket in progress, such as its plan.
@@ -509,7 +515,7 @@ fn the_loader_reads_again_only_after_a_change() {
     std::fs::create_dir_all(paths.ticket_dir(&other)).unwrap();
     std::fs::write(paths.ticket_doc(&other, "plan.md"), "# Plan\n").unwrap();
     local_of(state.local(wall, false));
-    assert_eq!(reads(&state), 4);
+    assert_eq!(reads(&state), 5);
     assert_eq!(state.local(wall, false), Msg::LocalSame);
 
     // A file that no screen reads changes nothing.
@@ -588,6 +594,167 @@ fn the_loader_reads_again_only_after_a_change() {
     );
     // Home still sees the writes of the ledger that came meanwhile.
     local_of(state.local(wall, false));
+}
+
+#[test]
+fn a_write_of_the_files_of_the_question_form_changes_no_check() {
+    let world = home();
+    let paths = world.ctx().paths;
+    let wall = OffsetDateTime::now_utc();
+    let key = TicketKey::parse(KEY).unwrap();
+    let mut state = State::new(paths.clone());
+    local_of(state.local(wall, false));
+    local_of(state.local(wall, false));
+    assert_eq!(state.local(wall, false), Msg::LocalSame);
+    ticket_of(state.ticket(KEY, false));
+    let same = Msg::TicketSame { key: KEY.into() };
+    assert_eq!(state.ticket(KEY, false), same);
+    // A draft of the form, a write of the drafts file that has not ended, and the file of a
+    // send: only the form reads them, so Home and the live view read nothing again.
+    let drafts = [("Q-0001".to_string(), Draft::Needless("code".into()))];
+    vision::app::drafts::save(&paths, KEY, &drafts).unwrap();
+    let temp = paths.ticket_doc(&key, &format!(".{}.1-1.tmp", vision::app::drafts::FILE));
+    std::fs::write(&temp, "{").unwrap();
+    let send = paths.ticket_doc(&key, vision::app::drafts::SEND_FILE);
+    std::fs::write(&send, "{}").unwrap();
+    assert_eq!(state.local(wall, false), Msg::LocalSame);
+    assert_eq!(state.ticket(KEY, false), same);
+    vision::app::drafts::save(&paths, KEY, &[]).unwrap();
+    std::fs::remove_file(&temp).unwrap();
+    std::fs::remove_file(&send).unwrap();
+    assert_eq!(state.local(wall, false), Msg::LocalSame);
+    assert_eq!(state.ticket(KEY, false), same);
+    assert_eq!(state.reads().local, 2);
+    assert_eq!(state.reads().ticket, 1);
+    // Another file of the folder still counts.
+    std::fs::write(paths.ticket_doc(&key, "notes.md"), "x").unwrap();
+    local_of(state.local(wall, false));
+    ticket_of(state.ticket(KEY, false));
+}
+
+#[test]
+fn a_role_file_of_the_adapter_that_goes_away_shows_at_the_next_look() {
+    let world = home();
+    let paths = world.ctx().paths;
+    // The private adapter defines an agent, with its role file in the adapter folder.
+    world.write_adapter(|text| {
+        format!("{text}\n[agents.lane]\nmodel = \"claude-sonnet-5-5\"\neffort = \"high\"\n")
+    });
+    let role = paths.home().join("adapters/demo/roles/lane.md");
+    std::fs::create_dir_all(role.parent().unwrap()).unwrap();
+    std::fs::write(&role, "You read the diff.\n").unwrap();
+    let loads = |paths: &Paths| {
+        let ctx = Ctx::new(paths.clone());
+        vision::adapter::load_with(ctx.config().unwrap(), paths).is_ok()
+    };
+    assert!(loads(&paths));
+    let mut state = State::new(paths.clone());
+    let same = Msg::TicketSame { key: KEY.into() };
+    assert!(!ticket_of(state.ticket(KEY, false)).steps.is_empty());
+    assert_eq!(state.ticket(KEY, false), same);
+    // The role file goes away: a command no longer loads the adapter, and the live view shows
+    // no path, as a read with a new context does.
+    std::fs::remove_file(&role).unwrap();
+    assert!(!loads(&paths));
+    let next = state.ticket(KEY, false);
+    assert_ne!(next, same, "the loader keeps the adapter of before");
+    let data = ticket_of(next);
+    assert!(data.steps.is_empty(), "{:?}", data.steps);
+    assert!(load_ticket::ticket(&paths, KEY).unwrap().steps.is_empty());
+    // The role file comes back, and so does the path.
+    std::fs::write(&role, "You read the diff.\n").unwrap();
+    assert!(!ticket_of(state.ticket(KEY, false)).steps.is_empty());
+    assert_eq!(state.ticket(KEY, false), same);
+}
+
+/// The home of [`home`], where the plan of `OTHER`, which waits for its approval, is a FIFO.
+/// Each read of Home opens it once, after the read began, and the check only looks at its
+/// stamp. At its first open, `during` runs: in the middle of the first read.
+fn home_with_plan_fifo(during: impl FnOnce(&Paths) + Send + 'static) -> (World, Fifo) {
+    let world = home();
+    let paths = world.ctx().paths;
+    let other = TicketKey::parse(OTHER).unwrap();
+    std::fs::create_dir_all(paths.ticket_dir(&other)).unwrap();
+    let mut during = Some(during);
+    let at = paths.clone();
+    let fifo = Fifo::serve(&paths.ticket_doc(&other, "plan.md"), move |n| {
+        if n == 1 {
+            if let Some(during) = during.take() {
+                during(&at);
+            }
+        }
+    });
+    (world, fifo)
+}
+
+#[test]
+fn a_write_of_the_ledger_in_the_middle_of_a_read_of_new_tickets_shows_at_the_next_look() {
+    let (world, _plan) = home_with_plan_fifo(|paths| {
+        Ledger::open(&paths.ledger())
+            .unwrap()
+            .conn()
+            .execute(
+                "UPDATE tickets SET flags = '[\"stopped\"]' WHERE key = ?1",
+                [OTHER],
+            )
+            .unwrap();
+    });
+    let paths = world.ctx().paths;
+    let wall = OffsetDateTime::now_utc();
+    let stopped = |local: &Local| {
+        local
+            .tickets
+            .iter()
+            .find(|h| h.view.key == OTHER)
+            .map(|h| h.stopped)
+    };
+    let mut state = State::new(paths.clone());
+    // The first look knows no ticket yet, so the tickets of its read are new to it. Another
+    // connection stops OTHER after the read began.
+    let first = local_of(state.local(wall, false));
+    assert_eq!(
+        stopped(&first),
+        Some(false),
+        "the read began before the stop"
+    );
+    // The read did not see the stop, so the next look reads again and shows it.
+    let next = state.local(wall, false);
+    assert_ne!(next, Msg::LocalSame, "the stop counts as seen");
+    assert_eq!(stopped(&local_of(next)), Some(true));
+}
+
+#[test]
+fn a_write_of_a_file_in_the_middle_of_a_read_of_new_tickets_shows_at_the_next_look() {
+    let key = TicketKey::parse(KEY).unwrap();
+    let new_plan = "# Plan\n\nA new plan with more lines than the plan before.\n";
+    let (world, _plan) = home_with_plan_fifo(move |paths| {
+        std::fs::write(paths.ticket_doc(&key, "plan.md"), new_plan).unwrap();
+    });
+    let paths = world.ctx().paths;
+    let wall = OffsetDateTime::now_utc();
+    let key = TicketKey::parse(KEY).unwrap();
+    let hash_of =
+        |text: &[u8]| vision::pipeline::plan_hash(text)[..vision::pipeline::SHORT_HASH].to_string();
+    let old_hash = hash_of(&std::fs::read(paths.ticket_doc(&key, "plan.md")).unwrap());
+    let plan_of = |local: &Local| {
+        local
+            .needs
+            .iter()
+            .find(|n| n.kind == NeedKind::Plan && n.ticket.as_deref() == Some(KEY))
+            .map(|n| n.id.clone())
+    };
+    let mut state = State::new(paths.clone());
+    // The read of the first look reads the plan of DEMO-12 before the plan of OTHER, and the
+    // plan of DEMO-12 changes while the read waits at the plan of OTHER.
+    let first = local_of(state.local(wall, false));
+    assert_eq!(
+        plan_of(&first),
+        Some(old_hash),
+        "the read began before the write"
+    );
+    let next = state.local(wall, false);
+    assert_ne!(next, Msg::LocalSame, "the new plan counts as seen");
+    assert_eq!(plan_of(&local_of(next)), Some(hash_of(new_plan.as_bytes())));
 }
 
 #[test]

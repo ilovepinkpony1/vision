@@ -100,9 +100,23 @@ pub struct QuestionSet {
     /// The drafts that the drafts file of the ticket held for these questions when the load
     /// read it. The card takes them at its first load, and keeps its own after that.
     pub saved: BTreeMap<String, Draft>,
-    /// The questions of the ticket whose drafts the file still held, but that no longer wait:
-    /// the Judge or another command answered them. Only the first form of a ticket has them.
-    pub gone: Vec<String>,
+    /// The questions of the ticket whose drafts the file still held, and that have a final
+    /// answer now or no longer exist, with who answered each. A question whose answer waits in
+    /// `recording` keeps its draft until a tick finishes its record. Only the first form of a
+    /// ticket has them.
+    pub gone: Vec<(String, Gone)>,
+}
+
+/// Who answered a question whose draft goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gone {
+    /// The Judge answered it.
+    Judge,
+    /// The person answered it or marked it as needless: with a command, or with a send whose
+    /// records a tick finished.
+    Person,
+    /// The ledger no longer has it.
+    Other,
 }
 
 /// The mark of one question of a form.
@@ -313,8 +327,8 @@ pub struct WriteItem {
     /// The step of the ticket now.
     pub step: String,
     /// A retry runs only the writes of the step again: its turn held its end facts, or it is
-    /// an act step, which runs no turn.
-    pub turn_held: bool,
+    /// an act step, which runs no turn ([`crate::pipeline::facts::StateFacts::writes_only`]).
+    pub writes_only: bool,
 }
 
 /// A ticket with the flag `needs-you` or `paused`.
@@ -335,6 +349,9 @@ pub struct FlagItem {
     pub held: bool,
     /// The step is an act step: it runs no turn, so a retry runs only its writes again.
     pub act: bool,
+    /// A retry runs only the writes of the step again: `held` or `act`
+    /// ([`crate::pipeline::facts::StateFacts::writes_only`]).
+    pub writes_only: bool,
     pub stopped: bool,
 }
 

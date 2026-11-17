@@ -8,16 +8,18 @@
 //! The cards of one asking id become one item: the form of a set of questions.
 
 use super::chain::{Check, CheckFacts, OpFacts};
-use super::needs::{FlagItem, NeedItem, PlanItem, ProposalItem, QuestionSet, WriteItem};
+use super::needs::{FlagItem, Gone, NeedItem, PlanItem, ProposalItem, QuestionSet, WriteItem};
 use crate::adapter::{self, Adapter};
 use crate::config::Config;
 use crate::ctx::Ctx;
 use crate::executor::{self, commit_arg, OperationResult, Outcome};
+use crate::ledger::questions::{STATE_ANSWERED, STATE_NEEDLESS};
 use crate::ledger::Ledger;
 use crate::paths::{Paths, TicketKey};
 use crate::pipeline::facts::{open_writes, state_facts_of, StateFacts};
 use crate::pipeline::state::{flags_of, Counts, NEEDS_YOU, PAUSED, STOPPED};
 use crate::pipeline::{plan_hash, plan_of, status_rows, TicketView};
+use crate::questions::Answer;
 use crate::snapshot::{collect_needs, NeedKind};
 
 /// Each thing that waits for the person, in the order of the needs of the snapshot: the
@@ -130,7 +132,7 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
         }
     }
     // The drafts of each form, from the drafts file of its ticket. The first form of a ticket
-    // also names the drafts whose questions no longer wait.
+    // also names the drafts whose questions have a final answer now, or no longer exist.
     let waiting: Vec<&str> = cards.iter().map(|c| c.id.as_str()).collect();
     let mut files = std::collections::BTreeMap::new();
     for item in &mut items {
@@ -145,15 +147,36 @@ fn read_needs(paths: &Paths) -> anyhow::Result<Vec<NeedItem>> {
                 .filter_map(|c| drafts.get(&c.id).map(|d| (c.id.clone(), d.clone())))
                 .collect();
             if first {
-                set.gone = drafts
-                    .keys()
-                    .filter(|id| !waiting.contains(&id.as_str()))
-                    .cloned()
-                    .collect();
+                set.gone = Vec::new();
+                for id in drafts.keys().filter(|id| !waiting.contains(&id.as_str())) {
+                    if let Some(who) = gone(&ledger, id)? {
+                        set.gone.push((id.clone(), who));
+                    }
+                }
             }
         }
     }
     Ok(items)
+}
+
+/// Who answered a question that no longer waits, or `None` while its answer is not final, such
+/// as an answer whose record waits in `recording` for a tick.
+fn gone(ledger: &Ledger, id: &str) -> anyhow::Result<Option<Gone>> {
+    let Some(row) = ledger.question(id)? else {
+        return Ok(Some(Gone::Other));
+    };
+    Ok(match row.state.as_str() {
+        STATE_ANSWERED => {
+            let by_judge = row
+                .answer
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Answer>(text).ok())
+                .is_some_and(|answer| answer.by_judge());
+            Some(if by_judge { Gone::Judge } else { Gone::Person })
+        }
+        STATE_NEEDLESS => Some(Gone::Person),
+        _ => None,
+    })
 }
 
 /// Adds an item, unless an item with its id is already there.
@@ -186,7 +209,7 @@ fn write_item(
         intent: op.intent.clone(),
         held: op.held.clone(),
         step: view.and_then(|v| v.step.clone()).unwrap_or_default(),
-        turn_held: facts.held || view.is_some_and(|v| v.kind.as_deref() == Some("act")),
+        writes_only: facts.writes_only(),
     }
 }
 
@@ -210,7 +233,8 @@ fn flag_item(
         last,
         branch: view.branch.clone(),
         held: facts.held,
-        act: view.kind.as_deref() == Some("act"),
+        act: facts.act,
+        writes_only: facts.writes_only(),
         stopped: view.flags.iter().any(|f| f.flag == STOPPED),
     })
 }

@@ -1,8 +1,9 @@
 //! The runtime: the loop of messages and the effects. Background work runs in threads that send
 //! messages to the loop over one channel: the loader of Home and of the live view in one thread
 //! that keeps its connection, each other load in a thread of its own, the worker in one thread
-//! with a queue, and the keys in one thread. The loop never blocks on the ledger, on the
-//! tracker, or on a child process.
+//! with a queue, the writer of the drafts files in one thread with a queue, and the keys in one
+//! thread. The loop never blocks on the ledger, on the tracker, on a child process, or on a
+//! write of a file.
 //!
 //! The runtime sets the time of the model before each message, and keeps the parts of each
 //! frame that the mouse can hit in the model after the draw. [`Runtime`] needs no terminal, so
@@ -12,6 +13,7 @@
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -23,6 +25,7 @@ use super::hits::HitMap;
 use super::loader::{Loader, Request};
 use super::model::{App, Clock};
 use super::msg::{ChildResult, Effect, Handoff, Job, JobDone, JobKind, Msg};
+use super::needs::Draft;
 use super::session;
 use super::tail::{self, Follow};
 use super::terminal::InputControl;
@@ -49,8 +52,65 @@ pub struct Runtime {
     follow: Option<Follow>,
     /// The thread that reads the local data and the data of the live view, with its connection.
     loader: Option<Loader>,
+    /// The thread that writes the drafts files, and the queue of its jobs.
+    drafts: Option<(Sender<DraftsJob>, JoinHandle<()>)>,
     /// The children that wait for the terminal: only [`run_terminal`] can give it.
     opens: Vec<Handoff>,
+}
+
+/// One job of the writer of the drafts files. The jobs run in the order of the effects.
+enum DraftsJob {
+    Save {
+        ticket: String,
+        drafts: Vec<(String, Draft)>,
+    },
+    Drop {
+        ticket: String,
+        ids: Vec<String>,
+    },
+    /// Runs after each write before it, such as the start of a load that reads the drafts.
+    After(Box<dyn FnOnce() + Send>),
+}
+
+/// Runs one job of the writer. A write that fails sends [`Msg::DraftsNotKept`].
+fn run_drafts_job(paths: &Paths, tx: &Sender<Msg>, job: DraftsJob) {
+    let written = match job {
+        DraftsJob::Save { ticket, drafts } => drafts::save(paths, &ticket, &drafts),
+        DraftsJob::Drop { ticket, ids } => drafts::drop(paths, &ticket, &ids),
+        DraftsJob::After(then) => {
+            then();
+            return;
+        }
+    };
+    if let Err(e) = written {
+        let _ = tx.send(Msg::DraftsNotKept(format!("{e:#}")));
+    }
+}
+
+/// Starts the writer of the drafts files: one thread that runs the jobs of its queue in order.
+fn spawn_drafts_writer(
+    paths: Paths,
+    tx: Sender<Msg>,
+) -> io::Result<(Sender<DraftsJob>, JoinHandle<()>)> {
+    let (jobs, queue) = mpsc::channel::<DraftsJob>();
+    let thread = std::thread::Builder::new()
+        .name("vision-drafts".into())
+        .spawn(move || {
+            for job in queue {
+                run_drafts_job(&paths, &tx, job);
+            }
+        })?;
+    Ok((jobs, thread))
+}
+
+impl Drop for Runtime {
+    /// The writes of the drafts that wait in the queue end before the app leaves.
+    fn drop(&mut self) {
+        if let Some((jobs, thread)) = self.drafts.take() {
+            drop(jobs);
+            let _ = thread.join();
+        }
+    }
 }
 
 /// How the loop ended.
@@ -76,6 +136,7 @@ impl Runtime {
             started,
             follow: None,
             loader: None,
+            drafts: None,
             opens: Vec::new(),
         }
     }
@@ -154,6 +215,24 @@ impl Runtime {
                 )));
             }
         }
+    }
+
+    /// Hands a job to the writer of the drafts files, and starts its thread first when it does
+    /// not run. When the thread cannot start or is gone, the job runs here, so that no draft is
+    /// lost.
+    fn drafts_job(&mut self, job: DraftsJob) {
+        if self.drafts.is_none() {
+            self.drafts = spawn_drafts_writer(self.paths.clone(), self.tx.clone()).ok();
+        }
+        let job = match &self.drafts {
+            Some((jobs, _)) => match jobs.send(job) {
+                Ok(()) => return,
+                Err(mpsc::SendError(job)) => job,
+            },
+            None => job,
+        };
+        self.drafts = None;
+        run_drafts_job(&self.paths, &self.tx, job);
     }
 
     /// Draws the model, and keeps the parts of the frame that the mouse can hit in the model, so
@@ -304,16 +383,27 @@ impl Runtime {
                 Effect::OpenReview(name) => self.opens.push(Handoff::Review(name)),
                 Effect::LoadNeeds(load) => {
                     let paths = self.paths.clone();
-                    self.spawn(
-                        move || Msg::Needs {
-                            load,
-                            items: Box::new(load_needs::needs(&paths)),
-                        },
-                        move |e| Msg::Needs {
-                            load,
-                            items: Box::new(Err(e)),
-                        },
-                    );
+                    let tx = self.tx.clone();
+                    let start = move || {
+                        spawn_read(
+                            tx,
+                            move || Msg::Needs {
+                                load,
+                                items: Box::new(load_needs::needs(&paths)),
+                            },
+                            move |e| Msg::Needs {
+                                load,
+                                items: Box::new(Err(e)),
+                            },
+                        )
+                    };
+                    // The load reads the drafts files, so it starts after each write of them
+                    // that came before it.
+                    if self.drafts.is_some() {
+                        self.drafts_job(DraftsJob::After(Box::new(start)));
+                    } else {
+                        start();
+                    }
                 }
                 Effect::LoadCheck { chain, check } => {
                     let paths = self.paths.clone();
@@ -356,17 +446,13 @@ impl Runtime {
                         |_| Msg::Picture(Box::new(None)),
                     );
                 }
-                // A drafts file is small: the write runs at once, so that the next send or the
-                // next load reads what the person typed.
+                // The writer of the drafts files writes them in the order of the effects. The
+                // send of a form takes its answers from the action, not from the file.
                 Effect::SaveDrafts { ticket, drafts } => {
-                    if let Err(e) = drafts::save(&self.paths, &ticket, &drafts) {
-                        let _ = self.tx.send(Msg::DraftsNotKept(format!("{e:#}")));
-                    }
+                    self.drafts_job(DraftsJob::Save { ticket, drafts });
                 }
                 Effect::DropDrafts { ticket, ids } => {
-                    if let Err(e) = drafts::drop(&self.paths, &ticket, &ids) {
-                        let _ = self.tx.send(Msg::DraftsNotKept(format!("{e:#}")));
-                    }
+                    self.drafts_job(DraftsJob::Drop { ticket, ids });
                 }
                 Effect::StartWorker => {
                     if self.jobs.is_none() {
@@ -407,25 +493,34 @@ impl Runtime {
         W: FnOnce() -> Msg + Send + 'static,
         F: Fn(String) -> Msg + Send + Sync + 'static,
     {
-        let tx = self.tx.clone();
-        let failed = std::sync::Arc::new(failed);
-        let in_thread = failed.clone();
-        let started = std::thread::Builder::new()
-            .name("vision-load".into())
-            .spawn(move || {
-                let msg = std::panic::catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|_| {
-                    in_thread(
-                        "the read stopped with an internal error. log/app.err has the details"
-                            .into(),
-                    )
-                });
-                let _ = tx.send(msg);
+        spawn_read(self.tx.clone(), work, failed);
+    }
+}
+
+/// Runs `work` in a thread and sends its message over `tx`. A panic sends the message of
+/// `failed`.
+fn spawn_read<W, F>(tx: Sender<Msg>, work: W, failed: F)
+where
+    W: FnOnce() -> Msg + Send + 'static,
+    F: Fn(String) -> Msg + Send + Sync + 'static,
+{
+    let failed = std::sync::Arc::new(failed);
+    let in_thread = failed.clone();
+    let to_loop = tx.clone();
+    let started = std::thread::Builder::new()
+        .name("vision-load".into())
+        .spawn(move || {
+            let msg = std::panic::catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|_| {
+                in_thread(
+                    "the read stopped with an internal error. log/app.err has the details".into(),
+                )
             });
-        if let Err(e) = started {
-            let _ = self.tx.send(failed(format!(
-                "could not start a thread for the read: {e}"
-            )));
-        }
+            let _ = to_loop.send(msg);
+        });
+    if let Err(e) = started {
+        let _ = tx.send(failed(format!(
+            "could not start a thread for the read: {e}"
+        )));
     }
 }
 
