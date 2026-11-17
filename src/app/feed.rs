@@ -21,7 +21,9 @@
 //! it follows, the newest line is at the bottom; a scroll stops the follow, and `back` counts the
 //! lines of the filtered list under the view.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -38,6 +40,10 @@ pub const KEEP_STREAM: usize = 400;
 pub const KEEP_LEDGER: usize = 200;
 /// The lines that one text of an agent can take.
 pub const ITEM_LINES: usize = 30;
+/// The turns whose numbers the feed keeps: the newest ones by their ids.
+pub const STATS_TURNS: usize = 12;
+/// The messages of one turn whose output tokens the feed keeps by their ids.
+const RECENT_MESSAGES: usize = 16;
 
 /// One event of a stream file, with the output tokens of its message when the stream gives
 /// them: the id of the message and its count.
@@ -203,14 +209,37 @@ pub struct Item {
 pub struct TurnStats {
     /// The tool calls of the agent.
     pub tools: usize,
-    /// The output tokens of each message, by its id.
-    outputs: BTreeMap<String, i64>,
+    /// True when the stream gave an output count.
+    counted: bool,
+    /// The output tokens of the messages that left `recent`.
+    done: i64,
+    /// The output tokens of the last messages, by their ids. The lines of one message follow
+    /// each other, and each line gives the count of the whole message so far, so only the last
+    /// count of a message counts. An older message leaves this list for `done`, so the numbers
+    /// of a long turn stay small.
+    recent: VecDeque<(String, i64)>,
 }
 
 impl TurnStats {
     /// The output tokens so far, or `None` when the stream gave none.
     pub fn output_tokens(&self) -> Option<i64> {
-        (!self.outputs.is_empty()).then(|| self.outputs.values().sum())
+        self.counted
+            .then(|| self.done + self.recent.iter().map(|(_, n)| n).sum::<i64>())
+    }
+
+    /// The count of the message `id` so far.
+    fn output(&mut self, id: &str, n: i64) {
+        self.counted = true;
+        if let Some(entry) = self.recent.iter_mut().find(|(seen, _)| seen == id) {
+            entry.1 = n;
+            return;
+        }
+        self.recent.push_back((id.to_string(), n));
+        if self.recent.len() > RECENT_MESSAGES {
+            if let Some((_, n)) = self.recent.pop_front() {
+                self.done += n;
+            }
+        }
     }
 }
 
@@ -236,8 +265,9 @@ pub struct Feed {
     pub follow: bool,
     /// The lines under the view, while it does not follow.
     pub back: usize,
-    /// The numbers of each turn, by its id.
+    /// The numbers of the newest turns, by their ids.
     pub stats: BTreeMap<String, TurnStats>,
+    cache: LineCache,
 }
 
 impl Default for Feed {
@@ -249,7 +279,38 @@ impl Default for Feed {
             follow: true,
             back: 0,
             stats: BTreeMap::new(),
+            cache: LineCache::default(),
         }
+    }
+}
+
+/// The lines of the feed for one width, one offset of the clock, and one tab, at one version of
+/// the items. The view draws the feed at each frame, and the update counts its lines, so the
+/// feed wraps its items again only after a change of one of these. The cache is no part of the
+/// state: two feeds with the same items are equal, whatever their caches hold.
+#[derive(Clone, Default)]
+struct LineCache {
+    /// The number of the changes of the items. The cached lines key on it.
+    version: u64,
+    lines: RefCell<Option<CachedLines>>,
+}
+
+#[derive(Clone)]
+struct CachedLines {
+    /// The version of the items, the width, the offset of the clock, and the tab.
+    key: (u64, usize, i32, Filter),
+    lines: Arc<Vec<FeedLine>>,
+}
+
+impl PartialEq for LineCache {
+    fn eq(&self, _: &LineCache) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for LineCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LineCache")
     }
 }
 
@@ -304,6 +365,7 @@ impl Feed {
             return false;
         }
         self.ledger = items;
+        self.cache.version += 1;
         true
     }
 
@@ -312,6 +374,12 @@ impl Feed {
     /// call only counts in the numbers of its turn. Each other event goes before the bound, so
     /// that a long turn does not push the words of the agent out.
     pub fn add(&mut self, batch: &Batch) -> usize {
+        // The numbers of the newest turns stay; NOW shows only those of a turn that runs.
+        if !self.stats.contains_key(&batch.turn) {
+            while self.stats.len() >= STATS_TURNS {
+                self.stats.pop_first();
+            }
+        }
         let stats = self.stats.entry(batch.turn.clone()).or_default();
         let base = batch.started.map_or(nanos(batch.at), nanos);
         let last = batch.events.len().saturating_sub(1);
@@ -321,7 +389,7 @@ impl Feed {
                 stats.tools += tools.iter().filter(|t| counts(&t.name)).count();
             }
             if let Some((id, n)) = &line.output {
-                stats.outputs.insert(id.clone(), *n);
+                stats.output(id, *n);
             }
             let error = matches!(&line.event, StreamEvent::Result(r) if r.is_error);
             for (word, hue, text, wraps) in feed_texts(&line.event) {
@@ -354,11 +422,42 @@ impl Feed {
         }
         let over = self.stream.len().saturating_sub(KEEP_STREAM);
         self.stream.drain(..over);
+        if count > 0 {
+            self.cache.version += 1;
+        }
         count
     }
 
     /// The lines of the items of the filter for a text column of `width` cells, oldest first.
     pub fn lines(&self, width: usize, offset_seconds: i32, filter: Filter) -> Vec<FeedLine> {
+        self.shared_lines(width, offset_seconds, filter)
+            .as_ref()
+            .clone()
+    }
+
+    /// The same lines, shared with the cache of the feed: only a change of the items, of the
+    /// width, of the offset of the clock, or of the tab wraps them again.
+    pub fn shared_lines(
+        &self,
+        width: usize,
+        offset_seconds: i32,
+        filter: Filter,
+    ) -> Arc<Vec<FeedLine>> {
+        let key = (self.cache.version, width, offset_seconds, filter);
+        if let Some(cached) = self.cache.lines.borrow().as_ref() {
+            if cached.key == key {
+                return cached.lines.clone();
+            }
+        }
+        let lines = Arc::new(self.wrapped(width, offset_seconds, filter));
+        *self.cache.lines.borrow_mut() = Some(CachedLines {
+            key,
+            lines: lines.clone(),
+        });
+        lines
+    }
+
+    fn wrapped(&self, width: usize, offset_seconds: i32, filter: Filter) -> Vec<FeedLine> {
         let mut out = Vec::new();
         for item in self.items().into_iter().filter(|i| filter.shows(i.filter)) {
             let time = item.at.map_or(String::new(), |at| {
@@ -440,6 +539,12 @@ impl Feed {
             self.back += added;
         }
     }
+}
+
+/// The number of items that one event gives to the feed: what the agent says, and the end of a
+/// session with an error.
+pub fn items_of(event: &StreamEvent) -> usize {
+    feed_texts(event).len()
 }
 
 /// True for a tool call that counts as work of the agent. The tool of the result object does

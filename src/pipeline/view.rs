@@ -13,9 +13,9 @@ use crate::adapter::StepKind;
 use crate::ctx::Ctx;
 use crate::executor::{self, short, Outcome};
 use crate::ledger::notices::NoticeRow;
-use crate::ledger::Ledger;
+use crate::ledger::{Ledger, TicketRow};
 use crate::snapshot::{Need, NeedKind};
-use crate::turn::TurnStatus;
+use crate::turn::{RunningTurn, TurnStatus};
 use crate::util::fs::read_optional;
 use crate::util::{ids, time};
 
@@ -171,79 +171,129 @@ fn plan_need(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket) -> Result<Option<Need>
 /// The rows of `vision status`, one for each ticket, by key.
 pub fn rows(ctx: &Ctx, ledger: &Ledger, all_needs: &[Need]) -> Result<Vec<TicketView>> {
     let running = crate::turn::running_turns(ctx, ledger)?;
+    rows_with(ctx, ledger, all_needs, &running, |_| true)
+}
+
+/// The rows of the tickets whose ledger row `keep` takes, by key, with the turns that run now.
+/// The app takes only the tickets in progress, so that a finished ticket costs no read. The
+/// costs of all tickets come from one read.
+pub fn rows_with(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    all_needs: &[Need],
+    running: &[RunningTurn],
+    keep: impl Fn(&TicketRow) -> bool,
+) -> Result<Vec<TicketView>> {
+    let costs = ledger.spent_by_ticket()?;
     let now = time::now();
     let mut out = Vec::new();
     for row in ledger.tickets()? {
-        let Ok(ticket) = Ticket::of(row.clone()) else {
-            continue;
-        };
-        if ticket.key.is_reserved() {
+        if !keep(&row) {
             continue;
         }
-        let key = ticket.key.to_string();
-        let visit = ticket.visit();
-        let mut needs: BTreeMap<String, usize> = BTreeMap::new();
-        for need in all_needs
-            .iter()
-            .filter(|n| n.ticket.as_deref() == Some(&key))
-        {
-            *needs.entry(need_word(need.kind).to_string()).or_default() += 1;
+        let cost = costs.get(&row.key).copied().unwrap_or(0.0);
+        if let Some(view) = row_view(ctx, ledger, row, all_needs, running, cost, now)? {
+            out.push(view);
         }
-        let flags: Vec<FlagView> = ticket
-            .flags
-            .iter()
-            .map(|flag| {
-                let reason = ticket.counts.reasons.get(flag);
-                FlagView {
-                    flag: flag.clone(),
-                    reason: reason
-                        .map(|r| r.reason.clone())
-                        .unwrap_or_else(|| default_reason(flag).to_string()),
-                    since: reason.map(|r| r.at.clone()),
-                    command: clear_command(flag, &key),
-                }
-            })
-            .collect();
-        let mine: Vec<_> = running.iter().filter(|t| t.ticket == key).collect();
-        let work = mine.iter().rev().find(|t| {
-            !t.agent
-                .as_deref()
-                .and_then(crate::models::agent)
-                .is_some_and(|spec| spec.alone)
-        });
-        let works = work.map(|t| Works {
-            agent: t.agent.clone().unwrap_or_default(),
-            turn: t.id.clone(),
-            minutes: t
-                .started
-                .as_deref()
-                .and_then(|s| time::parse_rfc3339(s).ok())
-                .map_or(0, |at| time::seconds_between(at, now) / 60),
-        });
-        let judging = mine.len() > usize::from(work.is_some());
-        // A notice never stops a ticket, so the line of now says what the ticket does.
-        let mut stopping = needs.clone();
-        stopping.remove(NOTICE);
-        let now_text = now_line(ctx, ledger, &ticket, &works, judging, &stopping, &flags)?;
-        out.push(TicketView {
-            key: key.clone(),
-            title: row.title.clone(),
-            step: row.state.clone(),
-            kind: (!visit.kind.is_empty()).then(|| visit.kind.clone()),
-            ticket_kind: ticket.counts.kind.clone(),
-            now: now_text,
-            works,
-            flags,
-            needs,
-            marks: marks(ctx, ledger, &ticket)?,
-            cost_usd: ledger.spent_on_ticket(&key)?,
-            pr: row.pr,
-            branch: row.branch.clone(),
-            clone: row.clone.clone(),
-            updated: row.updated.clone(),
-        });
     }
     Ok(out)
+}
+
+/// The row of one ticket, with the turns that run now, or `None` when the ledger has no such
+/// ticket or it is reserved. The live view reads only this row.
+pub fn row_of(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &str,
+    all_needs: &[Need],
+    running: &[RunningTurn],
+) -> Result<Option<TicketView>> {
+    let Some(row) = ledger.ticket(key)? else {
+        return Ok(None);
+    };
+    let cost = ledger.spent_on_ticket(key)?;
+    row_view(ctx, ledger, row, all_needs, running, cost, time::now())
+}
+
+/// The row of one ticket of the ledger, or `None` for a reserved ticket or a row that does not
+/// parse.
+fn row_view(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    row: TicketRow,
+    all_needs: &[Need],
+    running: &[RunningTurn],
+    cost_usd: f64,
+    now: ::time::OffsetDateTime,
+) -> Result<Option<TicketView>> {
+    let Ok(ticket) = Ticket::of(row.clone()) else {
+        return Ok(None);
+    };
+    if ticket.key.is_reserved() {
+        return Ok(None);
+    }
+    let key = ticket.key.to_string();
+    let visit = ticket.visit();
+    let mut needs: BTreeMap<String, usize> = BTreeMap::new();
+    for need in all_needs
+        .iter()
+        .filter(|n| n.ticket.as_deref() == Some(&key))
+    {
+        *needs.entry(need_word(need.kind).to_string()).or_default() += 1;
+    }
+    let flags: Vec<FlagView> = ticket
+        .flags
+        .iter()
+        .map(|flag| {
+            let reason = ticket.counts.reasons.get(flag);
+            FlagView {
+                flag: flag.clone(),
+                reason: reason
+                    .map(|r| r.reason.clone())
+                    .unwrap_or_else(|| default_reason(flag).to_string()),
+                since: reason.map(|r| r.at.clone()),
+                command: clear_command(flag, &key),
+            }
+        })
+        .collect();
+    let mine: Vec<_> = running.iter().filter(|t| t.ticket == key).collect();
+    let work = mine.iter().rev().find(|t| {
+        !t.agent
+            .as_deref()
+            .and_then(crate::models::agent)
+            .is_some_and(|spec| spec.alone)
+    });
+    let works = work.map(|t| Works {
+        agent: t.agent.clone().unwrap_or_default(),
+        turn: t.id.clone(),
+        minutes: t
+            .started
+            .as_deref()
+            .and_then(|s| time::parse_rfc3339(s).ok())
+            .map_or(0, |at| time::seconds_between(at, now) / 60),
+    });
+    let judging = mine.len() > usize::from(work.is_some());
+    // A notice never stops a ticket, so the line of now says what the ticket does.
+    let mut stopping = needs.clone();
+    stopping.remove(NOTICE);
+    let now_text = now_line(ctx, ledger, &ticket, &works, judging, &stopping, &flags)?;
+    Ok(Some(TicketView {
+        key: key.clone(),
+        title: row.title.clone(),
+        step: row.state.clone(),
+        kind: (!visit.kind.is_empty()).then(|| visit.kind.clone()),
+        ticket_kind: ticket.counts.kind.clone(),
+        now: now_text,
+        works,
+        flags,
+        needs,
+        marks: marks(ctx, ledger, &ticket)?,
+        cost_usd,
+        pr: row.pr,
+        branch: row.branch.clone(),
+        clone: row.clone.clone(),
+        updated: row.updated.clone(),
+    }))
 }
 
 fn need_word(kind: NeedKind) -> &'static str {

@@ -66,6 +66,39 @@ fn init_creates_the_ledger_at_the_schema_version() {
 }
 
 #[test]
+fn init_creates_the_indexes_of_the_reads_of_one_ticket() {
+    let home = Home::init();
+    let ledger = Ledger::open(&home.path("ledger.sqlite")).unwrap();
+    let mut stmt = ledger
+        .conn()
+        .prepare("SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        .unwrap();
+    let indexes: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for (name, table) in [
+        ("turns_ticket_step", "turns"),
+        ("turns_status", "turns"),
+        ("events_ticket", "events"),
+        ("events_kind", "events"),
+        ("questions_ticket", "questions"),
+        ("questions_state", "questions"),
+        ("human_ticket", "human"),
+        ("operations_ticket", "operations"),
+        ("operations_state", "operations"),
+        ("spans_ticket", "spans"),
+        ("checks_ticket", "checks"),
+    ] {
+        assert!(
+            indexes.iter().any(|(n, t)| n == name && t == table),
+            "the index {name} on {table} is missing: {indexes:?}"
+        );
+    }
+}
+
+#[test]
 fn init_makes_the_memory_a_git_repo_with_one_commit() {
     let home = Home::init();
     let memory = home.path("memory");

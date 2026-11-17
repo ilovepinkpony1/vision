@@ -10,9 +10,10 @@
 //! - [`view`]: a function from the model to a ratatui frame.
 //!
 //! The update and the view do no input or output, read no clock, and read no file, so each
-//! screen can be tested without a terminal. [`runtime`] runs the effects: the reads in
-//! threads ([`load`]), and each change of the state through the command of today as a child
-//! process of the same binary ([`worker`]).
+//! screen can be tested without a terminal. [`runtime`] runs the effects: the reads of Home and
+//! of the live view in one thread that keeps its connection ([`loader`]), each other read in a
+//! thread of its own ([`load`]), and each change of the state through the command of today as
+//! a child process of the same binary ([`worker`]).
 
 pub mod chain;
 pub mod drafts;
@@ -23,6 +24,7 @@ pub mod load;
 pub mod load_needs;
 pub mod load_screens;
 pub mod load_ticket;
+pub mod loader;
 pub mod model;
 pub mod model_table;
 pub mod moments;

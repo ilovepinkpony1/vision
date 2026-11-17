@@ -3,8 +3,9 @@
 //! a panic, and the signals SIGTERM, SIGHUP, and SIGINT. Ctrl-C is a key in raw mode, and the
 //! app treats it as `q` (it cancels the line of `t`), so SIGINT comes only from another process.
 //!
-//! The thread that reads the keys can pause: while a child owns the terminal, it reads nothing,
-//! and the runtime waits for it to confirm the pause before the child starts.
+//! The thread that reads the keys waits in its poll until a key comes. It can pause: while a
+//! child owns the terminal, it reads nothing, and the runtime wakes it and waits for it to
+//! confirm the pause before the child starts.
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -188,42 +189,87 @@ enum InputState {
     Paused,
 }
 
+/// What wakes the thread of the keys while it waits for a key.
+type Waker = Arc<dyn Fn() + Send + Sync>;
+
 /// The control of the thread of the keys. The runtime pauses it while a child owns the
 /// terminal.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InputControl {
     inner: Arc<(Mutex<InputState>, Condvar)>,
+    waker: Arc<Mutex<Option<Waker>>>,
+}
+
+impl std::fmt::Debug for InputControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = *self.inner.0.lock().unwrap_or_else(|e| e.into_inner());
+        f.debug_struct("InputControl")
+            .field("state", &state)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for InputControl {
     fn default() -> InputControl {
         InputControl {
             inner: Arc::new((Mutex::new(InputState::Run), Condvar::new())),
+            waker: Arc::new(Mutex::new(None)),
         }
     }
 }
 
+/// While a pause waits for the confirmation, it wakes the thread again after this time.
+const WAKE_AGAIN: Duration = Duration::from_millis(250);
+
 impl InputControl {
-    /// Asks the thread to stop reading, and waits up to `limit` until it confirms. Gives true
-    /// when it confirmed: from then on, it reads no key until [`InputControl::resume`].
+    /// Sets what wakes the thread while it waits for a key, so that a pause needs no key. The
+    /// thread waits in its poll with no timer, so with no waker a pause waits for a key or the
+    /// end of the poll.
+    pub fn set_waker(&self, waker: impl Fn() + Send + Sync + 'static) {
+        *self.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(waker));
+    }
+
+    fn wake(&self) {
+        let waker = self.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+
+    /// Asks the thread to stop reading, wakes it, and waits up to `limit` until it confirms.
+    /// Gives true when it confirmed: from then on, it reads no key until
+    /// [`InputControl::resume`].
     pub fn pause(&self, limit: Duration) -> bool {
         let (lock, cond) = &*self.inner;
-        let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
-        if *state == InputState::Run {
-            *state = InputState::Pause;
+        {
+            let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+            if *state == InputState::Run {
+                *state = InputState::Pause;
+            }
         }
         let until = Instant::now() + limit;
-        while *state != InputState::Paused {
-            let left = until.saturating_duration_since(Instant::now());
-            if left.is_zero() {
+        loop {
+            // The waker runs with no lock held: it can take a lock of its own source.
+            self.wake();
+            let step = (Instant::now() + WAKE_AGAIN).min(until);
+            let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+            while *state != InputState::Paused {
+                let left = step.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                state = cond
+                    .wait_timeout(state, left)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .0;
+            }
+            if *state == InputState::Paused {
+                return true;
+            }
+            if Instant::now() >= until {
                 return false;
             }
-            state = cond
-                .wait_timeout(state, left)
-                .unwrap_or_else(|e| e.into_inner())
-                .0;
         }
-        true
     }
 
     /// Lets the thread read again.
@@ -268,12 +314,24 @@ impl Source for Terminal {
     }
 }
 
-/// The longest wait for a key before the thread looks at its control again.
-const POLL: Duration = Duration::from_millis(100);
+/// The longest wait for a key before the thread looks at its control again. A pause wakes the
+/// thread before that, so the thread wakes for nothing else than a key, a paste, or a change of
+/// the window.
+const POLL: Duration = Duration::from_secs(60);
 
 /// Reads the keys, the pastes, and the changes of the window in a thread, and sends them to
 /// the loop. The thread pauses when `control` asks.
 pub fn watch_input(tx: Sender<Msg>, control: InputControl) -> io::Result<()> {
+    // The event reader of crossterm wakes on the signal of a change of the window and reports
+    // the size of now: a pause sends that signal to wake the thread. The change of the window
+    // that the loop then gets has the same size, so it changes nothing.
+    control.set_waker(|| {
+        // SAFETY: raise only sends a signal to this thread; the handler of crossterm for it
+        // writes one byte to a pipe.
+        unsafe {
+            libc::raise(libc::SIGWINCH);
+        }
+    });
     std::thread::Builder::new()
         .name("vision-input".into())
         .spawn(move || input_loop(Terminal, &tx, &control))?;

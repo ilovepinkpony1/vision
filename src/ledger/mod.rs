@@ -156,6 +156,34 @@ impl Ledger {
             }
         }
     }
+
+    /// Runs `f`, which only reads, in one read transaction: each read of `f` sees the same
+    /// state of the ledger, and SQLite takes its read lock once. Inside a transaction that is
+    /// already open, `f` runs as a part of it.
+    pub fn in_read<T>(&self, f: impl FnOnce(&Ledger) -> Result<T>) -> Result<T> {
+        if !self.conn.is_autocommit() {
+            return f(self);
+        }
+        // A deferred transaction: the first read takes the snapshot.
+        self.conn.execute_batch("BEGIN")?;
+        let value = f(self);
+        // A read keeps nothing, so the end of the transaction cannot lose a change.
+        let end = self.conn.execute_batch("COMMIT");
+        if end.is_err() {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        let value = value?;
+        end?;
+        Ok(value)
+    }
+
+    /// A number that changes after another connection commits a change to the ledger. A
+    /// connection that keeps it reads the ledger again only when it changed.
+    pub fn data_version(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .pragma_query_value(None, "data_version", |row| row.get(0))?)
+    }
 }
 
 fn user_version(conn: &Connection) -> Result<u32> {
@@ -390,6 +418,216 @@ mod tests {
             Some("h")
         );
         assert!(ledger.session_rows().unwrap().is_empty());
+    }
+
+    /// The indexes of migration 8.
+    const READ_INDEXES: [&str; 11] = [
+        "turns_ticket_step",
+        "turns_status",
+        "events_ticket",
+        "events_kind",
+        "questions_ticket",
+        "questions_state",
+        "human_ticket",
+        "operations_ticket",
+        "operations_state",
+        "spans_ticket",
+        "checks_ticket",
+    ];
+
+    fn index_names(ledger: &Ledger) -> Vec<String> {
+        let mut stmt = ledger
+            .conn()
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+            .unwrap();
+        stmt.query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn migration_8_adds_the_indexes_of_the_reads_and_keeps_each_row() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.version <= 7) {
+            conn.execute_batch(migration.sql).unwrap();
+        }
+        conn.pragma_update(None, "user_version", 7).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tickets (key, state) VALUES ('DEMO-1', 'build');
+             INSERT INTO turns (id, ticket, step, status, cost_usd)
+                 VALUES ('T1', 'DEMO-1', 'build', 'running', 1.5);
+             INSERT INTO events (at, actor, ticket, kind)
+                 VALUES ('2026-11-16T14:30:00Z', 'tick', 'DEMO-1', 'step');",
+        )
+        .unwrap();
+        let before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'turns_status'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, 0);
+        assert_eq!(migrate(&mut conn).unwrap(), Some(7));
+        let ledger = Ledger {
+            conn,
+            migrated_from: Some(7),
+        };
+        let names = index_names(&ledger);
+        for index in READ_INDEXES {
+            assert!(
+                names.iter().any(|n| n == index),
+                "the index {index} is missing"
+            );
+        }
+        assert_eq!(ledger.spent_on_ticket("DEMO-1").unwrap(), 1.5);
+        assert_eq!(ledger.turns_with_status("running").unwrap().len(), 1);
+        assert_eq!(ledger.events_of_ticket("DEMO-1").unwrap().len(), 1);
+        assert_eq!(
+            ledger.ticket("DEMO-1").unwrap().unwrap().state.as_deref(),
+            Some("build")
+        );
+    }
+
+    /// The steps of the query plan of `sql`, with each parameter NULL.
+    fn plan(ledger: &Ledger, sql: &str) -> Vec<String> {
+        let mut stmt = ledger
+            .conn()
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
+        stmt.query_map(rusqlite::params_from_iter(nulls), |row| {
+            row.get::<_, String>(3)
+        })
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+    }
+
+    #[test]
+    fn each_read_of_one_ticket_searches_an_index() {
+        let ledger = Ledger::open_in_memory().unwrap();
+        let cases = [
+            (
+                "SELECT id FROM turns WHERE ticket = ?1 AND step = ?2 ORDER BY rowid",
+                "turns_ticket_step",
+            ),
+            (
+                "SELECT id FROM turns WHERE ticket = ?1 ORDER BY started, id",
+                "turns_ticket_step",
+            ),
+            (
+                "SELECT id FROM turns WHERE status = ?1 ORDER BY started, id",
+                "turns_status",
+            ),
+            (
+                "SELECT coalesce(sum(cost_usd), 0) FROM turns WHERE ticket = ?1",
+                "turns_ticket_step",
+            ),
+            (
+                "SELECT coalesce(step, ''), count(*), coalesce(sum(cost_usd), 0) FROM turns
+                 WHERE ticket = ?1 GROUP BY step ORDER BY min(rowid)",
+                "turns_ticket_step",
+            ),
+            (
+                "SELECT id FROM events WHERE ticket = ?1 ORDER BY id",
+                "events_ticket",
+            ),
+            (
+                "SELECT id FROM events WHERE ticket = ?1 AND id > ?2 ORDER BY id",
+                "events_ticket",
+            ),
+            (
+                "SELECT id FROM events WHERE kind = ?1 ORDER BY id DESC LIMIT 20",
+                "events_kind",
+            ),
+            (
+                "SELECT count(*) FROM questions WHERE ticket = ?1 AND state NOT IN ('answered', 'needless')",
+                "questions_ticket",
+            ),
+            (
+                "SELECT id FROM questions WHERE state IN (?1, ?2) ORDER BY created, length(id), id",
+                "questions_state",
+            ),
+            (
+                "SELECT id FROM questions WHERE ticket = ?1 ORDER BY created, length(id), id",
+                "questions_ticket",
+            ),
+            (
+                "SELECT id FROM human WHERE ticket = ?1 ORDER BY id",
+                "human_ticket",
+            ),
+            (
+                "SELECT id FROM operations WHERE ticket = ?1 AND (?2 IS NULL OR verb = ?2) ORDER BY rowid",
+                "operations_ticket",
+            ),
+            (
+                "SELECT id FROM operations WHERE state IN (?1) ORDER BY rowid",
+                "operations_state",
+            ),
+            (
+                "SELECT state FROM spans WHERE ticket = ?1 ORDER BY rowid",
+                "spans_ticket",
+            ),
+            (
+                "SELECT head FROM checks WHERE ticket = ?1 AND (?2 IS NULL OR head = ?2) ORDER BY rowid",
+                "checks_ticket",
+            ),
+        ];
+        for (sql, index) in cases {
+            let steps = plan(&ledger, sql);
+            assert!(
+                steps
+                    .iter()
+                    .any(|s| s.starts_with("SEARCH") && s.contains(index)),
+                "{sql}: {steps:?}"
+            );
+            assert!(
+                !steps.iter().any(|s| s.starts_with("SCAN")),
+                "{sql}: {steps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_read_transaction_sees_one_state_and_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        let ledger = Ledger::create(&path).unwrap();
+        let other = Ledger::open(&path).unwrap();
+        let before = ledger.data_version().unwrap();
+        let count = |l: &Ledger| -> i64 {
+            l.conn()
+                .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+                .unwrap()
+        };
+        let seen = ledger
+            .in_read(|l| {
+                let first = count(l);
+                other.add_event(&Event::now("tick", "step")).unwrap();
+                Ok((first, count(l)))
+            })
+            .unwrap();
+        assert_eq!(seen.0, seen.1, "the reads of one transaction see one state");
+        assert!(ledger.conn().is_autocommit(), "the transaction ended");
+        assert_eq!(
+            count(&ledger),
+            seen.0 + 1,
+            "a read after it sees the change"
+        );
+        assert_ne!(ledger.data_version().unwrap(), before);
+        let same = ledger.data_version().unwrap();
+        assert_eq!(
+            ledger.data_version().unwrap(),
+            same,
+            "no change, no new version"
+        );
+        let err = ledger
+            .in_read(|_| -> Result<()> { bail!("a read failed") })
+            .unwrap_err();
+        assert!(err.to_string().contains("a read failed"));
+        assert!(ledger.conn().is_autocommit());
     }
 
     #[test]

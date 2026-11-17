@@ -154,10 +154,17 @@ impl Snapshot {
 
 /// The items that wait for the person, from each module that knows some.
 pub fn collect_needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
+    let proposals = curator::needs(ctx, ledger)?;
+    collect_needs_with(ctx, ledger, proposals)
+}
+
+/// The items that wait for the person, with the needs of the proposals of the Curator from the
+/// caller: the app keeps the proposals of the memory and reads them again only after a change.
+pub fn collect_needs_with(ctx: &Ctx, ledger: &Ledger, proposals: Vec<Need>) -> Result<Vec<Need>> {
     let mut needs = questions::needs(ctx, ledger)?;
     needs.extend(pipeline::needs(ctx, ledger)?);
     needs.extend(executor::needs(ctx, ledger)?);
-    needs.extend(curator::needs(ctx, ledger)?);
+    needs.extend(proposals);
     needs.extend(pipeline::notice_needs(ledger)?);
     Ok(needs)
 }

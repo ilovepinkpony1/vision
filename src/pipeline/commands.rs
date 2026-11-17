@@ -20,7 +20,7 @@ use crate::ctx::Ctx;
 use crate::executor::{self, short, OpState, QueueTicket};
 use crate::exit::Stop;
 use crate::ledger::questions::HumanRow;
-use crate::ledger::{Event, Ledger, TicketRow};
+use crate::ledger::{Event, EventRow, Ledger, TicketRow};
 use crate::lock::TickLock;
 use crate::paths::TicketKey;
 use crate::util::fs::atomic_write;
@@ -880,47 +880,65 @@ pub fn told_to(detail: &Value) -> String {
 /// The timeline of one ticket, oldest first. A message that the person sent with `vision tell`
 /// is the event `told`.
 pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
-    let mut out = Vec::new();
-    for e in ledger.events_of_ticket(key.as_str())? {
-        if matches!(e.kind.as_str(), "turn-started" | "turn-ended") {
-            continue;
-        }
-        let detail: Value = e
-            .detail
-            .as_deref()
-            .and_then(|d| serde_json::from_str(d).ok())
-            .unwrap_or(Value::Null);
-        let field = |name: &str| detail.get(name).and_then(Value::as_str).unwrap_or("-");
-        let text = match e.kind.as_str() {
-            "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
-            "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
-            "kind" => format!("{} kind {}", e.actor, field("kind")),
-            "told" => format!(
-                "{} told {}: {}",
-                e.actor,
-                told_to(&detail),
-                cut(field("text"), 240)
-            ),
-            _ => format!(
-                "{} {}{}",
-                e.actor,
-                e.kind,
-                e.detail
-                    .as_deref()
-                    .map(|d| format!(" {}", cut(d, 240)))
-                    .unwrap_or_default()
-            ),
-        };
-        out.push(LogEntry {
-            who: e.actor.clone(),
-            detail,
-            at: e.at.clone(),
-            source: "event".into(),
-            kind: e.kind.clone(),
-            id: e.external_id.clone(),
-            text,
-        });
+    let mut out: Vec<LogEntry> = ledger
+        .events_of_ticket(key.as_str())?
+        .iter()
+        .filter_map(event_entry)
+        .collect();
+    out.extend(other_entries(ledger, key)?);
+    sort_timeline(&mut out);
+    Ok(out)
+}
+
+/// One event of a ticket as a line of its timeline, or `None` for the start and the end of a
+/// turn, which the rows of `turns` give. An event never changes after its write, so a reader
+/// can keep its line.
+pub fn event_entry(e: &EventRow) -> Option<LogEntry> {
+    if matches!(e.kind.as_str(), "turn-started" | "turn-ended") {
+        return None;
     }
+    let detail: Value = e
+        .detail
+        .as_deref()
+        .and_then(|d| serde_json::from_str(d).ok())
+        .unwrap_or(Value::Null);
+    let field = |name: &str| detail.get(name).and_then(Value::as_str).unwrap_or("-");
+    let text = match e.kind.as_str() {
+        "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
+        "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
+        "kind" => format!("{} kind {}", e.actor, field("kind")),
+        "told" => format!(
+            "{} told {}: {}",
+            e.actor,
+            told_to(&detail),
+            cut(field("text"), 240)
+        ),
+        _ => format!(
+            "{} {}{}",
+            e.actor,
+            e.kind,
+            e.detail
+                .as_deref()
+                .map(|d| format!(" {}", cut(d, 240)))
+                .unwrap_or_default()
+        ),
+    };
+    Some(LogEntry {
+        who: e.actor.clone(),
+        detail,
+        at: e.at.clone(),
+        source: "event".into(),
+        kind: e.kind.clone(),
+        id: e.external_id.clone(),
+        text,
+    })
+}
+
+/// The lines of the turns, the cards, and the operations of a ticket, in that order and not
+/// sorted. These rows change after their write, such as a turn that ends, so a reader reads
+/// them again.
+pub fn other_entries(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
+    let mut out = Vec::new();
     for t in ledger.turns_of_ticket(key.as_str())? {
         let agent = t.agent.clone().unwrap_or_default();
         let step = t.step.clone().unwrap_or_default();
@@ -1052,17 +1070,28 @@ pub fn timeline(ledger: &Ledger, key: &TicketKey) -> Result<Vec<LogEntry>> {
             ),
         });
     }
-    // Times have whole seconds. In one second, a turn ends, the tick acts on it, and the next
-    // turn starts: that order is kept.
-    let rank = |e: &LogEntry| match (e.source.as_str(), e.kind.as_str()) {
+    Ok(out)
+}
+
+/// The place of a line in one second of the timeline. Times have whole seconds. In one second,
+/// a turn ends, the tick acts on it, and the next turn starts: that order is kept.
+pub fn timeline_rank(e: &LogEntry) -> u8 {
+    match (e.source.as_str(), e.kind.as_str()) {
         ("turn", "ended") => 0,
         ("card", _) => 1,
         ("event", _) => 2,
         ("operation", _) => 3,
         _ => 4,
-    };
-    out.sort_by(|a, b| a.at.cmp(&b.at).then(rank(a).cmp(&rank(b))));
-    Ok(out)
+    }
+}
+
+/// Sorts the lines of a timeline by time, then by [`timeline_rank`]. The sort is stable: lines
+/// that tie keep their order.
+pub fn sort_timeline(lines: &mut [LogEntry]) {
+    lines.sort_by(|a, b| {
+        a.at.cmp(&b.at)
+            .then(timeline_rank(a).cmp(&timeline_rank(b)))
+    });
 }
 
 /// `vision log KEY [--json]`.
@@ -1109,8 +1138,14 @@ pub struct DiffCommit {
 pub fn diff_of(ctx: &Ctx, key: &TicketKey, fetch: bool) -> Result<DiffView> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
+    diff_with(ctx, &ledger, key, fetch)
+}
+
+/// [`diff_of`] with the connection of the caller, such as the one that the loader of the app
+/// keeps.
+pub fn diff_with(ctx: &Ctx, ledger: &Ledger, key: &TicketKey, fetch: bool) -> Result<DiffView> {
     let adapter = adapter::load(ctx)?;
-    let ticket = ticket_of(&ledger, key)?;
+    let ticket = ticket_of(ledger, key)?;
     let clone = ticket
         .clone_dir()
         .with_context(|| format!("{key} holds no clone now, so there is no branch to compare"))?;
@@ -1277,20 +1312,63 @@ pub struct Report {
 
 /// The measures of each ticket and in total.
 pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
+    report_at(ledger, since, time::now())
+}
+
+/// True for a ticket that the report does not count: a reserved key, or a text that is no key.
+fn reserved_ticket(ticket: &str) -> bool {
+    TicketKey::parse(ticket).map_or(true, |k| k.is_reserved())
+}
+
+/// Adds one card to the measures of its ticket by its outcome and its basis.
+fn count_card(m: &mut Measures, outcome: Option<&str>, basis: Option<&str>) {
+    match (outcome, basis) {
+        (Some("propose" | "ask"), _) => m.cards_to_person += 1,
+        (Some("answer"), Some("decision" | "principle")) => m.cards_by_memory += 1,
+        (Some("answer"), _) => m.cards_by_judge += 1,
+        _ => {}
+    }
+}
+
+/// The seconds of one span, from the start of the window `since` when it started before it,
+/// to its end or to `now`. `None` for a span whose times do not parse, or that ended before
+/// the window.
+fn span_seconds(
+    span: &crate::ledger::pipeline::SpanRow,
+    since: Option<&str>,
+    now: ::time::OffsetDateTime,
+) -> Option<i64> {
+    let (Ok(start), end) = (
+        time::parse_rfc3339(&span.started),
+        span.ended
+            .as_deref()
+            .and_then(|e| time::parse_rfc3339(e).ok())
+            .unwrap_or(now),
+    ) else {
+        return None;
+    };
+    let start = match since.and_then(|s| time::parse_rfc3339(s).ok()) {
+        Some(window) if window > start => window,
+        _ => start,
+    };
+    (end >= start).then(|| time::seconds_between(start, end))
+}
+
+/// The report with `now` as the end of each span that is still open.
+pub fn report_at(
+    ledger: &Ledger,
+    since: Option<&str>,
+    now: ::time::OffsetDateTime,
+) -> Result<Report> {
     let mut tickets: BTreeMap<String, Measures> = BTreeMap::new();
-    let reserved = |t: &str| TicketKey::parse(t).map_or(true, |k| k.is_reserved());
+    let reserved = reserved_ticket;
     let after = |at: Option<&str>| since.is_none_or(|s| at.is_some_and(|a| a >= s));
     for c in ledger.cards_of(None)? {
         if reserved(&c.ticket) || !after(c.created.as_deref()) {
             continue;
         }
         let m = tickets.entry(c.ticket.clone()).or_default();
-        match (c.outcome.as_deref(), c.basis.as_deref()) {
-            (Some("propose" | "ask"), _) => m.cards_to_person += 1,
-            (Some("answer"), Some("decision" | "principle")) => m.cards_by_memory += 1,
-            (Some("answer"), _) => m.cards_by_judge += 1,
-            _ => {}
-        }
+        count_card(m, c.outcome.as_deref(), c.basis.as_deref());
     }
     for h in ledger.human_of(None)? {
         let Some(ticket) = h.ticket.clone() else {
@@ -1301,33 +1379,19 @@ pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
         }
         tickets.entry(ticket).or_default().human_minutes += h.seconds.unwrap_or(0) as f64 / 60.0;
     }
-    let now = time::now();
     for s in ledger.spans_of(None)? {
         if reserved(&s.ticket) {
             continue;
         }
-        let (Ok(start), end) = (
-            time::parse_rfc3339(&s.started),
-            s.ended
-                .as_deref()
-                .and_then(|e| time::parse_rfc3339(e).ok())
-                .unwrap_or(now),
-        ) else {
+        let Some(seconds) = span_seconds(&s, since, now) else {
             continue;
         };
-        let start = match since.and_then(|s| time::parse_rfc3339(s).ok()) {
-            Some(window) if window > start => window,
-            _ => start,
-        };
-        if end < start {
-            continue;
-        }
         *tickets
             .entry(s.ticket.clone())
             .or_default()
             .step_seconds
             .entry(s.state.clone())
-            .or_default() += time::seconds_between(start, end);
+            .or_default() += seconds;
     }
     for c in ledger.step_costs(since)? {
         if reserved(&c.ticket) {
@@ -1387,6 +1451,49 @@ pub fn report_of(ledger: &Ledger, since: Option<&str>) -> Result<Report> {
         escapes: crate::escapes::measures(ledger, None, since)?,
         counted: crate::config::Escapes::default().count,
     })
+}
+
+/// The measures of one ticket for all time, as [`report_of`] gives them for it, from the rows
+/// of that ticket only: its cards, the minutes of the person, the seconds and the cost of each
+/// step, and its kind. A reserved ticket, or one with no row to count, has the empty measures.
+pub fn measures_of(ledger: &Ledger, key: &str) -> Result<Measures> {
+    measures_at(ledger, key, time::now())
+}
+
+/// The measures of one ticket with `now` as the end of a span that is still open.
+pub fn measures_at(ledger: &Ledger, key: &str, now: ::time::OffsetDateTime) -> Result<Measures> {
+    let mut m = Measures::default();
+    if reserved_ticket(key) {
+        return Ok(m);
+    }
+    // The report keeps a ticket, with its kind, only when one of its rows counts.
+    let mut counted = false;
+    for c in ledger.cards_of(Some(key))? {
+        counted = true;
+        count_card(&mut m, c.outcome.as_deref(), c.basis.as_deref());
+    }
+    for h in ledger.human_of(Some(key))? {
+        counted = true;
+        m.human_minutes += h.seconds.unwrap_or(0) as f64 / 60.0;
+    }
+    for s in ledger.spans_of(Some(key))? {
+        let Some(seconds) = span_seconds(&s, None, now) else {
+            continue;
+        };
+        counted = true;
+        *m.step_seconds.entry(s.state.clone()).or_default() += seconds;
+    }
+    for c in ledger.step_costs_of(key)? {
+        counted = true;
+        *m.step_cost_usd.entry(c.step.clone()).or_default() += c.cost_usd;
+        m.cost_usd += c.cost_usd;
+    }
+    if counted {
+        m.kind = ledger
+            .ticket(key)?
+            .and_then(|row| super::state::Counts::of(&row).kind);
+    }
+    Ok(m)
 }
 
 /// A cost in dollars for people: two decimals, and `<$0.01` for a cost above zero that is below

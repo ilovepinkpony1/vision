@@ -4,7 +4,8 @@
 
 use ratatui::buffer::Buffer;
 use vision::app::model::{
-    App, Screen, SetupError, StageState, STAGE_ENGINE, STAGE_LEDGER, STAGE_TRACKER,
+    App, Screen, SetupError, StageState, BLOCKED_STILL_AFTER, STAGE_ENGINE, STAGE_LEDGER,
+    STAGE_TRACKER,
 };
 use vision::app::msg::{Effect, Key, Msg};
 use vision::app::picture::{Cell, Picture, BLOCKS};
@@ -139,6 +140,33 @@ fn the_loader_animates_and_home_waits_quietly() {
         !app.animating(),
         "nothing moves on Home after the first pass"
     );
+}
+
+#[test]
+fn a_blocked_loader_stops_moving_after_its_android_appeared() {
+    let mut app = booting(SIZE);
+    send(
+        &mut app,
+        0.1,
+        Msg::Setup(Err(SetupError {
+            reason: "not set up".into(),
+            what: "Vision is not set up at ~/.vision: config.toml is missing.".into(),
+            fix: "Run vision init to make the home folder, then open Vision again.".into(),
+        })),
+    );
+    assert!(app.animating(), "the android still appears");
+    send(&mut app, 0.95, Msg::Tick);
+    assert!(app.animating());
+    send(&mut app, BLOCKED_STILL_AFTER, Msg::Tick);
+    assert!(!app.animating(), "each frame after it is the same");
+    let shown = screen(&app);
+    assert!(shown.contains("V  I  S  I  O  N"), "{shown}");
+    send(&mut app, 30.0, Msg::Tick);
+    assert!(!app.animating());
+    // A loader that is not blocked keeps its android moving.
+    let mut app = booting(SIZE);
+    send(&mut app, 5.0, Msg::Tick);
+    assert!(app.animating());
 }
 
 const TOP: Rgb = Rgb(250, 40, 40);

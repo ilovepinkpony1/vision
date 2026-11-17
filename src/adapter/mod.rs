@@ -39,7 +39,12 @@ pub const FILE: &str = "adapter.toml";
 
 /// The adapter of the configuration of `ctx`.
 pub fn load(ctx: &Ctx) -> Result<Adapter> {
-    load_with(ctx.config()?, &ctx.paths)
+    if let Some(adapter) = ctx.kept_adapter() {
+        return Ok(adapter);
+    }
+    let adapter = load_with(ctx.config()?, &ctx.paths)?;
+    ctx.keep_adapter(&adapter);
+    Ok(adapter)
 }
 
 /// Finds the adapter of `config.project`, parses its `adapter.toml`, and tests it. A turn step

@@ -56,7 +56,7 @@ pub use settings::{
     gitconfig_path, identity, permission_mode, session_env, session_env_of_process, tools,
     ALLOWED_ENV,
 };
-pub use state::{Phase, Reason, TurnState};
+pub use state::{supervisor_alive, Phase, Reason, TurnState};
 pub use stream::{
     parse_value as parse_stream_value, Event as StreamEvent, ResultEvent, ToolCall, Usage,
 };

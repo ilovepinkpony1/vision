@@ -17,7 +17,7 @@ use crate::ctx::Ctx;
 use crate::executor::{self, short, CiFacts, Outcome, PrFacts};
 use crate::ledger::questions::STATE_JUDGING;
 use crate::ledger::turns::Window;
-use crate::ledger::Ledger;
+use crate::ledger::{Ledger, TicketRow};
 use crate::turn::{RunningTurn, TurnStatus};
 use crate::util::time;
 
@@ -175,36 +175,62 @@ pub struct LimitFact {
 /// The facts of each ticket that is not reserved, by key.
 pub fn state_facts(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<StateFacts>> {
     let running = crate::turn::running_turns(ctx, ledger)?;
+    state_facts_with(ctx, ledger, &running, |_| true)
+}
+
+/// The facts of each ticket that is not reserved and whose ledger row `keep` takes, by key,
+/// with the turns that run now. The app takes only the tickets in progress, so that a
+/// finished ticket costs no read.
+pub fn state_facts_with(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    running: &[RunningTurn],
+    keep: impl Fn(&TicketRow) -> bool,
+) -> Result<Vec<StateFacts>> {
     // A broken adapter only leaves the facts that need it empty.
     let adapter = crate::adapter::load(ctx).ok();
     let mut out = Vec::new();
     for row in ledger.tickets()? {
+        if !keep(&row) {
+            continue;
+        }
         let Ok(ticket) = Ticket::of(row) else {
             continue;
         };
         if ticket.key.is_reserved() {
             continue;
         }
-        out.push(facts_of(ctx, ledger, &ticket, &running, adapter.as_ref())?);
+        out.push(facts_of(ctx, ledger, &ticket, running, adapter.as_ref())?);
     }
     Ok(out)
 }
 
 /// The facts of one ticket, or `None` when the ledger has no such ticket.
 pub fn state_facts_of(ctx: &Ctx, ledger: &Ledger, key: &str) -> Result<Option<StateFacts>> {
+    let running = crate::turn::running_turns(ctx, ledger)?;
+    state_facts_of_with(ctx, ledger, key, &running)
+}
+
+/// The facts of one ticket with the turns that run now, or `None` when the ledger has no such
+/// ticket.
+pub fn state_facts_of_with(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &str,
+    running: &[RunningTurn],
+) -> Result<Option<StateFacts>> {
     let Some(row) = ledger.ticket(key)? else {
         return Ok(None);
     };
     let Ok(ticket) = Ticket::of(row) else {
         return Ok(None);
     };
-    let running = crate::turn::running_turns(ctx, ledger)?;
     let adapter = crate::adapter::load(ctx).ok();
     Ok(Some(facts_of(
         ctx,
         ledger,
         &ticket,
-        &running,
+        running,
         adapter.as_ref(),
     )?))
 }

@@ -176,7 +176,8 @@ pub fn feed(app: &App, c: &mut Canvas, l: &Layout, live: &Live, now: &Now) {
     if tabs.right {
         c.put(x + w - 1, TABS_Y, "›", ink(T.dim));
     }
-    let lines = feed.lines(l.feed_text_w(), app.clock.offset_seconds, app.activity);
+    // The lines come from the cache of the feed: only a change wraps them again.
+    let lines = feed.shared_lines(l.feed_text_w(), app.clock.offset_seconds, app.activity);
     let height = l.feed_h() as usize;
     if lines.is_empty() {
         let text = if feed.is_empty() {

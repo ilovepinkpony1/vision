@@ -21,6 +21,10 @@ use crate::pipeline::TicketView;
 use crate::running::Running;
 use crate::snapshot::{LimitsView, Need};
 
+/// A loader that a setup error blocks stops moving after this many seconds: its android and
+/// its title appeared, and each later frame is the same.
+pub const BLOCKED_STILL_AFTER: f64 = super::view::android::APPEAR_SECONDS + 0.2;
+
 /// The smallest window that the app draws in.
 pub const MIN_WIDTH: u16 = 100;
 pub const MIN_HEIGHT: u16 = 28;
@@ -587,10 +591,16 @@ impl App {
     /// True when a part of the screen moves, so that the runtime draws often.
     pub fn animating(&self) -> bool {
         if self.screen == Screen::Boot {
+            return self.boot.blocked.is_none() || self.clock.seconds() < BLOCKED_STILL_AFTER;
+        }
+        if self.queue.loading() {
             return true;
         }
-        if self.engine.running.is_some() || self.queue.loading() {
-            return true;
+        // A pass moves on the screen only after the header shows it.
+        if let Some(running) = &self.engine.running {
+            if running.job.kind != JobKind::Pass || self.until_pass_shows().is_none() {
+                return true;
+            }
         }
         let card = match &self.card {
             Some(Card::Start(card)) => card.info.is_none() || card.run.job().is_some(),
@@ -609,6 +619,19 @@ impl App {
         };
         let chain = self.chain.as_ref().is_some_and(Chain::running);
         card || screen || chain || self.live_moves()
+    }
+
+    /// The time until the header shows the pass that runs, or `None` when no pass runs or the
+    /// header shows it already. The runtime wakes at that time, so that the pass shows on time.
+    pub fn until_pass_shows(&self) -> Option<Duration> {
+        let running = self
+            .engine
+            .running
+            .as_ref()
+            .filter(|r| r.job.kind == JobKind::Pass)?;
+        let ran = self.clock.elapsed.saturating_sub(running.since);
+        let after = super::view::header::PASS_SHOWN_AFTER;
+        (ran < after).then(|| after - ran)
     }
 
     /// The chain of this owner, while it runs or after it failed.

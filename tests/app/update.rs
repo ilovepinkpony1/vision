@@ -699,6 +699,70 @@ fn the_local_data_loads_again_each_second_and_after_each_job() {
 }
 
 #[test]
+fn a_load_that_found_no_change_keeps_the_data_and_ends_the_load() {
+    let mut app = home(SIZE);
+    let data = app.local.data.clone();
+    assert!(super::support::send(&mut app, 1.4, Msg::Tick).contains(&Effect::LoadLocal));
+    assert!(app.local.loading());
+    let fx = super::support::send(&mut app, 1.5, Msg::LocalSame);
+    assert!(!app.local.loading());
+    assert_eq!(app.local.data, data);
+    assert_eq!(app.local.error, None);
+    assert!(!fx.contains(&Effect::LoadLocal));
+    // The next load starts a second after the end of this one.
+    assert!(!super::support::send(&mut app, 2.4, Msg::Tick).contains(&Effect::LoadLocal));
+    assert!(super::support::send(&mut app, 2.6, Msg::Tick).contains(&Effect::LoadLocal));
+}
+
+#[test]
+fn a_pass_with_no_change_after_it_starts_no_quick_pass() {
+    let mut app = home(SIZE);
+    let fx = super::support::send(&mut app, 61.0, Msg::Tick);
+    let Some(Effect::Run(pass)) = fx.into_iter().find(|e| matches!(e, Effect::Run(_))) else {
+        panic!("the pass of the minute did not start")
+    };
+    super::support::send(
+        &mut app,
+        61.1,
+        Msg::Local(Ok(local(two_tickets(), Vec::new()))),
+    );
+    let fx = super::support::send(&mut app, 61.2, done(pass.id, pass.kind, ok("tick done")));
+    assert!(fx.contains(&Effect::LoadLocal));
+    assert!(app.engine.pass_ended);
+    let fx = super::support::send(&mut app, 61.3, Msg::LocalSame);
+    assert!(runs(&fx).is_empty(), "{fx:?}");
+    assert!(app.engine.queue.is_empty());
+    assert!(
+        !app.engine.pass_ended,
+        "the load after the pass told the engine"
+    );
+}
+
+#[test]
+fn a_pass_moves_the_screen_only_when_the_header_shows_it() {
+    let mut app = home(SIZE);
+    assert!(!app.animating());
+    let fx = super::support::send(&mut app, 61.0, Msg::Tick);
+    assert!(runs(&fx).contains(&JobKind::Pass));
+    super::support::send(
+        &mut app,
+        61.1,
+        Msg::Local(Ok(local(two_tickets(), Vec::new()))),
+    );
+    // The header shows the pass after two seconds: no fast frame before that.
+    app.clock = clock(62.0);
+    assert!(!app.animating());
+    assert_eq!(
+        app.until_pass_shows(),
+        Some(std::time::Duration::from_secs(1))
+    );
+    app.clock = clock(63.0);
+    assert!(app.animating());
+    assert_eq!(app.until_pass_shows(), None);
+    assert!(screen(&app).contains("pass 0:02"));
+}
+
+#[test]
 fn the_queue_loads_again_each_five_minutes() {
     let mut app = home(SIZE);
     assert!(!send(&mut app, 200.0, Msg::Tick).contains(&Effect::LoadQueue));

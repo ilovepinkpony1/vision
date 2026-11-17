@@ -27,6 +27,8 @@ mod live_colors;
 mod live_support;
 #[path = "app/live_update.rs"]
 mod live_update;
+#[path = "app/loads.rs"]
+mod loads;
 #[path = "app/need_cards.rs"]
 mod need_cards;
 #[path = "app/need_support.rs"]

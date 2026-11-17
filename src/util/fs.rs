@@ -103,6 +103,30 @@ pub fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
+/// What a change of a file or of a folder changes: its size, the time of its last write to the
+/// nanosecond, and its inode. A write in place, a rename over it, and a new or removed entry of
+/// a folder each give a new stamp. A reader that keeps what it read compares stamps to know
+/// when to read again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp {
+    pub len: u64,
+    pub mtime: i64,
+    pub mtime_nsec: i64,
+    pub ino: u64,
+}
+
+/// The stamp of a path, or `None` when nothing is there.
+pub fn stamp(path: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::metadata(path).ok()?;
+    Some(Stamp {
+        len: meta.size(),
+        mtime: meta.mtime(),
+        mtime_nsec: meta.mtime_nsec(),
+        ino: meta.ino(),
+    })
+}
+
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)

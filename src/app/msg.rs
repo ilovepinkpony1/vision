@@ -52,6 +52,8 @@ pub enum Msg {
     Setup(Result<Setup, SetupError>),
     /// The local data: the tickets, the needs, the limits, and the heartbeat.
     Local(Result<Local, String>),
+    /// The loader found no change since the local data that it gave last.
+    LocalSame,
     /// The queue of the tracker.
     Queue(Result<Vec<PickRow>, String>),
     /// What the start card shows for a ticket.
@@ -63,6 +65,11 @@ pub enum Msg {
     Ticket {
         key: String,
         data: Box<Result<TicketData, String>>,
+    },
+    /// The loader found no change since the data of the live view of this ticket that it gave
+    /// last.
+    TicketSame {
+        key: String,
     },
     /// New events of a stream file of the ticket of the live view.
     Stream {

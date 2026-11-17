@@ -1,7 +1,9 @@
-//! The reads of the app. Each one runs in a thread of the runtime, makes its own context from
-//! the paths, and opens its own ledger connection, as `vision watch` does. Each one reads
-//! through the functions of today that return data: the status view, the rows of `vision
-//! pick`, the report, the model table, and the adapter. None of them changes the state.
+//! The reads of the app. The local data of Home reads through the context and the connection
+//! that the loader of the app keeps ([`super::loader`]); each other read runs in a thread of
+//! the runtime, makes its own context from the paths, and opens its own ledger connection, as
+//! `vision watch` does. Each one reads through the functions of today that return data: the
+//! status rows, the rows of `vision pick`, the report, the model table, and the adapter. None
+//! of them changes the state.
 
 use std::time::Duration;
 
@@ -13,10 +15,11 @@ use crate::config::Mode;
 use crate::ctx::Ctx;
 use crate::executor;
 use crate::ledger::turns::Window;
+use crate::ledger::{Ledger, TicketRow};
 use crate::paths::{tilde_display, Paths, TicketKey};
 use crate::pipeline::commands::{next_clone, pick_rows, report_of, PickRow};
 use crate::pipeline::state::{flags_of, Counts, NEEDS_YOU, PAUSED, STOPPED};
-use crate::status::StatusView;
+use crate::snapshot::{LimitsView, Need};
 use crate::util::time;
 
 /// The first stage of the loader: the configuration and the adapter.
@@ -48,28 +51,56 @@ pub fn setup(paths: &Paths) -> Result<Setup, SetupError> {
     })
 }
 
-/// The local data: the status view, the tickets in progress, the turns that run, the numbers
-/// of the last 7 days before `wall`, and the timer.
+/// The local data: the tickets in progress, the turns that run, the needs, the numbers of the
+/// last 7 days before `wall`, and the timer. A read with its own context and connection, such
+/// as for a test; the app reads through [`super::loader`], which keeps them.
 pub fn local(paths: &Paths, wall: OffsetDateTime) -> Result<Local, String> {
-    read_local(paths, wall).map_err(|e| format!("{e:#}"))
+    let read = || -> anyhow::Result<Local> {
+        let ctx = Ctx::new(paths.clone());
+        ctx.require_setup()?;
+        let ledger = ctx.ledger()?;
+        let proposals = crate::curator::needs(&ctx, &ledger)?;
+        local_with(&ctx, &ledger, proposals, wall)
+    };
+    read().map_err(|e| format!("{e:#}"))
 }
 
-fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
-    let ctx = Ctx::new(paths.clone());
-    let view = StatusView::read(&ctx)?;
-    let ledger = ctx.ledger()?;
+/// True for a ticket that Home shows in progress: it has a step and its end step did not run.
+pub fn in_progress(row: &TicketRow) -> bool {
+    !row.state.as_deref().is_none_or(str::is_empty) && Counts::of(row).finished.is_none()
+}
+
+/// The local data from a context and a connection that the caller keeps, with the needs of the
+/// proposals of the Curator. Each read runs in one read transaction, and only the tickets in
+/// progress get the reads of one ticket.
+pub fn local_with(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    proposals: Vec<Need>,
+    wall: OffsetDateTime,
+) -> anyhow::Result<Local> {
+    ledger.in_read(|ledger| read_local(ctx, ledger, proposals, wall))
+}
+
+fn read_local(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    proposals: Vec<Need>,
+    wall: OffsetDateTime,
+) -> anyhow::Result<Local> {
+    let config = ctx.config()?;
+    let needs = crate::snapshot::collect_needs_with(ctx, ledger, proposals)?;
     let rows = ledger.tickets()?;
+    let running = crate::turn::running_turns(ctx, ledger)?;
+    let views = crate::pipeline::view::rows_with(ctx, ledger, &needs, &running, in_progress)?;
+    let mut facts = crate::pipeline::facts::state_facts_with(ctx, ledger, &running, in_progress)?;
     let since = time::rfc3339(wall - Duration::from_secs(7 * 24 * 3600));
-    let mut facts = crate::pipeline::facts::state_facts(&ctx, &ledger)?;
     let mut tickets = Vec::new();
     let mut agents: Vec<String> = Vec::new();
-    for ticket in view.tickets {
+    for ticket in views {
         let Some(row) = rows.iter().find(|r| r.key == ticket.key) else {
             continue;
         };
-        if row.state.as_deref().is_none_or(str::is_empty) || Counts::of(row).finished.is_some() {
-            continue;
-        }
         let flags = flags_of(row);
         if let Some(works) = &ticket.works {
             if !agents.contains(&works.agent) {
@@ -98,20 +129,19 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
                 .is_some_and(|at| at.as_str() >= since.as_str())
         })
         .count();
-    let report = report_of(&ledger, Some(&since))?;
+    let report = report_of(ledger, Some(&since))?;
     let total = &report.total;
-    let turns = crate::turn::running_turns(&ctx, &ledger)?.len();
     let now = time::rfc3339(wall);
     let reset = |window| -> anyhow::Result<Option<String>> {
         Ok(ledger.active_reading(window, &now)?.and_then(|r| r.resets))
     };
     let resets = [reset(Window::FiveHour)?, reset(Window::SevenDay)?];
     Ok(Local {
-        off: view.off,
-        limits: view.limits,
-        needs: view.needs,
+        off: ctx.paths.off().exists(),
+        limits: LimitsView::new(&config.limits, ledger.latest_limits()?),
+        needs,
         tickets,
-        turns,
+        turns: running.len(),
         agents,
         week: Week {
             cost_usd: total.cost_usd,
@@ -119,8 +149,8 @@ fn read_local(paths: &Paths, wall: OffsetDateTime) -> anyhow::Result<Local> {
             without_you: total.cards_by_memory + total.cards_by_judge,
             questions: total.cards_by_memory + total.cards_by_judge + total.cards_to_person,
         },
-        timer: crate::install::is_installed(paths),
-        running: view.running,
+        timer: crate::install::is_installed(&ctx.paths),
+        running: crate::running::read(&ctx.paths),
         resets,
     })
 }

@@ -264,6 +264,11 @@ impl Memory {
         &self.git_dir
     }
 
+    /// The stamps of the refs of the repo. See [`refs_stamp`].
+    pub fn refs_stamp(&self) -> Vec<Option<crate::util::fs::Stamp>> {
+        refs_stamp(&self.git_dir)
+    }
+
     /// The person: the writer of the commands of the person.
     pub fn person(&self) -> &Writer {
         &self.person
@@ -1279,6 +1284,23 @@ fn parse_log_line(line: &str) -> Option<CommitInfo> {
         author,
         subject,
     })
+}
+
+/// The stamps of the refs of the repo whose `.git` folder is `git_dir`: the file HEAD, the
+/// file `packed-refs`, the folder of the branches, and the folder of the proposals. Git writes
+/// a ref to a new file and renames it over the old one, so a commit, a new or removed branch,
+/// and a checkout each change a stamp.
+pub fn refs_stamp(git_dir: &Path) -> Vec<Option<crate::util::fs::Stamp>> {
+    let heads = git_dir.join("refs").join("heads");
+    [
+        git_dir.join("HEAD"),
+        git_dir.join("packed-refs"),
+        heads.join(super::proposal::PROPOSAL_PREFIX.trim_end_matches('/')),
+        heads,
+    ]
+    .iter()
+    .map(|path| crate::util::fs::stamp(path))
+    .collect()
 }
 
 /// The first line of a text, cut to `max` characters with `...` at the end.

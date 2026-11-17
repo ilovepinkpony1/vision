@@ -38,7 +38,7 @@ use crate::cli::ReviewArgs;
 use crate::ctx::Ctx;
 use crate::ledger::Ledger;
 use crate::memory::store::short;
-use crate::memory::Memory;
+use crate::memory::{Memory, ProposalInfo};
 use crate::snapshot::{Need, NeedKind};
 use crate::tick::Pass;
 
@@ -94,27 +94,43 @@ pub fn open_proposals(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<OpenProposal>> {
     let Ok(proposals) = memory.proposals() else {
         return Ok(Vec::new());
     };
+    Ok(open_of(&proposals, ledger))
+}
+
+/// The proposals of a list that have an open change, each with whether its replays still
+/// run. A caller that keeps the list of the memory, such as the app, gives it here. With no
+/// open proposal, nothing reads the ledger.
+pub fn open_of(proposals: &[ProposalInfo], ledger: &Ledger) -> Vec<OpenProposal> {
+    let open: Vec<&ProposalInfo> = proposals
+        .iter()
+        .filter(|p| p.problem.is_none() && p.open > 0)
+        .collect();
+    if open.is_empty() {
+        return Vec::new();
+    }
     let replaying: Vec<String> = runs::replaying(ledger)
         .unwrap_or_default()
         .into_iter()
         .map(|r| r.proposal)
         .collect();
-    Ok(proposals
-        .into_iter()
-        .filter(|p| p.problem.is_none() && p.open > 0)
+    open.into_iter()
         .map(|p| OpenProposal {
             replaying: replaying.contains(&p.name),
-            name: p.name,
-            summary: p.summary,
+            name: p.name.clone(),
+            summary: p.summary.clone(),
             open: p.open,
         })
-        .collect())
+        .collect()
 }
 
 /// Each proposal with an open change: it waits for `vision memory review`.
 pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
-    Ok(open_proposals(ctx, ledger)?
-        .into_iter()
+    Ok(needs_of(open_proposals(ctx, ledger)?))
+}
+
+/// The needs of the open proposals.
+pub fn needs_of(open: Vec<OpenProposal>) -> Vec<Need> {
+    open.into_iter()
         .map(|p| Need {
             kind: NeedKind::Proposal,
             ticket: None,
@@ -130,5 +146,5 @@ pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
             ),
             id: p.name,
         })
-        .collect())
+        .collect()
 }

@@ -1,6 +1,7 @@
 //! The runtime: the loop of messages and the effects. Background work runs in threads that send
-//! messages to the loop over one channel: each load in a thread of its own, the worker in one
-//! thread with a queue, and the keys in one thread. The loop never blocks on the ledger, on the
+//! messages to the loop over one channel: the loader of Home and of the live view in one thread
+//! that keeps its connection, each other load in a thread of its own, the worker in one thread
+//! with a queue, and the keys in one thread. The loop never blocks on the ledger, on the
 //! tracker, or on a child process.
 //!
 //! The runtime sets the time of the model before each message. [`Runtime`] needs no terminal,
@@ -17,8 +18,9 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use time::OffsetDateTime;
 
+use super::loader::{Loader, Request};
 use super::model::{App, Clock};
-use super::msg::{ChildResult, Effect, Handoff, Job, JobDone, Msg};
+use super::msg::{ChildResult, Effect, Handoff, Job, JobDone, JobKind, Msg};
 use super::session;
 use super::tail::{self, Follow};
 use super::terminal::InputControl;
@@ -43,6 +45,8 @@ pub struct Runtime {
     started: Instant,
     /// The reader of the stream files of the ticket of the live view.
     follow: Option<Follow>,
+    /// The thread that reads the local data and the data of the live view, with its connection.
+    loader: Option<Loader>,
     /// The children that wait for the terminal: only [`run_terminal`] can give it.
     opens: Vec<Handoff>,
 }
@@ -69,6 +73,7 @@ impl Runtime {
             jobs: None,
             started,
             follow: None,
+            loader: None,
             opens: Vec::new(),
         }
     }
@@ -106,9 +111,47 @@ impl Runtime {
 
     /// Hands one message to the update, and runs its effects.
     pub fn handle(&mut self, msg: Msg) {
+        // An action or a session can change the memory: the loader reads it again. A pass
+        // changes the proposals only with a commit of the memory, and the loader sees each
+        // commit in the refs of the memory.
+        if matches!(
+            &msg,
+            Msg::JobDone(JobDone {
+                kind: JobKind::Action(_),
+                ..
+            }) | Msg::SessionEnded { .. }
+                | Msg::ReviewEnded { .. }
+        ) {
+            if let Some(loader) = &self.loader {
+                loader.send(Request::Changed);
+            }
+        }
         self.app.clock = clock(self.started);
         let effects = update::update(&mut self.app, msg);
         self.run(effects);
+    }
+
+    /// Hands a request to the loader, and starts its thread first when it does not run. A
+    /// loader that cannot start, or that is gone, gives the failure of `failed`.
+    fn load(&mut self, request: Request, failed: impl FnOnce(String) -> Msg) {
+        if self
+            .loader
+            .as_ref()
+            .is_some_and(|l| l.send(request.clone()))
+        {
+            return;
+        }
+        match Loader::spawn(self.paths.clone(), self.tx.clone()) {
+            Ok(loader) => {
+                loader.send(request);
+                self.loader = Some(loader);
+            }
+            Err(e) => {
+                let _ = self.tx.send(failed(format!(
+                    "could not start a thread for the read: {e}"
+                )));
+            }
+        }
     }
 
     /// Waits for the next message up to `timeout`.
@@ -153,12 +196,9 @@ impl Runtime {
                     );
                 }
                 Effect::LoadLocal => {
-                    let paths = self.paths.clone();
+                    let fresh = self.app.local.data.is_none();
                     let wall = self.app.clock.wall;
-                    self.spawn(
-                        move || Msg::Local(load::local(&paths, wall)),
-                        |e| Msg::Local(Err(e)),
-                    );
+                    self.load(Request::Local { wall, fresh }, |e| Msg::Local(Err(e)));
                 }
                 Effect::LoadQueue => {
                     let paths = self.paths.clone();
@@ -182,20 +222,24 @@ impl Runtime {
                     );
                 }
                 Effect::LoadTicket(key) => {
-                    let paths = self.paths.clone();
+                    let fresh = !self
+                        .app
+                        .live
+                        .as_ref()
+                        .is_some_and(|live| live.key == key && live.data.data.is_some());
                     let failed = key.clone();
-                    self.spawn(
-                        move || Msg::Ticket {
-                            data: Box::new(load_ticket::ticket(&paths, &key)),
-                            key,
-                        },
-                        move |e| Msg::Ticket {
-                            key: failed.clone(),
-                            data: Box::new(Err(e)),
-                        },
-                    );
+                    self.load(Request::Ticket { key, fresh }, move |e| Msg::Ticket {
+                        key: failed,
+                        data: Box::new(Err(e)),
+                    });
                 }
                 Effect::Follow(key) => {
+                    // The view closed: the loader drops the data that it kept for the view.
+                    if key.is_none() {
+                        if let Some(loader) = &self.loader {
+                            loader.send(Request::LiveClosed);
+                        }
+                    }
                     // Dropping the old reader stops its thread.
                     self.follow =
                         key.and_then(|key| tail::follow(self.paths.clone(), &key, self.tx.clone()));
@@ -394,8 +438,8 @@ fn redraw_all(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Resu
 }
 
 /// The loop with a terminal: draws when something changed or something moves, and waits for a
-/// message up to 100 ms while something moves, else up to one second. A session that waits for
-/// the terminal runs here, between two messages.
+/// message up to 100 ms while something moves, else up to one second, or until a pass that runs
+/// shows in the header. A session that waits for the terminal runs here, between two messages.
 pub fn run_terminal(
     rt: &mut Runtime,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -432,7 +476,14 @@ pub fn run_terminal(
             rt.app.dirty = false;
             shown = Some(now_shown);
         }
-        let timeout = if rt.app.animating() { FAST } else { SLOW };
+        // A pass shows in the header after a while: the loop wakes at that time.
+        let timeout = if rt.app.animating() {
+            FAST
+        } else {
+            rt.app
+                .until_pass_shows()
+                .map_or(SLOW, |left| left.min(SLOW))
+        };
         let mut next = rt.wait(timeout);
         loop {
             let msg = next.take().unwrap_or(Msg::Tick);

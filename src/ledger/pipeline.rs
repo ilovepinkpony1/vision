@@ -177,11 +177,14 @@ impl Ledger {
 
     /// The spans of one ticket, or of each ticket, oldest first.
     pub fn spans_of(&self, ticket: Option<&str>) -> Result<Vec<SpanRow>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT coalesce(ticket, ''), coalesce(state, ''), waits_on, reason, coalesce(started, ''), ended
-             FROM spans WHERE ?1 IS NULL OR ticket = ?1 ORDER BY rowid",
-        )?;
-        let rows = stmt.query_map(params![ticket], |row| {
+        let columns = "coalesce(ticket, ''), coalesce(state, ''), waits_on, reason, coalesce(started, ''), ended";
+        // One ticket searches the index of its spans.
+        let sql = match ticket {
+            Some(_) => format!("SELECT {columns} FROM spans WHERE ticket = ?1 ORDER BY rowid"),
+            None => format!("SELECT {columns} FROM spans ORDER BY rowid"),
+        };
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ticket), |row| {
             Ok(SpanRow {
                 ticket: row.get(0)?,
                 state: row.get(1)?,
@@ -336,11 +339,17 @@ impl Ledger {
 
     /// The events of a ticket, oldest first.
     pub fn events_of_ticket(&self, ticket: &str) -> Result<Vec<EventRow>> {
+        self.events_of_ticket_after(ticket, i64::MIN)
+    }
+
+    /// The events of a ticket after the event `after`, oldest first: what a reader that has
+    /// the events of the ticket up to `after` lacks.
+    pub fn events_of_ticket_after(&self, ticket: &str, after: i64) -> Result<Vec<EventRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, coalesce(at, ''), coalesce(actor, ''), ticket, coalesce(kind, ''), detail, external_id
-             FROM events WHERE ticket = ?1 ORDER BY id",
+             FROM events WHERE ticket = ?1 AND id > ?2 ORDER BY id",
         )?;
-        let rows = stmt.query_map([ticket], |row| {
+        let rows = stmt.query_map(params![ticket, after], |row| {
             Ok(EventRow {
                 id: row.get(0)?,
                 at: row.get(1)?,
@@ -354,14 +363,29 @@ impl Ledger {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The number of events of a ticket and the id of the newest one, or 0.
+    pub fn event_count_of_ticket(&self, ticket: &str) -> Result<(i64, i64)> {
+        Ok(self.conn().query_row(
+            "SELECT count(*), coalesce(max(id), 0) FROM events WHERE ticket = ?1",
+            [ticket],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
+
     /// The cards of one ticket, or of each ticket, oldest first.
     pub fn cards_of(&self, ticket: Option<&str>) -> Result<Vec<CardRow>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT id, coalesce(ticket, ''), coalesce(state, ''), outcome, basis, coalesce(card, '{}'),
-                    answer, created, answered
-             FROM questions WHERE ?1 IS NULL OR ticket = ?1 ORDER BY created, length(id), id",
-        )?;
-        let rows = stmt.query_map(params![ticket], |row| {
+        let columns =
+            "id, coalesce(ticket, ''), coalesce(state, ''), outcome, basis, coalesce(card, '{}'),
+                    answer, created, answered";
+        // One ticket searches the index of its cards.
+        let sql = match ticket {
+            Some(_) => format!(
+                "SELECT {columns} FROM questions WHERE ticket = ?1 ORDER BY created, length(id), id"
+            ),
+            None => format!("SELECT {columns} FROM questions ORDER BY created, length(id), id"),
+        };
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ticket), |row| {
             Ok(CardRow {
                 id: row.get(0)?,
                 ticket: row.get(1)?,
@@ -388,11 +412,15 @@ impl Ledger {
 
     /// The `human` rows of one ticket, or of each row with a ticket, oldest first.
     pub fn human_of(&self, ticket: Option<&str>) -> Result<Vec<HumanRow>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT coalesce(at, ''), ticket, coalesce(kind, ''), coalesce(object, ''), value, reason, seconds
-             FROM human WHERE ticket IS NOT NULL AND (?1 IS NULL OR ticket = ?1) ORDER BY id",
-        )?;
-        let rows = stmt.query_map(params![ticket], |row| {
+        let columns =
+            "coalesce(at, ''), ticket, coalesce(kind, ''), coalesce(object, ''), value, reason, seconds";
+        // One ticket searches the index of its rows.
+        let sql = match ticket {
+            Some(_) => format!("SELECT {columns} FROM human WHERE ticket = ?1 ORDER BY id"),
+            None => format!("SELECT {columns} FROM human WHERE ticket IS NOT NULL ORDER BY id"),
+        };
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ticket), |row| {
             Ok(HumanRow {
                 at: row.get(0)?,
                 ticket: row.get(1)?,
@@ -414,6 +442,24 @@ impl Ledger {
              GROUP BY ticket, step ORDER BY ticket, min(rowid)",
         )?;
         let rows = stmt.query_map(params![since], |row| {
+            Ok(StepCost {
+                ticket: row.get(0)?,
+                step: row.get(1)?,
+                turns: row.get(2)?,
+                cost_usd: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The cost of the turns of each step of one ticket, in the order of the first turn of each
+    /// step: the rows of [`Ledger::step_costs`] for that ticket, with no window.
+    pub fn step_costs_of(&self, ticket: &str) -> Result<Vec<StepCost>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT coalesce(ticket, ''), coalesce(step, ''), count(*), coalesce(sum(cost_usd), 0)
+             FROM turns WHERE ticket = ?1 GROUP BY step ORDER BY min(rowid)",
+        )?;
+        let rows = stmt.query_map([ticket], |row| {
             Ok(StepCost {
                 ticket: row.get(0)?,
                 step: row.get(1)?,

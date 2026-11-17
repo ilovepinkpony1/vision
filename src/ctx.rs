@@ -1,9 +1,10 @@
 //! The shared context that each command gets: the paths, the configuration, the ledger, and the log.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 
 use anyhow::{bail, Result};
 
+use crate::adapter::Adapter;
 use crate::config::Config;
 use crate::ledger::Ledger;
 use crate::paths::Paths;
@@ -21,6 +22,9 @@ pub struct Ctx {
     pub paths: Paths,
     config: OnceCell<Config>,
     log: Logger,
+    /// The adapter after its first load, for a context that keeps it. `None` for a context that
+    /// reads the adapter at each load.
+    adapter: Option<RefCell<Option<Adapter>>>,
 }
 
 impl Ctx {
@@ -30,6 +34,35 @@ impl Ctx {
             paths,
             config: OnceCell::new(),
             log,
+            adapter: None,
+        }
+    }
+
+    /// A context that keeps the adapter after its first load, such as the one of the loader
+    /// of the app. Its owner calls [`Ctx::forget_adapter`] when a file of the adapter changes.
+    pub fn keeping_adapter(paths: Paths) -> Ctx {
+        Ctx {
+            adapter: Some(RefCell::new(None)),
+            ..Ctx::new(paths)
+        }
+    }
+
+    /// The next load of the adapter reads its files again.
+    pub fn forget_adapter(&self) {
+        if let Some(kept) = &self.adapter {
+            kept.borrow_mut().take();
+        }
+    }
+
+    /// The adapter that this context keeps, if any.
+    pub(crate) fn kept_adapter(&self) -> Option<Adapter> {
+        self.adapter.as_ref()?.borrow().clone()
+    }
+
+    /// Keeps the adapter, when this context keeps one.
+    pub(crate) fn keep_adapter(&self, adapter: &Adapter) {
+        if let Some(kept) = &self.adapter {
+            *kept.borrow_mut() = Some(adapter.clone());
         }
     }
 

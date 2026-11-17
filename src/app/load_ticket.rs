@@ -1,45 +1,159 @@
-//! The reads of the live view of one ticket, each in a thread of the runtime, through the
-//! functions of today that return data: the status rows, the facts of the state, the report,
-//! the timeline of `vision log`, the plan of `vision plan`, the commits of `vision diff`, the
-//! model table, and the adapter. None of them changes the state.
+//! The reads of the live view of one ticket, through the functions of today that return data:
+//! the status row, the facts of the state, the measures of the report, the timeline of `vision
+//! log`, the plan of `vision plan`, the commits of `vision diff`, the model table, and the
+//! adapter. The data of the view reads through the context and the connection that the loader
+//! of the app keeps ([`super::loader`]); the plan, the commits, and the events of a turn each
+//! read in a thread of the runtime. None of them changes the state.
 
 use std::io::Read;
-use std::path::PathBuf;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use super::feed::StreamLine;
 use super::live::{Member, StepLine, TicketData};
 use crate::ctx::Ctx;
+use crate::ledger::Ledger;
 use crate::paths::{Paths, TicketKey, TurnId};
+use crate::pipeline::commands::{
+    event_entry, other_entries, sort_timeline, timeline_rank, LogEntry,
+};
 use crate::pipeline::{self, DiffView, PlanView, SHORT_HASH};
-use crate::snapshot::collect_needs;
+use crate::snapshot::collect_needs_with;
 
 /// The largest part of a stream file that the events of a turn read, from its end.
 const TURN_READ_MAX: u64 = 8 * 1024 * 1024;
 
-/// The data of the live view of one ticket.
+/// The data of the live view of one ticket, with its own context and connection, such as for a
+/// test. The app reads through [`super::loader`], which keeps them.
 pub fn ticket(paths: &Paths, key: &str) -> Result<TicketData, String> {
-    read_ticket(paths, key).map_err(|e| format!("{e:#}"))
+    let read = || -> anyhow::Result<TicketData> {
+        let ctx = Ctx::new(paths.clone());
+        ctx.require_setup()?;
+        let ledger = ctx.ledger()?;
+        let mut events = EventLines::new(key);
+        let unpushed = unpushed(&ctx, &ledger, key);
+        ticket_with(&ctx, &ledger, key, &mut events, false, unpushed)
+    };
+    read().map_err(|e| format!("{e:#}"))
 }
 
-fn read_ticket(paths: &Paths, key: &str) -> anyhow::Result<TicketData> {
-    let ctx = Ctx::new(paths.clone());
+/// The lines of the timeline of one ticket that come from its events, kept from one load to
+/// the next. An event never changes after its write, so a load reads only the events after the
+/// last one that it has.
+#[derive(Clone, Debug, Default)]
+pub struct EventLines {
+    key: String,
+    /// The id of the newest event that it read, and the number of the events that it read.
+    last: i64,
+    read: i64,
+    /// The lines by time. Lines of one second keep the order of their events.
+    lines: Vec<LogEntry>,
+}
+
+impl EventLines {
+    pub fn new(key: &str) -> EventLines {
+        EventLines {
+            key: key.to_string(),
+            ..EventLines::default()
+        }
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// The number of the events that it read.
+    pub fn read(&self) -> i64 {
+        self.read
+    }
+
+    /// Reads the events after the last one that it has. With `check`, it then compares the
+    /// number of the events of the ticket and the newest id with what it read, and reads each
+    /// event again when they differ.
+    pub fn update(&mut self, ledger: &Ledger, check: bool) -> anyhow::Result<()> {
+        self.read_after(ledger)?;
+        if check && ledger.event_count_of_ticket(&self.key)? != (self.read, self.last) {
+            *self = EventLines::new(&self.key);
+            self.read_after(ledger)?;
+        }
+        Ok(())
+    }
+
+    fn read_after(&mut self, ledger: &Ledger) -> anyhow::Result<()> {
+        for event in ledger.events_of_ticket_after(&self.key, self.last)? {
+            self.last = event.id;
+            self.read += 1;
+            if let Some(line) = event_entry(&event) {
+                // After each line of the same time or earlier: in the order of the events.
+                let at = self.lines.partition_point(|l| l.at <= line.at);
+                self.lines.insert(at, line);
+            }
+        }
+        Ok(())
+    }
+
+    /// The timeline of the ticket: these lines with the lines of its turns, its cards, and its
+    /// operations, which change after their write and so are read again. It is the same as
+    /// [`pipeline::timeline`].
+    pub fn timeline(&self, ledger: &Ledger) -> anyhow::Result<Vec<LogEntry>> {
+        let mut others = other_entries(ledger, &TicketKey::parse(&self.key)?)?;
+        sort_timeline(&mut others);
+        let mut out = Vec::with_capacity(self.lines.len() + others.len());
+        let mut events = self.lines.iter().peekable();
+        for other in others {
+            // An event goes first when it sorts before the other line or ties with it, as in
+            // the stable sort of the whole timeline, where the events come first.
+            while let Some(event) = events.next_if(|e| order(e) <= order(&other)) {
+                out.push(event.clone());
+            }
+            out.push(other);
+        }
+        out.extend(events.cloned());
+        Ok(out)
+    }
+}
+
+/// The place of a line in the timeline: its time, then its rank in one second.
+fn order(line: &LogEntry) -> (&str, u8) {
+    (line.at.as_str(), timeline_rank(line))
+}
+
+/// The data of the live view of one ticket from a context and a connection that the caller
+/// keeps, with the event lines of the ticket that it keeps, and the count of the commits that
+/// the forge does not have. Each read runs in one read transaction, and each read is of this
+/// ticket only.
+pub fn ticket_with(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &str,
+    events: &mut EventLines,
+    check_events: bool,
+    unpushed: Option<usize>,
+) -> anyhow::Result<TicketData> {
+    ledger.in_read(|ledger| read_ticket(ctx, ledger, key, events, check_events, unpushed))
+}
+
+fn read_ticket(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &str,
+    events: &mut EventLines,
+    check_events: bool,
+    unpushed: Option<usize>,
+) -> anyhow::Result<TicketData> {
     ctx.require_setup()?;
     let ticket_key = TicketKey::parse(key)?;
-    let ledger = ctx.ledger()?;
-    let needs = collect_needs(&ctx, &ledger)?;
-    let rows = pipeline::status_rows(&ctx, &ledger, &needs)?;
-    let Some(view) = rows.into_iter().find(|r| r.key == key) else {
+    // A proposal of the Curator names no ticket, so the needs of a ticket need no memory.
+    let needs = collect_needs_with(ctx, ledger, Vec::new())?;
+    let running = crate::turn::running_turns(ctx, ledger)?;
+    let Some(view) = pipeline::view::row_of(ctx, ledger, key, &needs, &running)? else {
         anyhow::bail!("Vision has no ticket {key} now");
     };
-    let facts = pipeline::facts::state_facts_of(&ctx, &ledger, key)?.unwrap_or_default();
+    let facts =
+        pipeline::facts::state_facts_of_with(ctx, ledger, key, &running)?.unwrap_or_default();
     let row = ledger.ticket(key)?;
-    let report = pipeline::report_of(&ledger, None)?;
-    let measures = report.tickets.get(key).cloned().unwrap_or_default();
+    let measures = pipeline::commands::measures_of(ledger, key)?;
     let config = ctx.config()?;
     // A broken adapter leaves the path empty, and the rest of the view stays.
-    let adapter = crate::adapter::load_with(config, paths).ok();
+    let adapter = crate::adapter::load(ctx).ok();
     let mut steps: Vec<StepLine> = adapter
         .iter()
         .flat_map(|a| &a.steps)
@@ -109,13 +223,12 @@ fn read_ticket(paths: &Paths, key: &str) -> anyhow::Result<TicketData> {
             },
         )
         .collect();
-    let timeline = pipeline::timeline(&ledger, &ticket_key)?;
-    let unpushed = if view.clone.is_some() && !facts.finished {
-        unpushed(&ctx, &ticket_key)
-    } else {
-        None
-    };
-    let plan = std::fs::read(paths.ticket_doc(&ticket_key, "plan.md"))
+    if events.key() != key {
+        *events = EventLines::new(key);
+    }
+    events.update(ledger, check_events)?;
+    let timeline = events.timeline(ledger)?;
+    let plan = std::fs::read(ctx.paths.ticket_doc(&ticket_key, "plan.md"))
         .ok()
         .map(|bytes| pipeline::plan_hash(&bytes)[..SHORT_HASH].to_string());
     Ok(TicketData {
@@ -136,35 +249,25 @@ fn read_ticket(paths: &Paths, key: &str) -> anyhow::Result<TicketData> {
     })
 }
 
-/// The count of the commits that the forge does not have is read again only after this time.
-/// The view loads each second, the count needs three git commands, and it changes only with a
-/// commit or a push.
-const COMMITS_EVERY: Duration = Duration::from_secs(10);
-
-/// The last count of the commits: the home, the ticket, when it was read, and the count.
-type CommitCount = (PathBuf, String, Instant, Option<usize>);
-
-static COMMITS: Mutex<Option<CommitCount>> = Mutex::new(None);
+/// True when the count of the commits that the forge does not have means something for the
+/// ticket: it holds a clone, and its end step did not run.
+pub fn holds_clone(ledger: &Ledger, key: &str) -> anyhow::Result<bool> {
+    Ok(ledger.ticket(key)?.is_some_and(|row| {
+        row.clone.is_some() && crate::pipeline::state::Counts::of(&row).finished.is_none()
+    }))
+}
 
 /// The number of the commits of the branch that the forge does not have, by the refs of the
-/// clone, with no fetch. `None` when the comparison fails.
-fn unpushed(ctx: &Ctx, key: &TicketKey) -> Option<usize> {
-    let mut last = COMMITS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((home, ticket, at, count)) = last.as_ref() {
-        if home == ctx.paths.home() && ticket == key.as_str() && at.elapsed() < COMMITS_EVERY {
-            return *count;
-        }
+/// clone, with no fetch. `None` when the ticket holds no clone, or when the comparison fails.
+/// It runs three git commands, so the loader reads it again only each 10 seconds.
+pub fn unpushed(ctx: &Ctx, ledger: &Ledger, key: &str) -> Option<usize> {
+    if !holds_clone(ledger, key).unwrap_or(false) {
+        return None;
     }
-    let count = pipeline::diff_of(ctx, key, false)
+    let key = TicketKey::parse(key).ok()?;
+    pipeline::commands::diff_with(ctx, ledger, &key, false)
         .ok()
-        .map(|d| d.commits.len());
-    *last = Some((
-        ctx.paths.home().to_path_buf(),
-        key.to_string(),
-        Instant::now(),
-        count,
-    ));
-    count
+        .map(|d| d.commits.len())
 }
 
 /// The plan of a ticket, or `None` when it has no plan yet.

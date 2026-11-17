@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use super::super::feed::{Filter, FILTERS};
+use super::super::feed::{Filter, FILTERS, KEEP_LEDGER};
 use super::super::live::{Live, TicketData};
 use super::super::model::{
     App, Card, OpenCard, ResumeCard, RetryCard, Run, Screen, StopCard, Tone,
@@ -69,7 +69,7 @@ pub fn feed_lines(app: &App) -> usize {
     };
     let layout = Layout::of(i32::from(app.size.0), i32::from(app.size.1));
     live.feed
-        .lines(layout.feed_text_w(), app.clock.offset_seconds, app.activity)
+        .shared_lines(layout.feed_text_w(), app.clock.offset_seconds, app.activity)
         .len()
 }
 
@@ -81,8 +81,26 @@ fn filter(app: &mut App, to: Filter) {
     }
 }
 
+/// The lines of the activity before a change, when the feed does not follow: the place of the
+/// view needs them. A feed that follows keeps no place, so it needs no count.
+fn lines_before(app: &App) -> Option<usize> {
+    let follows = app.live.as_ref().is_none_or(|l| l.feed.follow);
+    (!follows).then(|| feed_lines(app))
+}
+
+/// Keeps the same lines in view after a change, when the feed does not follow.
+fn keep_place(app: &mut App, before: Option<usize>) {
+    let Some(before) = before else {
+        return;
+    };
+    let added = feed_lines(app).saturating_sub(before);
+    if let Some(live) = app.live.as_mut() {
+        live.feed.keep_place(added);
+    }
+}
+
 pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
-    let before = feed_lines(app);
+    let before = lines_before(app);
     let Some(live) = app.live.as_mut().filter(|l| l.key == key) else {
         return;
     };
@@ -90,12 +108,16 @@ pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
     live.data.at = Some(app.clock.elapsed);
     match data {
         Ok(data) => {
-            let moments: Vec<_> = data
+            // The feed keeps only the last lines of the ledger: only those get their words.
+            let mut moments: Vec<_> = data
                 .timeline
                 .iter()
+                .rev()
                 .filter(|entry| in_feed(entry))
+                .take(KEEP_LEDGER)
                 .map(|entry| (vtime::parse_rfc3339(&entry.at).ok(), moment(entry)))
                 .collect();
+            moments.reverse();
             let changed = live.feed.set_moments(&moments);
             if live.data.data.as_ref() != Some(&data) || live.data.error.is_some() {
                 app.dirty = true;
@@ -104,10 +126,7 @@ pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
             live.data.error = None;
             if changed {
                 app.dirty = true;
-                let added = feed_lines(app).saturating_sub(before);
-                if let Some(live) = app.live.as_mut() {
-                    live.feed.keep_place(added);
-                }
+                keep_place(app, before);
             }
         }
         Err(error) => {
@@ -119,8 +138,17 @@ pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
     }
 }
 
+/// The loader found no change: the data of the view stays.
+pub fn on_ticket_same(app: &mut App, key: &str) {
+    let Some(live) = app.live.as_mut().filter(|l| l.key == key) else {
+        return;
+    };
+    live.data.since = None;
+    live.data.at = Some(app.clock.elapsed);
+}
+
 pub fn on_stream(app: &mut App, key: &str, batch: &super::super::feed::Batch) {
-    let before = feed_lines(app);
+    let before = lines_before(app);
     let Some(live) = app.live.as_mut().filter(|l| l.key == key) else {
         return;
     };
@@ -128,10 +156,7 @@ pub fn on_stream(app: &mut App, key: &str, batch: &super::super::feed::Batch) {
         return;
     }
     app.dirty = true;
-    let added = feed_lines(app).saturating_sub(before);
-    if let Some(live) = app.live.as_mut() {
-        live.feed.keep_place(added);
-    }
+    keep_place(app, before);
 }
 
 pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {

@@ -2,7 +2,8 @@
 //! of that ticket is open. A few times each second it looks for the turn folders of the ticket,
 //! reads the new complete lines of the stream file of each of the last turns (as `vision logs`
 //! reads them), and sends the new events to the loop. A line that the session writes in two
-//! parts comes out one time, when it is complete.
+//! parts comes out one time, when it is complete. Of an old turn that does not run, the first
+//! read takes only the end of its file that the feed keeps.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -13,7 +14,7 @@ use std::time::Duration;
 
 use time::OffsetDateTime;
 
-use super::feed::Batch;
+use super::feed::{items_of, Batch, KEEP_STREAM};
 use super::load_ticket::parse_line;
 use super::msg::Msg;
 use crate::paths::{Paths, TicketKey, TurnId};
@@ -37,11 +38,21 @@ impl Drop for Follow {
     }
 }
 
+/// One followed turn: its tail, and whether its next read is its first read of the lines that
+/// were there when the reader began.
+struct Followed {
+    tail: Tail,
+    old: bool,
+    /// The turn does not run: its first read takes only the end of its file that the feed
+    /// keeps.
+    from_end: bool,
+}
+
 /// The state of the reader: one tail for each followed turn.
 pub struct Reader {
     paths: Paths,
     key: TicketKey,
-    tails: BTreeMap<String, (Tail, bool)>,
+    tails: BTreeMap<String, Followed>,
     started: bool,
 }
 
@@ -76,17 +87,33 @@ impl Reader {
                 let Ok(id) = TurnId::parse(name) else {
                     continue;
                 };
-                let stream = self.paths.turn(&self.key, &id).stream;
-                // A turn that was there at the first read has old lines; a later one is new.
-                self.tails.insert(name.clone(), (Tail::new(stream), first));
+                let turn = self.paths.turn(&self.key, &id);
+                // A turn that was there at the first read has old lines; a later one is new. An
+                // old turn whose supervisor does not run writes no more: the feed keeps only the
+                // end of its file. A running turn is read whole, because NOW counts each of its
+                // tool calls.
+                let from_end = first && !crate::turn::supervisor_alive(&turn.dir);
+                let followed = Followed {
+                    tail: Tail::new(turn.stream),
+                    old: first,
+                    from_end,
+                };
+                self.tails.insert(name.clone(), followed);
             }
         }
         self.tails.retain(|name, _| keep.contains(name));
         let mut out = Vec::new();
-        for (name, (tail, old)) in &mut self.tails {
-            let lines = tail.read_new();
-            let was_old = *old;
-            *old = false;
+        for (name, followed) in &mut self.tails {
+            let lines = if followed.from_end {
+                followed.tail.read_back(KEEP_STREAM, |line| {
+                    parse_line(line).map_or(0, |l| items_of(&l.event))
+                })
+            } else {
+                followed.tail.read_new()
+            };
+            let was_old = followed.old;
+            followed.old = false;
+            followed.from_end = false;
             if lines.is_empty() {
                 continue;
             }

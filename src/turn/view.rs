@@ -139,19 +139,92 @@ impl Tail {
         if file.seek(SeekFrom::Start(self.offset)).is_err() {
             return Vec::new();
         }
-        let mut bytes = Vec::new();
+        let mut bytes = std::mem::take(&mut self.partial);
+        let kept = bytes.len();
         if file.read_to_end(&mut bytes).is_err() {
+            bytes.truncate(kept);
+            self.partial = bytes;
             return Vec::new();
         }
-        self.offset += bytes.len() as u64;
-        self.partial.extend_from_slice(&bytes);
-        let mut lines = Vec::new();
-        while let Some(end) = self.partial.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.partial.drain(..=end).collect();
-            lines.push(String::from_utf8_lossy(&line).into_owned());
-        }
-        lines
+        self.offset += (bytes.len() - kept) as u64;
+        split_lines(bytes, &mut self.partial)
     }
+
+    /// The last complete lines of the file that hold `wanted` items by `count`, read back from
+    /// the end in parts that grow, or each line when the whole file holds fewer. The tail then
+    /// goes on after the end of the file. Only the first read of a tail reads back; a later
+    /// call gives the new lines, as [`Tail::read_new`] does.
+    pub fn read_back(&mut self, wanted: usize, count: impl Fn(&str) -> usize) -> Vec<String> {
+        if self.offset > 0 || !self.partial.is_empty() {
+            return self.read_new();
+        }
+        let Ok(mut file) = File::open(&self.path) else {
+            return Vec::new();
+        };
+        let Ok(size) = file.metadata().map(|m| m.len()) else {
+            return Vec::new();
+        };
+        let mut part = BACK_STEP;
+        loop {
+            let start = size.saturating_sub(part);
+            let mut bytes = Vec::new();
+            if file.seek(SeekFrom::Start(start)).is_err()
+                || (&mut file)
+                    .take(size - start)
+                    .read_to_end(&mut bytes)
+                    .is_err()
+            {
+                return Vec::new();
+            }
+            // Before `start`, a line is cut: its rest is left out.
+            let skip = if start == 0 {
+                0
+            } else {
+                bytes
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .map_or(bytes.len(), |at| at + 1)
+            };
+            let read = bytes.len() as u64;
+            let mut rest = Vec::new();
+            let lines = split_lines(bytes.split_off(skip), &mut rest);
+            // The last lines that hold the items, counted from the end.
+            let mut held = 0;
+            let first = lines.iter().rposition(|line| {
+                held += count(line);
+                held >= wanted
+            });
+            if first.is_some() || start == 0 {
+                self.offset = start + read;
+                self.partial = rest;
+                let mut lines = lines;
+                return lines.split_off(first.unwrap_or(0));
+            }
+            part = part.saturating_mul(2);
+        }
+    }
+}
+
+/// The first part that [`Tail::read_back`] reads from the end of a file.
+const BACK_STEP: u64 = 256 * 1024;
+
+/// The complete lines of `bytes`, each with its newline, cut in one pass. The bytes after the
+/// last newline go to `rest`, a buffer of their own size, so that a large read leaves no large
+/// buffer behind.
+fn split_lines(bytes: Vec<u8>, rest: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while let Some(at) = bytes[start..].iter().position(|b| *b == b'\n') {
+        let end = start + at + 1;
+        lines.push(String::from_utf8_lossy(&bytes[start..end]).into_owned());
+        start = end;
+    }
+    *rest = if start == 0 {
+        bytes
+    } else {
+        bytes[start..].to_vec()
+    };
+    lines
 }
 
 /// One turn that `logs` or `open` shows.
@@ -427,5 +500,110 @@ mod tests {
         std::fs::write(&path, "one\ntwo\n").unwrap();
         assert_eq!(tail.read_new(), ["two\n"]);
         assert!(tail.read_new().is_empty());
+    }
+
+    /// The text of a stream file of `count` lines of many lengths. Each seventh line ends with
+    /// CRLF, and each fifth line holds an item.
+    fn stream_text(count: usize) -> String {
+        let mut text = String::new();
+        for n in 0..count {
+            let word = if n % 5 == 0 { "item" } else { "line" };
+            let pad = "x".repeat(n * 37 % 300);
+            let end = if n % 7 == 0 { "\r\n" } else { "\n" };
+            text.push_str(&format!("{word} {n} {pad}{end}"));
+        }
+        text
+    }
+
+    /// The complete lines of a text, each with its newline.
+    fn complete(text: &str) -> Vec<String> {
+        text.split_inclusive('\n')
+            .filter(|line| line.ends_with('\n'))
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn items(line: &str) -> usize {
+        usize::from(line.starts_with("item"))
+    }
+
+    #[test]
+    fn a_large_file_gives_each_line_once_and_keeps_no_large_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s");
+        let text = format!("{}last line wit", stream_text(20_000));
+        std::fs::write(&path, &text).unwrap();
+        let mut tail = Tail::new(path.clone());
+        let lines = tail.read_new();
+        assert_eq!(lines.len(), 20_000);
+        assert_eq!(lines, complete(&text));
+        assert!(lines[0].ends_with("\r\n"), "a CRLF line keeps its end");
+        assert_eq!(tail.partial, b"last line wit");
+        assert!(
+            tail.partial.capacity() < 1024,
+            "{}",
+            tail.partial.capacity()
+        );
+        // The rest of the last line comes later: the line comes out whole, one time.
+        std::fs::write(&path, format!("{text}h no newline\nmore")).unwrap();
+        assert_eq!(tail.read_new(), ["last line with no newline\n"]);
+        assert!(tail.read_new().is_empty());
+    }
+
+    #[test]
+    fn a_file_read_in_pieces_gives_the_same_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s");
+        let text = stream_text(3_000);
+        let mut tail = Tail::new(path.clone());
+        let mut got = Vec::new();
+        // Pieces of many sizes: some end in a line, some between CR and LF.
+        let mut end = 0;
+        let mut step = 1;
+        while end < text.len() {
+            end = (end + step).min(text.len());
+            std::fs::write(&path, &text.as_bytes()[..end]).unwrap();
+            got.extend(tail.read_new());
+            step = step * 3 % 4_093 + 1;
+        }
+        assert_eq!(got, complete(&text));
+    }
+
+    #[test]
+    fn a_read_back_gives_the_last_lines_that_hold_the_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s");
+        // About 1.5 MB, so the reader reads back more than its first part.
+        let text = format!("{}item without its newline", stream_text(10_000));
+        assert!(text.len() as u64 > 4 * BACK_STEP);
+        std::fs::write(&path, &text).unwrap();
+        let all = complete(&text);
+        for wanted in [1, 400, 1_500] {
+            let mut tail = Tail::new(path.clone());
+            let lines = tail.read_back(wanted, items);
+            let first = all.len() - lines.len();
+            assert_eq!(lines, all[first..], "{wanted} items");
+            assert_eq!(lines.iter().map(|l| items(l)).sum::<usize>(), wanted);
+            assert_eq!(items(&lines[0]), 1, "the lines start at an item");
+            // The tail goes on after the end of the file.
+            std::fs::write(&path, format!("{text}\nitem new\n")).unwrap();
+            assert_eq!(
+                tail.read_back(wanted, items),
+                ["item without its newline\n", "item new\n"]
+            );
+            assert!(tail.read_new().is_empty());
+            std::fs::write(&path, &text).unwrap();
+        }
+        // A file with fewer items than wanted gives each line.
+        let small = stream_text(40);
+        std::fs::write(&path, &small).unwrap();
+        let mut tail = Tail::new(path.clone());
+        assert_eq!(tail.read_back(1_000, items), complete(&small));
+        // A file that is not there gives nothing, and a later read reads it whole.
+        let missing = dir.path().join("missing");
+        let mut tail = Tail::new(missing.clone());
+        assert!(tail.read_back(10, items).is_empty());
+        std::fs::write(&missing, &small).unwrap();
+        assert_eq!(tail.read_back(1, items), complete(&small)[35..]);
     }
 }

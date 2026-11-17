@@ -57,6 +57,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
             needs::on_paste(app, &text);
         }
         Msg::Ticket { key, data } => live::on_ticket(app, &key, *data),
+        Msg::TicketSame { key } => live::on_ticket_same(app, &key),
         Msg::Stream { key, batch } => live::on_stream(app, &key, &batch),
         Msg::Plan { key, plan } => pager::on_plan(app, &key, plan),
         Msg::Diff { key, diff } => pager::on_diff(app, &key, diff),
@@ -87,6 +88,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         }
         Msg::Setup(result) => boot::on_setup(app, result, &mut fx),
         Msg::Local(result) => data::on_local(app, result, &mut fx),
+        Msg::LocalSame => data::on_local_same(app, &mut fx),
         Msg::Queue(result) => data::on_queue(app, result, &mut fx),
         Msg::StartInfo { key, info } => cards::on_start_info(app, &key, info),
         Msg::JobDone(done) => engine::on_done(app, done, &mut fx),

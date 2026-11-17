@@ -187,6 +187,85 @@ fn the_data_loads_again_each_second_while_the_view_is_open() {
 }
 
 #[test]
+fn a_load_of_the_view_that_found_no_change_keeps_its_data() {
+    let mut app = working_live(SIZE);
+    let fx = send(&mut app, 3.2, Msg::Tick);
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-12".into())));
+    let live = app.live.as_ref().unwrap();
+    let (data, feed) = (live.data.data.clone(), live.feed.clone());
+    send(
+        &mut app,
+        3.3,
+        Msg::TicketSame {
+            key: "DEMO-12".into(),
+        },
+    );
+    let live = app.live.as_ref().unwrap();
+    assert!(!live.data.loading());
+    assert_eq!(live.data.data, data);
+    assert_eq!(live.feed, feed);
+    // The answer for another ticket ends no load of this one.
+    let fx = send(&mut app, 4.4, Msg::Tick);
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-12".into())));
+    send(
+        &mut app,
+        4.5,
+        Msg::TicketSame {
+            key: "DEMO-7".into(),
+        },
+    );
+    assert!(app.live.as_ref().unwrap().data.loading());
+}
+
+#[test]
+fn the_feed_keeps_the_last_lines_of_a_long_timeline() {
+    let mut app = working_live(SIZE);
+    let mut data = app.live.as_ref().unwrap().data.data.clone().unwrap();
+    let first = data.timeline[0].clone();
+    let mut long = Vec::new();
+    for n in 0..(vision::app::feed::KEEP_LEDGER + 50) {
+        let mut entry = first.clone();
+        entry.at = format!("2026-11-16T10:{:02}:{:02}Z", n / 60, n % 60);
+        entry.text = format!("line {n}");
+        long.push(entry);
+    }
+    data.timeline = long;
+    send(
+        &mut app,
+        3.0,
+        Msg::Ticket {
+            key: "DEMO-12".into(),
+            data: Box::new(Ok(data.clone())),
+        },
+    );
+    // The feed has the words of the last lines only, as it had when each line got its words.
+    let mut feed = vision::app::feed::Feed::default();
+    let moments: Vec<_> = data
+        .timeline
+        .iter()
+        .filter(|e| vision::app::moments::in_feed(e))
+        .map(|e| {
+            (
+                vision::util::time::parse_rfc3339(&e.at).ok(),
+                vision::app::moments::moment(e),
+            )
+        })
+        .collect();
+    feed.set_moments(&moments);
+    // The tab You has only these lines of the ledger: no line of a stream file is an action of
+    // the person.
+    let you = vision::app::feed::Filter::You;
+    assert_eq!(vision::app::moments::moment(&first).filter, you);
+    let live = app.live.as_ref().unwrap();
+    assert_eq!(live.feed.lines(80, 0, you), feed.lines(80, 0, you));
+    assert_eq!(
+        live.feed.counts()[you.index()],
+        vision::app::feed::KEEP_LEDGER
+    );
+    assert_eq!(live.feed.lines(80, 0, you)[0].time, "10:00:50");
+}
+
+#[test]
 fn n_opens_the_card_of_the_needs_of_the_ticket_or_says_that_nothing_waits() {
     let mut app = working_live(SIZE);
     key(&mut app, 3.0, Key::Char('n'));

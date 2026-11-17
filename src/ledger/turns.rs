@@ -298,6 +298,17 @@ impl Ledger {
         )?)
     }
 
+    /// The dollars that the turns of each ticket cost, by ticket, in one read. A ticket with no
+    /// turn has no entry.
+    pub fn spent_by_ticket(&self) -> Result<std::collections::HashMap<String, f64>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT ticket, coalesce(sum(cost_usd), 0) FROM turns WHERE ticket IS NOT NULL
+             GROUP BY ticket",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The dollars that the turns cost that started at or after `since` (RFC 3339 UTC).
     pub fn spent_since(&self, since: &str) -> Result<f64> {
         Ok(self.conn().query_row(

@@ -103,6 +103,21 @@ pub fn on_local(app: &mut App, result: Result<Local, String>, fx: &mut Vec<Effec
     }
 }
 
+/// The loader found no change: the local data stays, and the load ends as a load of the same
+/// data ends.
+pub fn on_local_same(app: &mut App, fx: &mut Vec<Effect>) {
+    app.local.since = None;
+    app.local.at = Some(app.clock.elapsed);
+    // The data of a load that started before the pass ended says nothing about it.
+    if !app.local.again {
+        engine::after_pass(app);
+    }
+    boot::ledger_settled(app, fx);
+    if app.local.again {
+        load_local(app, fx);
+    }
+}
+
 pub fn on_queue(app: &mut App, result: Result<Vec<PickRow>, String>, fx: &mut Vec<Effect>) {
     let before: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();
     app.queue.since = None;

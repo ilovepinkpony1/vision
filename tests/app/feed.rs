@@ -524,3 +524,76 @@ fn the_reader_gives_each_event_of_a_growing_file_one_time() {
     }
     assert!(reader.read(now).is_empty());
 }
+
+#[test]
+fn the_feed_wraps_its_lines_again_only_after_a_change() {
+    use std::sync::Arc;
+    let mut feed = Feed::default();
+    feed.add(&batch(
+        1,
+        vec![says("one two three four five six seven eight")],
+    ));
+    let first = feed.shared_lines(12, 0, Filter::All);
+    assert!(
+        Arc::ptr_eq(&first, &feed.shared_lines(12, 0, Filter::All)),
+        "the same width, offset, and tab read the cache"
+    );
+    assert_eq!(*first, feed.lines(12, 0, Filter::All));
+    // A new width wraps again.
+    let wide = feed.shared_lines(40, 0, Filter::All);
+    assert!(!Arc::ptr_eq(&first, &wide));
+    assert!(wide.len() < first.len(), "{wide:?}");
+    // A new tab and a new offset of the clock read again.
+    assert!(feed.shared_lines(40, 0, Filter::Steps).is_empty());
+    let later = feed.shared_lines(40, 3600, Filter::All);
+    assert_ne!(later[0].time, wide[0].time);
+    // A new item wraps again.
+    feed.add(&batch(2, vec![says("nine")]));
+    let more = feed.shared_lines(40, 0, Filter::All);
+    assert_eq!(more.len(), wide.len() + 1);
+    assert_eq!(more.last().unwrap().text, "nine");
+    // The same lines of the ledger change nothing; new ones wrap again.
+    assert!(feed.set_moments(&[(Some(at(3)), moment("step", "to build"))]));
+    let with_ledger = feed.shared_lines(40, 0, Filter::All);
+    assert_eq!(with_ledger.len(), more.len() + 1);
+    assert!(!feed.set_moments(&[(Some(at(3)), moment("step", "to build"))]));
+    assert!(Arc::ptr_eq(
+        &with_ledger,
+        &feed.shared_lines(40, 0, Filter::All)
+    ));
+    // Two feeds with the same items are equal, whatever their caches hold and whatever changes
+    // led to the items.
+    let mut other = Feed::default();
+    other.set_moments(&[(Some(at(4)), moment("step", "to review"))]);
+    other.add(&batch(
+        1,
+        vec![says("one two three four five six seven eight")],
+    ));
+    other.add(&batch(2, vec![says("nine")]));
+    other.set_moments(&[(Some(at(3)), moment("step", "to build"))]);
+    assert_eq!(feed, other);
+}
+
+#[test]
+fn the_numbers_of_the_turns_stay_small_in_a_long_view() {
+    use vision::app::feed::STATS_TURNS;
+    let mut feed = Feed::default();
+    // Each line of a message gives the count of the whole message so far.
+    for m in 0..100 {
+        let mut b = batch(1, vec![tool("Read", json!({})), tool("Read", json!({}))]);
+        b.events[0].output = Some((format!("m{m}"), 10));
+        b.events[1].output = Some((format!("m{m}"), 25));
+        feed.add(&b);
+    }
+    assert_eq!(feed.stats[TURN].output_tokens(), Some(100 * 25));
+    assert_eq!(feed.stats[TURN].tools, 200);
+    // The numbers of the newest turns stay.
+    for n in 0..30 {
+        let mut b = batch(1, vec![tool("Read", json!({}))]);
+        b.turn = format!("20261116T15{n:02}00Z-DEMO-12-build-{}", n + 2);
+        feed.add(&b);
+    }
+    assert_eq!(feed.stats.len(), STATS_TURNS);
+    assert!(feed.stats.contains_key("20261116T152900Z-DEMO-12-build-31"));
+    assert!(!feed.stats.contains_key(TURN), "the oldest turn left");
+}
