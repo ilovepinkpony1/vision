@@ -11,6 +11,7 @@ use super::chain::Chain;
 use super::hits::{card_place, Act, Armed, HitMap};
 use super::model_table::ModelsState;
 use super::msg::{Job, JobKind};
+use super::nav::{Nav, Place};
 use super::needs::NeedsCard;
 use super::now::{self, Now, Pass};
 use super::picture::{Fitted, Picture};
@@ -541,6 +542,8 @@ pub struct App {
     /// The part that a first click armed, for a part that sends something or records a
     /// decision. See [`App::armed_act`].
     pub armed: Option<Armed>,
+    /// The places that the person visited, for the back and the forward parts of the header.
+    pub nav: Nav,
     /// The app leaves.
     pub quit: bool,
     /// Something that the view shows changed since the last draw.
@@ -572,6 +575,7 @@ impl App {
             notice: None,
             hits: HitMap::default(),
             armed: None,
+            nav: Nav::default(),
             quit: false,
             dirty: true,
         }
@@ -584,6 +588,26 @@ impl App {
         let card = self.card.as_ref().map(card_place);
         let same = armed.screen == self.screen && armed.card == card;
         (same && self.clock.elapsed < armed.until).then_some(&armed.act)
+    }
+
+    /// The place that shows: the screen, and for the live view, the kinds of its pagers. The
+    /// loader is no place.
+    pub fn place(&self) -> Option<Place> {
+        Some(match &self.screen {
+            Screen::Boot => return None,
+            Screen::Home => Place::Home,
+            Screen::Live { key } => Place::Live {
+                key: key.clone(),
+                pagers: self
+                    .live
+                    .as_ref()
+                    .filter(|live| live.key == *key)
+                    .map(|live| live.pagers.iter().map(|p| p.kind.clone()).collect())
+                    .unwrap_or_default(),
+            },
+            Screen::Models => Place::Models,
+            Screen::Stats => Place::Stats,
+        })
     }
 
     /// The tickets in progress, or none before the first load.

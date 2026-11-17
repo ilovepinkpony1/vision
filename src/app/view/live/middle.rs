@@ -9,9 +9,10 @@
 //!
 //! A click on the box of a ticket that needs the person acts as its key, and a click on a tab
 //! shows that tab. The marks `‹` and `›` show the tab before and after, as `F` and `f` do, the
-//! mark of the lines below acts as `G`, and the wheel over the activity scrolls it as the arrows
-//! do. While the line of `t` is open, the box and the mark of the lines below are no parts,
-//! because their keys go into the line.
+//! mark of the lines below acts as `G`, a click on a line of a turn opens the events of that
+//! turn, and the wheel over the activity scrolls it as the arrows do. While the line of `t` is
+//! open, the box, the mark of the lines below, and the lines are no parts, because their keys
+//! go into the line.
 
 use super::layout::{Layout, ACTIVITY_Y, FEED_TEXT_DX, FEED_Y, TABS_Y};
 use crate::app::hits::{keys_of, Act};
@@ -222,6 +223,11 @@ pub fn feed(app: &App, c: &mut Canvas, l: &Layout, live: &Live, now: &Now) {
     let shown = &lines[start..end];
     for (i, line) in shown.iter().enumerate() {
         let y = FEED_Y + i as i32;
+        // A line of a turn opens the events of the turn. While the line of `t` is open, the
+        // lines are no parts.
+        if let (Some(turn), true) = (&line.turn, live.tell.is_none()) {
+            c.click(x, y, w, 1, Act::Turn(turn.clone()));
+        }
         c.put(x, y, &line.time, ink(T.faint));
         c.put(x + 9, y, &cut(&line.word, 5), ink(hue(&line.hue)).bold());
         c.put(x + FEED_TEXT_DX, y, &line.text, ink(hue(&line.text_hue)));

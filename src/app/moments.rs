@@ -66,6 +66,14 @@ pub fn who_hue(who: &str) -> Hue {
 }
 
 /// The words of one line of the timeline.
+/// True when a line of the ledger names the step `step`: a turn or a visit of the step, a
+/// retry of it, or a move from it or to it.
+pub fn names_step(entry: &LogEntry, step: &str) -> bool {
+    ["step", "from", "to"]
+        .iter()
+        .any(|key| s(&entry.detail, key) == Some(step))
+}
+
 pub fn moment(entry: &LogEntry) -> Moment {
     let mut m = words(entry);
     m.filter = filter_of(Origin::Ledger(entry));

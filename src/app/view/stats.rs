@@ -15,11 +15,7 @@ use crate::util::time::short_age;
 
 pub fn draw(app: &App, c: &mut Canvas) {
     let week = app.stats.week;
-    header(
-        app,
-        c,
-        Some(("stats", if week { "the last 7 days" } else { "all time" })),
-    );
+    header(app, c, if week { "the last 7 days" } else { "all time" });
     let Some(data) = app.stats.data.data.as_ref().filter(|d| d.week == week) else {
         let text = match &app.stats.data.error {
             Some(error) => format!("The measures did not load: {}", error_line(error)),

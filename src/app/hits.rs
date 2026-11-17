@@ -4,8 +4,11 @@
 //! and a row to what the person saw there.
 //!
 //! A key hint, such as `n needs` or `enter open`, is a part that acts as its key. A hint of more
-//! keys, such as `↑↓ move` or `g G start end`, has a part for each key, and its label is no
+//! keys, such as `↑↓ move` or `pgup pgdn page`, has a part for each key, and its label is no
 //! part. [`hint_parts`] gives the parts of a hint, for the footer and for the keys of a card.
+//!
+//! Some parts act as no key: the back and the forward parts of the header and its names of
+//! places, a row of the keys card, a step of the path, and a line of the activity.
 //!
 //! A part that sends something or records a decision acts only on a second click. The first
 //! click arms it, its hint says `click again`, and a second click on it within [`ARM_FOR`]
@@ -19,6 +22,7 @@ use ratatui::layout::{Position, Rect};
 use super::feed::Filter;
 use super::model::{Card, Screen};
 use super::msg::Key;
+use super::nav::Place;
 use super::needs::Target;
 use super::text::width;
 
@@ -50,6 +54,19 @@ pub enum Act {
     Form(Target),
     /// A tab of the activity.
     Tab(Filter),
+    /// The back part of the header: the place before this one.
+    Back,
+    /// The forward part of the header: the place that back left.
+    Forward,
+    /// A name in the header: goes to that place, such as Home or the live view of a ticket.
+    Go(Place),
+    /// A key of the keys card: the card closes, and the screen acts as this key.
+    Run(Key),
+    /// A step of the path of the live view: the log, with the cursor on the last line of the
+    /// step.
+    Step(String),
+    /// A line of the activity of the live view: the events of its turn.
+    Turn(String),
 }
 
 impl Act {

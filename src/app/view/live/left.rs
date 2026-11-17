@@ -2,8 +2,12 @@
 //! its time, and its cost, and TEAM, one row for each agent of the model table. When the window
 //! has fewer rows than the adapter has steps, the path shows the rows around the current step
 //! and says how many are above and below.
+//!
+//! A click on a step that the ticket visited opens the log, with the cursor on the last line of
+//! that step.
 
 use super::layout::Layout;
+use crate::app::hits::Act;
 use crate::app::live::TicketData;
 use crate::app::model::App;
 use crate::app::now::{mmss, Kind, Now};
@@ -18,6 +22,7 @@ use crate::util::time::short_age;
 const TEAM_ROWS: i32 = 9;
 
 pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData, now: &Now) {
+    let telling = app.live.as_ref().is_some_and(|l| l.tell.is_some());
     c.put(1, 2, "PATH", ink(T.dim).bold());
     let steps = &data.steps;
     let step = data.view.step.as_deref().unwrap_or("");
@@ -47,6 +52,11 @@ pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData, now: &Now)
         } else {
             ("○", T.faint)
         };
+        // A step that the ticket visited opens the log at that step. While the line of `t` is
+        // open, the path is no part.
+        if (visited || is_current) && !telling {
+            c.click(1, y, l.left_line() - 1, 1, Act::Step(line.id.clone()));
+        }
         c.put(1, y, mark, ink(mark_color));
         let name_ink = if is_current {
             ink(T.fg).bold()

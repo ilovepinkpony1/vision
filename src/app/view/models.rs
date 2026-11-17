@@ -10,7 +10,8 @@
 //! pinned acts as Enter, so it pins the change: it arms on the first click and pins on the
 //! second. A click on the selected agent with no change only says how to make one. On the
 //! selected row, `‹` and `›` act as the left and right arrows, and the effort acts as `e`. The
-//! wheel over the rows moves the selection as the arrows do.
+//! wheel over the rows moves the selection as the arrows do, and a click on the mark of the
+//! agents above or below selects the next agent out of view.
 
 use super::canvas::{ink, Canvas};
 use super::cards::Rows;
@@ -38,7 +39,7 @@ const BOX_H: i32 = 5;
 const UNDER_BOX: i32 = 2;
 
 pub fn draw(app: &App, c: &mut Canvas) {
-    header(app, c, Some(("models", "")));
+    header(app, c, "");
     let intro = "Each agent keeps its model until you change it. A change holds for the next turn of the agent, not for a turn that runs now.";
     for (i, text) in wrap(intro, (c.w - 4) as usize).iter().take(2).enumerate() {
         c.put(2, 3 + i as i32, text, ink(T.dim));
@@ -81,7 +82,9 @@ pub fn draw(app: &App, c: &mut Canvas) {
         advice_box(app, c, line, top + shown as i32 * 2);
     }
     // The marks go on the line over the rows and on the top of the box.
-    more_marks(c, y0 + 1, box_y - y0, offset, shown, lines.len());
+    more_marks(c, y0 + 1, box_y - y0, (offset, shown, lines.len()), |i| {
+        (i < lines.len()).then_some(Act::Agent(i))
+    });
     footer(app, c);
 }
 
@@ -306,10 +309,12 @@ pub fn help(c: &mut Canvas) {
         ("?", "this list of keys"),
         ("q", "quit"),
     ];
-    help_rows(c, &list);
+    // Enter pins and `u` goes back to the default: their rows are no parts, and their hints in
+    // the footer arm on the first click.
+    super::cards::keys_card(c, &list, &[Key::Enter, Key::Char('u')]);
 }
 
-/// A keys card with this list.
+/// A keys card with this list, in which no key decides.
 pub(super) fn help_rows(c: &mut Canvas, list: &[(&str, &str)]) {
-    super::cards::keys_card(c, list);
+    super::cards::keys_card(c, list, &[]);
 }

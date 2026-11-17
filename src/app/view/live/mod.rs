@@ -22,11 +22,11 @@ use layout::Layout;
 
 pub fn draw(app: &App, c: &mut Canvas, key: &str) {
     let Some(live) = app.live.as_ref().filter(|l| l.key == key) else {
-        header(app, c, Some((key, "")));
+        header(app, c, "");
         return;
     };
     if let Some(pager) = live.pagers.last() {
-        super::pager::draw(app, c, key, pager);
+        super::pager::draw(app, c, pager);
         return;
     }
     let data = live.data.data.as_ref();
@@ -34,7 +34,7 @@ pub fn draw(app: &App, c: &mut Canvas, key: &str) {
         .and_then(|d| d.view.title.clone())
         .or_else(|| app.held_ticket(key).map(|h| app.title_of(h).to_string()))
         .unwrap_or_default();
-    header(app, c, Some((key, &title)));
+    header(app, c, &title);
     let l = Layout::of(c.w, c.h);
     for y in 2..=l.bottom() {
         c.put(l.left_line(), y, "│", ink(T.line));

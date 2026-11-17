@@ -10,7 +10,7 @@
 use super::canvas::{ink, Canvas, Ink};
 use super::header::spinner;
 use super::theme::{agent_color, Rgb, T};
-use crate::app::hits::{hint, Act};
+use crate::app::hits::{hint, keys_of, Act};
 use crate::app::model::{App, Card, KillCard, Run, StartCard};
 use crate::app::msg::Key;
 use crate::app::text::{cut, width, wrap};
@@ -203,22 +203,48 @@ pub(super) fn show(c: &mut Canvas, w: i32, title: &str, color: Rgb, rows: Rows) 
 }
 
 /// The keys card of a screen (`mHelp` of the design): each key with what it does, the mouse,
-/// and how the card closes. A key that sends something or records a decision acts on a second
-/// click: the first click arms it.
-pub(super) fn keys_card(c: &mut Canvas, list: &[(&str, &str)]) {
+/// and how the card closes.
+///
+/// A click on the row of a key closes the card, and the screen acts as that key, so each key of
+/// the screen works with the mouse, also a key that a narrow footer leaves out. A row of more
+/// keys, such as `l  p  d`, has a part for each key. A key of `decide` sends something or
+/// records a decision, so its row is no part: its hint in the footer arms on the first click.
+pub(super) fn keys_card(c: &mut Canvas, list: &[(&str, &str)], decide: &[Key]) {
     let mut rows = Rows::default();
+    for (key, label) in list {
+        let at = rows.rows.len();
+        let keys = keys_of(key);
+        match keys.as_slice() {
+            [(0, w, one)] if *w == width(key) as i32 => {
+                if !decide.contains(one) {
+                    let wide = KEYS_LABEL_X - 3 + width(label) as i32;
+                    rows.hit(at, 3, wide, Act::Run(*one));
+                }
+            }
+            _ => {
+                for (dx, w, one) in keys.iter().filter(|(_, _, k)| !decide.contains(k)) {
+                    rows.hit(at, 3 + dx, *w, Act::Run(*one));
+                }
+            }
+        }
+        rows.rows.push(vec![
+            (3, key.to_string(), ink(T.fg).bold()),
+            (KEYS_LABEL_X, label.to_string(), ink(T.dim)),
+        ]);
+    }
     let mouse = [
         ("click", "a key acts as that key; a row selects, then opens"),
         (
             "2 clicks",
             "a key that sends something or records a decision",
         ),
+        ("‹  ›", "back and forward; a name at the top goes there"),
         ("shift drag", "selects text; some terminals use Option"),
     ];
-    for (key, label) in list.iter().chain(mouse.iter()) {
+    for (key, label) in mouse {
         rows.rows.push(vec![
             (3, key.to_string(), ink(T.fg).bold()),
-            (16, label.to_string(), ink(T.dim)),
+            (KEYS_LABEL_X, label.to_string(), ink(T.dim)),
         ]);
     }
     rows.blank();
@@ -227,6 +253,9 @@ pub(super) fn keys_card(c: &mut Canvas, list: &[(&str, &str)]) {
     rows.text(3, close, ink(T.faint));
     show(c, 70, "Keys", T.primary, rows);
 }
+
+/// The column of the labels of the keys card.
+const KEYS_LABEL_X: i32 = 16;
 
 pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
     match card {
@@ -452,7 +481,7 @@ fn help(c: &mut Canvas) {
         ("esc", "go back, or close a card"),
         ("q", "quit"),
     ];
-    keys_card(c, &list);
+    keys_card(c, &list, &[]);
 }
 
 fn error(c: &mut Canvas, title: &str, text: &str) {

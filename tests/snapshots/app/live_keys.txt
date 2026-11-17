@@ -1,26 +1,26 @@
- ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ DEMO-12  Export the report of the mont…   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  PATH                      │ NOW                                                    │ TICKET
- ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
- ✓ plan            9╭─ Keys ─────────────────────────────────────────────────────────────╮                38m
- ✓ plan-ready      2│                                                                    │s                 3
- ⠸ build            │  esc          back to Home                                         │its    none to push
- ○ review           │  n            answer what waits for this ticket                    │
- ○ open-pr          │  t            tell the agent something                             │TIONS
- ○ ci               │  o            open the session and type into it yourself           │ou                0
- ○ fix-ci           │  l  p  d      the log, the plan, the commits to push               │emory             1
- ○ ready            │               Enter on a turn of the log shows its tool calls      │he Judge          0
- ○ comments         │  x            stop the ticket                                      │
- ○ ci-review        │  r            start the step again, or continue at it              │S
- ○ ready-to-merge   │  enter        continue a stopped or paused ticket                  │          3f2a1b4 ✓
- ○ done             │  ↑↓  j k      scroll the activity                                  │f                 -
-                    │  pgup pgdn    scroll the activity by a page                        │                  -
- TEAM               │  G  end       back to the end of the activity                      │                  -
- ✓ scout     fable-5│  f  F  1-7    the next tab of the activity, the one before, a tab  │
- ● builder   opus-5-│  ?            this list of keys                                    │TS
- · reviewer  opus-5-│  q            quit                                                 │━━━━━━━━━ 31% of 60
- · tester    opus-5-│  click        a key acts as that key; a row selects, then opens    │esets at 18:00
- · shepherd  opus-5-│  2 clicks     a key that sends something or records a decision     │━━━━━━━━━ 71% of 85
+ ✓ refine          4╭─ Keys ─────────────────────────────────────────────────────────────╮              $1.03
+ ✓ plan            9│                                                                    │                38m
+ ✓ plan-ready      2│  esc          back to Home                                         │s                 3
+ ⠸ build            │  n            answer what waits for this ticket                    │its    none to push
+ ○ review           │  t            tell the agent something                             │
+ ○ open-pr          │  o            open the session and type into it yourself           │TIONS
+ ○ ci               │  l  p  d      the log, the plan, the commits to push               │ou                0
+ ○ fix-ci           │               Enter on a turn of the log shows its tool calls      │emory             1
+ ○ ready            │  x            stop the ticket                                      │he Judge          0
+ ○ comments         │  r            start the step again, or continue at it              │
+ ○ ci-review        │  enter        continue a stopped or paused ticket                  │S
+ ○ ready-to-merge   │  ↑↓  j k      scroll the activity                                  │          3f2a1b4 ✓
+ ○ done             │  pgup pgdn    scroll the activity by a page                        │f                 -
+                    │  G  end       back to the end of the activity                      │                  -
+ TEAM               │  f  F  1-7    the next tab of the activity, the one before, a tab  │                  -
+ ✓ scout     fable-5│  ?            this list of keys                                    │
+ ● builder   opus-5-│  q            quit                                                 │TS
+ · reviewer  opus-5-│  click        a key acts as that key; a row selects, then opens    │━━━━━━━━━ 31% of 60
+ · tester    opus-5-│  2 clicks     a key that sends something or records a decision     │esets at 18:00
+ · shepherd  opus-5-│  ‹  ›         back and forward; a name at the top goes there       │━━━━━━━━━ 71% of 85
  · judge     fable-5│  shift drag   selects text; some terminals use Option              │
  · curator   fable-5│                                                                    │NE
                     │  esc closes this list                                              │   last pass 2s ago

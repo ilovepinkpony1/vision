@@ -1,4 +1,4 @@
- ◆ VISION ▸ DEMO-12  log                                    engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ DEMO-12 ▸ log                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   TIME      WHO       WHAT      DETAIL
@@ -28,5 +28,5 @@
 
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ↑↓ move   enter the events of the turn   pgup pgdn page   g G start end   esc back
+ ↑↓ move   enter the events of the turn   pgup pgdn page   g start   G end   esc back
 

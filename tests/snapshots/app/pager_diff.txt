@@ -1,4 +1,4 @@
- ◆ VISION ▸ DEMO-12  commits                                engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ DEMO-12 ▸ commits                         engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   2 commits of vision/DEMO-12 that origin/vision/DEMO-12 does not have yet:
@@ -28,5 +28,5 @@
 
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ↑↓ scroll   pgup pgdn page   g G start end   esc back
+ ↑↓ scroll   pgup pgdn page   g start   G end   esc back
 

@@ -31,6 +31,7 @@ pub mod model;
 pub mod model_table;
 pub mod moments;
 pub mod msg;
+pub mod nav;
 pub mod needs;
 pub mod now;
 pub mod pager;

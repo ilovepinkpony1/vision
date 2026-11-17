@@ -1,4 +1,4 @@
- ◆ VISION ▸ stats  the last 7 days                          engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ stats  the last 7 days                    engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   The measures did not load: the ledger is locked

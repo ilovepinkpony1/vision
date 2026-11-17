@@ -113,7 +113,7 @@ The live view shows the path of the ticket, what happens now, and the work of th
 - The arrows scroll the activity, and `G` goes back to its end.
 - Esc goes back to Home.
 
-You can also use the mouse. A click on a key hint acts as that key, a click on a row selects it, and a second click opens it. The wheel scrolls the list or the text under the pointer. A key that sends something or records a decision, such as an approval or the send of your answers, needs two clicks: the first one only arms it. To select text, hold Shift (Option in some terminals).
+You can also use the mouse. A click on a key hint acts as that key, a click on a row selects it, and a second click opens it. The wheel scrolls the list or the text under the pointer. The header has back and forward buttons, `‹` and `›`, and a name for each place on the way from Home. A click on a name goes there. In the live view, a click on a step of the path or on a line of the activity opens it. So does a click on the turns, the commits, or the plan. Each row of the keys list of `?` acts as its key, so each key works with the mouse. A key that sends something or records a decision, such as an approval or the send of your answers, needs two clicks: the first one only arms it. To select text, hold Shift (Option in some terminals).
 
 Each thing that waits for you has its card:
 

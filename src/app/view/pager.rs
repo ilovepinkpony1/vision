@@ -16,8 +16,8 @@ use crate::app::text::{clip, cut, width, wrap};
 /// The lines that one step of the wheel scrolls.
 const WHEEL_LINES: usize = 3;
 
-pub fn draw(app: &App, c: &mut Canvas, key: &str, pager: &Pager) {
-    header(app, c, Some((key, &pager.title)));
+pub fn draw(app: &App, c: &mut Canvas, pager: &Pager) {
+    header(app, c, "");
     let mut y = 3;
     if let Some(head) = &pager.head {
         line(c, y, head, c.w - 4);
@@ -78,18 +78,21 @@ pub fn draw(app: &App, c: &mut Canvas, key: &str, pager: &Pager) {
         let mark = format!("{} to {} of {}", pager.top + 1, last, total);
         c.right(c.w - 2, c.h - 2, &mark, ink(T.dim));
     }
+    // `g` and `G` are hints of their own, so that each label is a part that a click hits.
     let list: Vec<(&str, &str)> = match &pager.kind {
         PagerKind::Log => vec![
             ("↑↓", "move"),
             ("enter", "the events of the turn"),
             ("pgup pgdn", "page"),
-            ("g G", "start end"),
+            ("g", "start"),
+            ("G", "end"),
             ("esc", "back"),
         ],
         _ => vec![
             ("↑↓", "scroll"),
             ("pgup pgdn", "page"),
-            ("g G", "start end"),
+            ("g", "start"),
+            ("G", "end"),
             ("esc", "back"),
         ],
     };

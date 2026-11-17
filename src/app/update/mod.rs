@@ -9,6 +9,9 @@
 //! A click acts on the parts of the last frame that the model keeps: most parts act as a key,
 //! so a click and its key run the same code. A part that sends something or records a decision
 //! acts on a second click, and a typed key takes the arm of the first click away.
+//!
+//! After each message, the update notes the place that shows, so that the back and the forward
+//! parts of the header can go through the places that the person visited.
 
 mod act;
 mod ask;
@@ -21,6 +24,7 @@ mod home;
 pub mod live;
 mod models;
 mod mouse;
+mod nav;
 mod needs;
 mod pager;
 mod resume;
@@ -48,6 +52,7 @@ pub fn start(app: &mut App) -> Vec<Effect> {
 /// Changes the model by one message and gives the effects to run.
 pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
     let mut fx = Vec::new();
+    let by_person = matches!(msg, Msg::Key(_) | Msg::Mouse(_));
     match msg {
         Msg::Tick | Msg::Signal(_) => {}
         Msg::Resize { width, height } => {
@@ -112,6 +117,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
     timers(app, &mut fx);
     chain::advance(app, &mut fx);
     engine::dispatch(app, &mut fx);
+    nav::note(app, by_person);
     fx
 }
 

@@ -37,19 +37,30 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             let Some(turn) = pager.selected_turn().map(str::to_string) else {
                 return;
             };
-            let Some(key) = app.live.as_ref().map(|l| l.key.clone()) else {
-                return;
-            };
-            let title = turn_title(&turn, &key, app.clock.offset_seconds);
-            if let Some(live) = app.live.as_mut() {
-                live.pagers
-                    .push(Pager::loading(PagerKind::Turn { id: turn.clone() }, title));
-            }
-            fx.push(Effect::LoadTurn { key, turn });
+            open_turn(app, &turn, fx);
         }
         Key::Char('q') => ask_quit(app, fx),
         _ => {}
     }
+}
+
+/// Opens the events of a turn over the view, which load: Enter on a turn of the log, a click on
+/// a line of the activity, and a place of the history.
+pub fn open_turn(app: &mut App, turn: &str, fx: &mut Vec<Effect>) {
+    let Some(key) = app.live.as_ref().map(|l| l.key.clone()) else {
+        return;
+    };
+    let title = turn_title(turn, &key, app.clock.offset_seconds);
+    if let Some(live) = app.live.as_mut() {
+        let kind = PagerKind::Turn {
+            id: turn.to_string(),
+        };
+        live.pagers.push(Pager::loading(kind, title));
+    }
+    fx.push(Effect::LoadTurn {
+        key,
+        turn: turn.to_string(),
+    });
 }
 
 /// A click on the line `i` of the log: the first click puts the cursor on it, and a click on

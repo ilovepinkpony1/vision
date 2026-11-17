@@ -1,4 +1,4 @@
- ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ─────────────╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮─────────────
              │                                                                                  │
   IN PROGRESS│  Rename the setting of the weekly email                                          │dow is open

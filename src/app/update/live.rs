@@ -20,7 +20,7 @@ use super::super::model::{App, Card, OpenCard, RetryCard, Run, Screen, StopCard,
 use super::super::moments::{in_feed, moment};
 use super::super::msg::{Effect, Key};
 use super::super::now::Kind;
-use super::super::pager::{Pager, PagerKind};
+use super::super::pager::{Pager, PagerKind, PagerState};
 use super::super::view::live::layout::Layout;
 use super::{ask_quit, notice, pager, resume, tell};
 use crate::pipeline::state::{NEEDS_YOU, PAUSED, STOPPED};
@@ -136,10 +136,18 @@ pub fn on_ticket(app: &mut App, key: &str, data: Result<TicketData, String>) {
                 app.dirty = true;
                 keep_place(app, before);
             }
+            fill_waiting_logs(app);
         }
         Err(error) => {
             if live.data.error.as_deref() != Some(error.as_str()) {
                 app.dirty = true;
+            }
+            // A log that waits for the first data says why it did not load. The next data
+            // fills it.
+            if live.data.data.is_none() {
+                for pager in live.pagers.iter_mut().filter(|p| p.kind == PagerKind::Log) {
+                    pager.state = PagerState::Failed(error.clone());
+                }
             }
             live.data.error = Some(error);
         }
@@ -205,11 +213,7 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         Key::Char('t') => tell::open(app),
         Key::Char('o') => open_card(app),
         Key::Char('l') => log(app),
-        Key::Char('p') => {
-            let key = live.key.clone();
-            push(app, Pager::loading(PagerKind::Plan, "plan"));
-            fx.push(Effect::LoadPlan(key));
-        }
+        Key::Char('p') => plan(app, fx),
         Key::Char('d') => diff(app, fx),
         Key::Char('x') => stop_card(app),
         Key::Char('r') => retry_card(app),
@@ -248,21 +252,105 @@ pub fn push(app: &mut App, pager: Pager) {
     }
 }
 
-/// `l`: the log of the ticket from the data that the view already has.
+/// `l`: the log of the ticket from the data that the view already has. While the data still
+/// loads, the log waits for it.
 fn log(app: &mut App) {
-    let Some(data) = data(app) else {
-        notice(
-            app,
-            "The data of the ticket still loads. Try again in a moment.",
-            Tone::Info,
-        );
-        return;
-    };
     let mut log = Pager::loading(PagerKind::Log, "log");
+    if let Some(data) = data(app) {
+        fill_log(app, data, &mut log);
+    }
+    push(app, log);
+}
+
+/// Fills the pager of the log with the timeline of the data.
+fn fill_log(app: &App, data: &TicketData, log: &mut Pager) {
     let (head, lines) = super::super::pages::log_lines(&data.timeline, app.clock.offset_seconds);
     let rows = super::super::pager::body_rows(app.size.1, true);
     log.fill(Some(head), lines, rows);
-    push(app, log);
+}
+
+/// Fills each log that waits for the data of the view, such as a log of a place of the history
+/// that opened with the view, and a log whose wait failed.
+fn fill_waiting_logs(app: &mut App) {
+    let Some(live) = app.live.as_ref() else {
+        return;
+    };
+    let waits = |p: &Pager| p.kind == PagerKind::Log && p.state != PagerState::Ready;
+    let (Some(data), true) = (live.data.data.as_ref(), live.pagers.iter().any(waits)) else {
+        return;
+    };
+    let mut pagers = live.pagers.clone();
+    for pager in pagers.iter_mut().filter(|p| waits(p)) {
+        fill_log(app, data, pager);
+    }
+    if let Some(live) = app.live.as_mut() {
+        live.pagers = pagers;
+    }
+    app.dirty = true;
+}
+
+/// `p`: the plan of the ticket, which loads.
+fn plan(app: &mut App, fx: &mut Vec<Effect>) {
+    let Some(key) = app.live.as_ref().map(|l| l.key.clone()) else {
+        return;
+    };
+    push(app, Pager::loading(PagerKind::Plan, "plan"));
+    fx.push(Effect::LoadPlan(key));
+}
+
+/// Opens a pager of this kind over the view again, for a place of the history. The commits
+/// load without the check of `d`: a failed load says what is wrong in the pager.
+pub fn reopen(app: &mut App, kind: &PagerKind, fx: &mut Vec<Effect>) {
+    let Some(key) = app.live.as_ref().map(|l| l.key.clone()) else {
+        return;
+    };
+    match kind {
+        PagerKind::Log => log(app),
+        PagerKind::Plan => plan(app, fx),
+        PagerKind::Diff => {
+            push(app, Pager::loading(PagerKind::Diff, "commits"));
+            fx.push(Effect::LoadDiff(key));
+        }
+        PagerKind::Turn { id } => pager::open_turn(app, id, fx),
+    }
+}
+
+/// True while the view shows no card, no pager, and no line of `t`: then a part of the view
+/// itself can act.
+fn view_takes_clicks(app: &App) -> bool {
+    app.card.is_none()
+        && app
+            .live
+            .as_ref()
+            .is_some_and(|l| l.tell.is_none() && l.pagers.is_empty())
+}
+
+/// A click on a step of the path: the log, with the cursor on the last line that names the
+/// step.
+pub fn click_step(app: &mut App, step: &str) {
+    if !view_takes_clicks(app) {
+        return;
+    }
+    let at = data(app).and_then(|d| {
+        d.timeline
+            .iter()
+            .rposition(|e| super::super::moments::names_step(e, step))
+    });
+    log(app);
+    let rows = super::super::pager::body_rows(app.size.1, true);
+    if let (Some(at), Some(pager)) = (at, app.live.as_mut().and_then(|l| l.pagers.last_mut())) {
+        if pager.state == PagerState::Ready && at < pager.lines.len() {
+            pager.cursor = Some(at);
+            pager.step(0, rows);
+        }
+    }
+}
+
+/// A click on a line of the activity: the events of its turn.
+pub fn click_turn(app: &mut App, turn: &str, fx: &mut Vec<Effect>) {
+    if view_takes_clicks(app) {
+        pager::open_turn(app, turn, fx);
+    }
 }
 
 /// `d`: the commits that the forge does not have, for a ticket that holds a clone.

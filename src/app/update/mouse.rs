@@ -12,6 +12,11 @@
 //! and a step of the wheel, over a part or not, take the arm away. A typed key and a paste take
 //! it away too, and the key acts at once, as always.
 //!
+//! The header has a back part, a forward part, and a name for each place on the way from Home,
+//! such as the key of the ticket over its log: a click goes there. A key of the keys card
+//! closes the card and acts as that key on the screen. A step of the path opens the log at that
+//! step, and a line of the activity opens the events of its turn.
+//!
 //! A click outside each part does nothing. A step of the wheel that moves nothing and takes no
 //! arm away marks no change, so it makes no redraw.
 
@@ -73,6 +78,17 @@ fn run(app: &mut App, act: Act, fx: &mut Vec<Effect>) {
         Act::Pick(i) => super::resume::click_pick(app, i),
         Act::Form(target) => super::needs::click(app, target),
         Act::Tab(filter) => super::live::click_tab(app, filter),
+        Act::Back => super::nav::back(app, fx),
+        Act::Forward => super::nav::forward(app, fx),
+        Act::Go(place) => super::nav::go(app, place, fx),
+        Act::Run(key) => {
+            if app.card == Some(Card::Help) {
+                app.card = None;
+                super::on_key(app, key, fx);
+            }
+        }
+        Act::Step(step) => super::live::click_step(app, &step),
+        Act::Turn(turn) => super::live::click_turn(app, &turn, fx),
     }
 }
 

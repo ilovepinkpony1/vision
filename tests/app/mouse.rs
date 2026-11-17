@@ -9,11 +9,13 @@ use vision::app::feed::Filter;
 use vision::app::hits::Act;
 use vision::app::model::{App, Card, Screen, SetupError};
 use vision::app::msg::{Action, Effect, JobKind, Key, Mouse, MouseKind, Msg};
+use vision::app::nav::Place;
 use vision::app::needs::{Input, Reply, Target};
-use vision::app::pager::PagerKind;
+use vision::app::pager::{PagerKind, PagerState};
+use vision::app::view::live::layout::Layout;
 use vision::app::view::need_card::{body_size, hits};
 
-use super::live_support::{events, live, says, working_live};
+use super::live_support::{events, live, says, timeline, working_live, TURN};
 use super::need_support::*;
 use super::screens::{models_many, models_open, stats_open};
 use super::support::*;
@@ -63,6 +65,35 @@ fn find_last(buf: &Buffer, text: &str) -> (u16, u16) {
         .rev()
         .find_map(|y| find_in(buf, text, y))
         .unwrap_or_else(|| panic!("no {text:?} on the frame:\n{}", super::support::text(buf)))
+}
+
+/// The cell of the first character of `text` from the top, in the columns from `from` to
+/// `to`.
+fn find_between(buf: &Buffer, text: &str, from: u16, to: u16) -> (u16, u16) {
+    let all = lines(buf);
+    (0..buf.area.height)
+        .find_map(|y| {
+            let (line, columns) = &all[usize::from(y)];
+            line.match_indices(text)
+                .map(|(at, _)| (columns[at], y))
+                .find(|(x, _)| (from..to).contains(x))
+        })
+        .unwrap_or_else(|| panic!("no {text:?} on the frame:\n{}", super::support::text(buf)))
+}
+
+/// The kinds of the pagers of the live view, the bottom one first.
+fn pager_kinds(app: &App) -> Vec<PagerKind> {
+    app.live
+        .as_ref()
+        .map(|l| l.pagers.iter().map(|p| p.kind.clone()).collect())
+        .unwrap_or_default()
+}
+
+fn live_place(key: &str, pagers: &[PagerKind]) -> Place {
+    Place::Live {
+        key: key.into(),
+        pagers: pagers.to_vec(),
+    }
 }
 
 /// A click on the hint `hint` nearest the bottom of the frame, and the key `key`, on two copies
@@ -174,16 +205,16 @@ fn a_click_on_a_key_of_the_footer_of_the_live_view_acts_as_that_key() {
     let (home, fx) = click_is_key(&app, "esc home", Key::Esc);
     assert_eq!(home.screen, Screen::Home);
     assert!(fx.contains(&Effect::Follow(None)));
-    // In the pager, `g G start end` has a part for each key.
-    let (start, _) = click_is_key(&log, "g G", Key::Char('g'));
+    // In the pager, `g start` and `G end` are hints of their own, each with its label.
+    let (start, _) = click_is_key(&log, "g start", Key::Char('g'));
     assert_eq!(
         start.live.as_ref().unwrap().pagers.last().unwrap().cursor,
         Some(0)
     );
     let mut end = start.clone();
     let buf = draw(&mut end);
-    let (x, y) = find_last(&buf, "g G");
-    click(&mut end, 3.0, (x + 2, y));
+    let (x, y) = find_last(&buf, "G end");
+    click(&mut end, 3.0, (x + 3, y));
     let pager = end.live.as_ref().unwrap().pagers.last().unwrap();
     assert_eq!(
         pager.cursor,
@@ -579,8 +610,8 @@ fn a_click_outside_each_part_does_nothing_and_makes_no_redraw() {
         draw(&mut clicked);
         let before = ticked(&clicked);
         let at = clicked.clock.seconds();
-        // The first cell of the header holds no part on any screen.
-        let fx = click(&mut clicked, at, (0, 0));
+        // The line under the header holds no part on any screen.
+        let fx = click(&mut clicked, at, (0, 1));
         assert!(fx.is_empty(), "{fx:?}");
         assert_eq!(clicked, before, "{:?}", app.screen);
         assert!(!clicked.dirty, "{:?}", app.screen);
@@ -1103,4 +1134,302 @@ fn while_the_line_of_t_is_open_a_click_types_nothing_into_it() {
             || app.engine.queue.iter().any(|job| tell(&job.kind)),
         "{fx:?}"
     );
+}
+
+#[test]
+fn the_back_and_the_forward_parts_go_through_the_places_that_the_person_visited() {
+    let mut app = working_live(SIZE);
+    draw(&mut app);
+    assert_eq!(app.hits.click_at(1, 0), Some(&Act::Back));
+    assert_eq!(
+        app.hits.click_at(4, 0),
+        None,
+        "nothing to go forward to yet"
+    );
+    let fx = click(&mut app, 3.0, (1, 0));
+    assert_eq!(app.screen, Screen::Home);
+    assert_eq!(app.live, None);
+    assert!(fx.contains(&Effect::Follow(None)));
+    draw(&mut app);
+    assert_eq!(app.hits.click_at(1, 0), None, "Home was the first place");
+    assert_eq!(app.hits.click_at(4, 0), Some(&Act::Forward));
+    let fx = click(&mut app, 3.0, (4, 0));
+    assert_eq!(
+        app.screen,
+        Screen::Live {
+            key: "DEMO-12".into()
+        }
+    );
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-12".into())));
+    assert!(fx.contains(&Effect::Follow(Some("DEMO-12".into()))));
+    // A key that goes to another place is a visit too, and a visit empties the forward list.
+    draw(&mut app);
+    click(&mut app, 3.0, (1, 0));
+    assert_eq!(app.nav.forward, [live_place("DEMO-12", &[])]);
+    send(&mut app, 3.0, Msg::Key(Key::Char('m')));
+    assert_eq!(app.screen, Screen::Models);
+    assert!(app.nav.forward.is_empty());
+    assert_eq!(app.nav.back, [Place::Home]);
+    send(&mut app, 3.0, Msg::Key(Key::Esc));
+    assert_eq!(app.nav.back, [Place::Home, Place::Models]);
+}
+
+#[test]
+fn a_click_on_a_name_of_the_header_goes_to_its_place() {
+    let mut app = working_live(SIZE);
+    send(&mut app, 3.0, Msg::Key(Key::Char('l')));
+    let fx = send(&mut app, 3.0, Msg::Key(Key::Enter));
+    assert!(fx.contains(&Effect::LoadTurn {
+        key: "DEMO-12".into(),
+        turn: TURN.into()
+    }));
+    let buf = draw(&mut app);
+    let head = super::support::text(&buf);
+    assert!(
+        head.lines()
+            .next()
+            .unwrap()
+            .contains("‹  ›  ◆ VISION ▸ DEMO-12 ▸ log ▸ turn build-1 of 14:24"),
+        "{head}"
+    );
+    // The name of the place that shows is no part.
+    let current = find_in(&buf, "turn build-1", 0).unwrap();
+    assert_eq!(app.hits.click_at(current.0, current.1), None);
+    let fx = click(&mut app, 3.0, find_in(&buf, "log", 0).unwrap());
+    assert!(fx.is_empty(), "the log stays open: {fx:?}");
+    assert_eq!(pager_kinds(&app), [PagerKind::Log]);
+    let buf = draw(&mut app);
+    click(&mut app, 3.0, find_in(&buf, "DEMO-12", 0).unwrap());
+    assert_eq!(pager_kinds(&app), []);
+    assert_eq!(
+        app.screen,
+        Screen::Live {
+            key: "DEMO-12".into()
+        }
+    );
+    let buf = draw(&mut app);
+    let fx = click(&mut app, 3.0, find_in(&buf, "VISION", 0).unwrap());
+    assert_eq!(app.screen, Screen::Home);
+    assert!(fx.contains(&Effect::Follow(None)));
+    // On Home, the name of Home is no part.
+    let buf = draw(&mut app);
+    let before = ticked(&app);
+    click(&mut app, 3.0, find_in(&buf, "VISION", 0).unwrap());
+    assert_eq!(app, before);
+}
+
+#[test]
+fn back_to_a_live_view_opens_its_pagers_again_and_its_log_waits_for_the_data() {
+    let mut app = working_live(SIZE);
+    let data = app.live.as_ref().unwrap().data.data.clone().unwrap();
+    send(&mut app, 3.0, Msg::Key(Key::Char('l')));
+    send(&mut app, 3.0, Msg::Key(Key::Enter));
+    let buf = draw(&mut app);
+    click(&mut app, 3.0, find_in(&buf, "VISION", 0).unwrap());
+    assert_eq!(app.screen, Screen::Home);
+    draw(&mut app);
+    let fx = click(&mut app, 3.0, (1, 0));
+    let turn = PagerKind::Turn { id: TURN.into() };
+    assert_eq!(pager_kinds(&app), [PagerKind::Log, turn.clone()]);
+    let live = app.live.as_ref().unwrap();
+    assert!(live.pagers.iter().all(|p| p.state == PagerState::Loading));
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-12".into())));
+    assert!(fx.contains(&Effect::LoadTurn {
+        key: "DEMO-12".into(),
+        turn: TURN.into()
+    }));
+    // A failed load of the data says why in the log, and the next data fills it.
+    send(
+        &mut app,
+        3.05,
+        Msg::Ticket {
+            key: "DEMO-12".into(),
+            data: Box::new(Err("the ledger is busy".into())),
+        },
+    );
+    let log = &app.live.as_ref().unwrap().pagers[0];
+    assert_eq!(log.state, PagerState::Failed("the ledger is busy".into()));
+    // The data fills the log, and the place stays the same.
+    send(
+        &mut app,
+        3.1,
+        Msg::Ticket {
+            key: "DEMO-12".into(),
+            data: Box::new(Ok(data)),
+        },
+    );
+    let log = &app.live.as_ref().unwrap().pagers[0];
+    assert_eq!(log.state, PagerState::Ready);
+    assert_eq!(log.lines.len(), timeline().len());
+    assert_eq!(
+        app.nav.at,
+        Some(live_place("DEMO-12", &[PagerKind::Log, turn]))
+    );
+    assert_eq!(app.nav.forward, [Place::Home]);
+}
+
+#[test]
+fn a_pager_that_closes_after_its_load_leaves_no_place_in_the_history() {
+    let mut app = working_live(SIZE);
+    send(&mut app, 3.0, Msg::Key(Key::Char('p')));
+    assert_eq!(app.nav.back, [Place::Home, live_place("DEMO-12", &[])]);
+    // The ticket has no plan, so the pager closes.
+    send(
+        &mut app,
+        3.1,
+        Msg::Plan {
+            key: "DEMO-12".into(),
+            plan: Ok(None),
+        },
+    );
+    assert_eq!(pager_kinds(&app), []);
+    assert_eq!(app.nav.back, [Place::Home]);
+    assert_eq!(app.nav.at, Some(live_place("DEMO-12", &[])));
+}
+
+#[test]
+fn a_click_on_a_key_of_the_keys_card_closes_it_and_acts_as_that_key() {
+    let mut app = home(SIZE);
+    send(&mut app, 1.5, Msg::Key(Key::Char('?')));
+    let buf = draw(&mut app);
+    let fx = click(&mut app, 1.5, find(&buf, "the model of each agent"));
+    assert_eq!(app.card, None);
+    assert_eq!(app.screen, Screen::Models);
+    assert!(fx.contains(&Effect::LoadModels));
+    // A row of more keys has a part for each key: `p` of `l  p  d` opens the plan.
+    let mut live = working_live(SIZE);
+    send(&mut live, 3.0, Msg::Key(Key::Char('?')));
+    let buf = draw(&mut live);
+    let (x, y) = find(&buf, "l  p  d");
+    assert_eq!(live.hits.click_at(x + 1, y), None, "the space is no part");
+    let fx = click(&mut live, 3.0, (x + 3, y));
+    assert_eq!(live.card, None);
+    assert_eq!(pager_kinds(&live), [PagerKind::Plan]);
+    assert!(fx.contains(&Effect::LoadPlan("DEMO-12".into())));
+    // In Models, Enter and `u` record a decision: their rows are no parts.
+    let mut models = models_open(SIZE);
+    let at = models.clock.seconds();
+    send(&mut models, at, Msg::Key(Key::Char('?')));
+    let buf = draw(&mut models);
+    let (x, y) = find(&buf, "pin the values that show");
+    assert_eq!(models.hits.click_at(x, y), None);
+    let (x, y) = find(&buf, "go back to the default");
+    assert_eq!(models.hits.click_at(x, y), None);
+    let (x, y) = find(&buf, "change its effort");
+    assert_eq!(models.hits.click_at(x, y), Some(&Act::Run(Key::Char('e'))));
+    // A typed key keeps the card open, as before.
+    send(&mut models, at, Msg::Key(Key::Char('e')));
+    assert_eq!(models.card, Some(Card::Help));
+}
+
+#[test]
+fn a_click_on_the_turns_the_commits_or_the_plan_opens_them_as_their_keys_do() {
+    let mut app = working_live(SIZE);
+    let buf = draw(&mut app);
+    let right = Layout::of(110, 32).right_x() as u16;
+    for (name, key) in [("turns", 'l'), ("commits", 'd'), ("plan", 'p')] {
+        let cell = find_between(&buf, name, right, 110);
+        let mut clicked = app.clone();
+        let mut pressed = app.clone();
+        let at = app.clock.seconds();
+        let by_click = click(&mut clicked, at, cell);
+        let by_key = send(&mut pressed, at, Msg::Key(Key::Char(key)));
+        assert_eq!(by_click, by_key, "the effects of {name}");
+        assert_eq!(clicked, pressed, "the model after {name}");
+        assert_eq!(pager_kinds(&clicked).len(), 1, "{name} opens a pager");
+    }
+    // A mark that does not exist yet is no part: no CI ran.
+    let ci = find_between(&buf, "CI", right, 110);
+    assert_eq!(app.hits.click_at(ci.0, ci.1), None);
+}
+
+#[test]
+fn a_click_on_a_visited_step_of_the_path_opens_the_log_at_that_step() {
+    let mut app = working_live(SIZE);
+    let buf = draw(&mut app);
+    let left = Layout::of(110, 32).left_line() as u16;
+    let review = find_between(&buf, "review", 0, left);
+    assert_eq!(
+        app.hits.click_at(review.0, review.1),
+        None,
+        "the ticket did not visit review"
+    );
+    let fx = click(&mut app, 3.0, find_between(&buf, "plan ", 0, left));
+    assert!(fx.is_empty(), "{fx:?}");
+    let pager = app.live.as_ref().unwrap().pagers.last().unwrap();
+    assert_eq!(pager.kind, PagerKind::Log);
+    // The last line that names plan is the move from plan to plan-ready.
+    assert_eq!(pager.cursor, Some(7));
+    // The current step opens the log too.
+    let mut current = working_live(SIZE);
+    let buf = draw(&mut current);
+    click(&mut current, 3.0, find_between(&buf, "build", 0, left));
+    let pager = current.live.as_ref().unwrap().pagers.last().unwrap();
+    assert_eq!(pager.cursor, Some(timeline().len() - 1));
+}
+
+#[test]
+fn a_click_on_a_line_of_a_turn_in_the_activity_opens_the_events_of_the_turn() {
+    let mut app = working_live(SIZE);
+    let buf = draw(&mut app);
+    // A line of the ledger with no turn is no part.
+    let (x, y) = find(&buf, "moves from plan-ready");
+    assert_eq!(app.hits.click_at(x, y), None);
+    // A line of the stream file of the turn that runs.
+    let fx = click(&mut app, 3.0, find(&buf, "3 tests pass"));
+    assert_eq!(pager_kinds(&app), [PagerKind::Turn { id: TURN.into() }]);
+    assert!(fx.contains(&Effect::LoadTurn {
+        key: "DEMO-12".into(),
+        turn: TURN.into()
+    }));
+    // A line of a turn in the ledger opens its turn too.
+    let mut ledger = working_live(SIZE);
+    let buf = draw(&mut ledger);
+    click(&mut ledger, 3.0, find(&buf, "the turn of scout ended"));
+    assert_eq!(
+        pager_kinds(&ledger),
+        [PagerKind::Turn {
+            id: "20261116T135204Z-DEMO-12-refine-1".into()
+        }]
+    );
+}
+
+#[test]
+fn a_click_on_a_mark_of_more_rows_selects_the_next_row_out_of_view() {
+    let mut app = models_many((100, 28));
+    let buf = draw(&mut app);
+    let shown = app.models.selected;
+    assert_eq!(shown, 0);
+    click(&mut app, 3.0, find(&buf, "▼ 8 more"));
+    let next = app.models.selected;
+    assert!(next > 0, "an agent below the window is selected");
+    let buf = draw(&mut app);
+    let (x, y) = find(&buf, "▲");
+    click(&mut app, 3.0, (x, y));
+    assert_eq!(
+        app.models.selected, 0,
+        "the agent above the window is selected"
+    );
+}
+
+#[test]
+fn while_the_line_of_t_is_open_the_header_and_the_links_of_the_view_are_no_parts() {
+    let mut app = working_live(SIZE);
+    send(&mut app, 3.0, Msg::Key(Key::Char('t')));
+    type_text(&mut app, 3.0, "hi");
+    draw(&mut app);
+    let parts: Vec<&Act> = app.hits.clicks().iter().map(|(_, act)| act).collect();
+    for act in &parts {
+        assert!(
+            !matches!(
+                act,
+                Act::Back | Act::Forward | Act::Go(_) | Act::Step(_) | Act::Turn(_)
+            ),
+            "{act:?} in {parts:?}"
+        );
+        assert!(
+            !matches!(act, Act::Key(Key::Char('l' | 'd' | 'p'))),
+            "{act:?} in {parts:?}"
+        );
+    }
 }

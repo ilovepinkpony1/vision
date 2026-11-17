@@ -1,4 +1,4 @@
- ◆ VISION                                         engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ────╭─ DEMO-12 · the first write of tracker.describe ──────────────────────────────────────────╮────
     │                                                                                          │
     │  Replaces the description of the ticket in the tracker.                                  │s

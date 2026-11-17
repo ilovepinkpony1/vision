@@ -1,4 +1,4 @@
- ◆ VISION ▸ models                                          engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ models                                    engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   Each agent keeps its model until you change it. A change holds for the next turn of the agent, not for a
@@ -17,12 +17,12 @@
                  It │  q            quit                                                 │
     judge        cla│  click        a key acts as that key; a row selects, then opens    │       no turn yet
                  It │  2 clicks     a key that sends something or records a decision     │
-    curator      cla│  shift drag   selects text; some terminals use Option              │       no turn yet
-                 It │                                                                    │
+    curator      cla│  ‹  ›         back and forward; a name at the top goes there       │       no turn yet
+                 It │  shift drag   selects text; some terminals use Option              │
+                    │                                                                    │
                     │  esc closes this list                                              │
                     │                                                                    │
                     ╰────────────────────────────────────────────────────────────────────╯
-
   ╭─ recommendation for builder ───────────────────────────────────────────────────────────────────────────╮
   │  ✗ go back to the default for builder                                                                  │
   │  the command failed in the test                                                                        │

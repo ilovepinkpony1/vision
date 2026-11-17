@@ -202,6 +202,8 @@ pub struct Item {
     pub wraps: bool,
     /// The kind of the item, for the tabs.
     pub filter: Filter,
+    /// The turn of the item, whose events a click on its lines opens.
+    pub turn: Option<String>,
 }
 
 /// The numbers of one turn that the stream gives.
@@ -254,6 +256,8 @@ pub struct FeedLine {
     pub text: String,
     /// The color of the text: the words of the agent are bright, each other text is dim.
     pub text_hue: Hue,
+    /// The turn of the item of the line, if it has one.
+    pub turn: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -359,6 +363,7 @@ impl Feed {
                 text: m.text.clone(),
                 wraps: false,
                 filter: m.filter,
+                turn: m.turn.clone(),
             })
             .collect();
         if items == self.ledger {
@@ -415,6 +420,7 @@ impl Feed {
                 text,
                 wraps,
                 filter,
+                turn: Some(batch.turn.clone()),
             });
         }
         if self.stream.windows(2).any(|w| w[0].order > w[1].order) {
@@ -502,6 +508,7 @@ impl Feed {
                     hue: item.hue.clone(),
                     text,
                     text_hue: text_hue.clone(),
+                    turn: item.turn.clone(),
                 });
             }
         }

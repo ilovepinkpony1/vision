@@ -1,4 +1,4 @@
- ◆ VISION ▸ DEMO-12  turn build-1 of 14:24                  engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ DEMO-12 ▸ log ▸ turn build-1 of 14:24     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   start  the session starts with claude-opus-5-5
@@ -28,5 +28,5 @@
 
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ↑↓ scroll   pgup pgdn page   g G start end   esc back
+ ↑↓ scroll   pgup pgdn page   g start   G end   esc back
 

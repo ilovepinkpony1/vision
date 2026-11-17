@@ -278,5 +278,5 @@ pub fn help(c: &mut Canvas) {
         ("?", "this list of keys"),
         ("q", "quit"),
     ];
-    super::cards::keys_card(c, &list);
+    super::cards::keys_card(c, &list, &[]);
 }

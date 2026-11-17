@@ -1,4 +1,4 @@
- ◆ VISION ▸ DEMO-12  plan 3f2a1b4c5d6e                      engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ DEMO-12 ▸ plan 3f2a1b4c5d6e               engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   hash 3f2a1b4c5d6e  It does not wait for an approval now.
@@ -28,5 +28,5 @@
 
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- ↑↓ scroll   pgup pgdn page   g G start end   esc back
+ ↑↓ scroll   pgup pgdn page   g start   G end   esc back
 

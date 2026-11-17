@@ -1,4 +1,4 @@
- ◆ VISION ▸ DEMO-7  Show the totals under the table o…      engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+ ‹  ›  ◆ VISION ▸ DEMO-7  Show the totals under the tabl…   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  PATH                      │ NOW                                                    │ TICKET
  ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  waits for CI                                │ cost              $6.12

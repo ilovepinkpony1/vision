@@ -4,8 +4,9 @@
 //! shows the part around the selection and says how many rows are above and below.
 //!
 //! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
-//! The wheel over a box moves the selection as the arrows do, and a click on the bar "needs
-//! you" acts as `n`.
+//! The wheel over a box moves the selection as the arrows do, a click on the mark of the rows
+//! above or below a box selects the next row out of view, and a click on the bar "needs you"
+//! acts as `n`.
 
 use super::canvas::{ink, Canvas};
 use super::header::{dots, header, keys, spinner};
@@ -20,7 +21,7 @@ use crate::pipeline::money;
 use crate::util::time;
 
 pub fn draw(app: &App, c: &mut Canvas) {
-    header(app, c, None);
+    header(app, c, "");
     let mut y = 3;
     if !app.needs().is_empty() {
         needs_bar(app, c, y);
@@ -76,9 +77,8 @@ pub fn draw(app: &App, c: &mut Canvas) {
             c,
             y,
             show_held * 3 + 1,
-            offset,
-            show_held as usize,
-            held.len(),
+            (offset, show_held as usize, held.len()),
+            |i| held.get(i).map(|h| Act::Ticket(h.view.key.clone())),
         );
         for (i, ticket) in held
             .iter()
@@ -120,9 +120,8 @@ pub fn draw(app: &App, c: &mut Canvas) {
             c,
             y,
             show_queue + 2,
-            offset,
-            show_queue as usize,
-            queue.len(),
+            (offset, show_queue as usize, queue.len()),
+            |i| queue.get(i).map(|r| Act::Ticket(r.key.clone())),
         );
         for (i, row) in queue
             .iter()
@@ -262,21 +261,30 @@ pub(super) fn window(selected: Option<usize>, total: usize, shown: usize) -> usi
     }
 }
 
-/// The marks on the border of a box that does not show each row.
+/// The marks on the border of a box that does not show each row. A click on a mark acts as
+/// `pick` gives for the index of a row: the mark above for the last row above the box, and the
+/// mark below for the first row below it, so that the box moves to that row.
 pub(super) fn more_marks(
     c: &mut Canvas,
     y: i32,
     h: i32,
-    offset: usize,
-    shown: usize,
-    total: usize,
+    (offset, shown, total): (usize, usize, usize),
+    pick: impl Fn(usize) -> Option<Act>,
 ) {
     if offset > 0 {
-        c.right(c.w - 4, y, &format!(" ▲ {offset} more "), ink(T.dim));
+        let mark = format!(" ▲ {offset} more ");
+        let x = c.right(c.w - 4, y, &mark, ink(T.dim)) + 1;
+        if let Some(act) = pick(offset - 1) {
+            c.click(x, y, width(&mark) as i32, 1, act);
+        }
     }
     let below = total.saturating_sub(offset + shown);
     if below > 0 {
-        c.right(c.w - 4, y + h - 1, &format!(" ▼ {below} more "), ink(T.dim));
+        let mark = format!(" ▼ {below} more ");
+        let x = c.right(c.w - 4, y + h - 1, &mark, ink(T.dim)) + 1;
+        if let Some(act) = pick(offset + shown) {
+            c.click(x, y + h - 1, width(&mark) as i32, 1, act);
+        }
     }
 }
 

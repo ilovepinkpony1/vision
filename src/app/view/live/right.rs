@@ -4,11 +4,15 @@
 //! exist yet), LIMITS (the two windows as bars with the part, the stop value, and the reset
 //! time), and ENGINE (on, paused, or off, and the time since the last pass). When the window is
 //! short, the free rows between the parts go first.
+//!
+//! A click on the turns opens the log as `l` does, a click on the commits of a ticket with a
+//! clone opens them as `d` does, and a click on a plan opens it as `p` does.
 
 use super::layout::Layout;
+use crate::app::hits::Act;
 use crate::app::live::TicketData;
 use crate::app::model::App;
-use crate::app::msg::JobKind;
+use crate::app::msg::{JobKind, Key};
 use crate::app::now::{local_time, mmss};
 use crate::app::text::{cut, width};
 use crate::app::view::canvas::{ink, Canvas};
@@ -21,6 +25,8 @@ use crate::snapshot::LimitView;
 enum Row {
     Title(&'static str),
     Pair(String, String, Rgb),
+    /// A pair that a click opens, as its key does.
+    Link(String, String, Rgb, Act),
     Bar(&'static str, LimitView),
     Note(String),
     /// The state of the engine in its color, and a value.
@@ -29,6 +35,7 @@ enum Row {
 }
 
 pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData) {
+    let telling = app.live.as_ref().is_some_and(|l| l.tell.is_some());
     let rows = rows(app, data);
     let room = (l.bottom() - 2 + 1) as usize;
     let gaps = rows.iter().filter(|r| matches!(r, Row::Gap)).count();
@@ -46,10 +53,14 @@ pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData) {
             Row::Title(title) => {
                 c.put(x, y, title, ink(T.dim).bold());
             }
-            Row::Pair(name, value, color) => {
-                c.put(x, y, &name, ink(T.dim));
-                let room = (end - x - width(&name) as i32 - 1).max(1) as usize;
-                c.right(end, y, &cut(&value, room), ink(color));
+            Row::Pair(name, value, color) => pair(c, x, end, y, &name, &value, color),
+            Row::Link(name, value, color, act) => {
+                pair(c, x, end, y, &name, &value, color);
+                // While the line of `t` is open, a key goes into the line: then a link is no
+                // part.
+                if !telling {
+                    c.click(x, y, end - x + 1, 1, act);
+                }
             }
             Row::Bar(label, view) => bar(c, x, end, y, label, &view),
             Row::Note(text) => {
@@ -65,6 +76,13 @@ pub fn draw(app: &App, c: &mut Canvas, l: &Layout, data: &TicketData) {
     }
 }
 
+/// A name on the left and a value flush right.
+fn pair(c: &mut Canvas, x: i32, end: i32, y: i32, name: &str, value: &str, color: Rgb) {
+    c.put(x, y, name, ink(T.dim));
+    let room = (end - x - width(name) as i32 - 1).max(1) as usize;
+    c.right(end, y, &cut(value, room), ink(color));
+}
+
 fn rows(app: &App, data: &TicketData) -> Vec<Row> {
     let view = &data.view;
     let m = &data.measures;
@@ -78,10 +96,12 @@ fn rows(app: &App, data: &TicketData) -> Vec<Row> {
         since(app, data.taken.as_deref()),
         T.fg,
     ));
-    out.push(Row::Pair(
+    // The turns open the log, as `l` does.
+    out.push(Row::Link(
         "turns".into(),
         data.facts.turns.to_string(),
         T.fg,
+        Act::Key(Key::Char('l')),
     ));
     let commits = match data.unpushed {
         // A branch that the forge does not have yet is compared with the base, so zero means
@@ -90,7 +110,18 @@ fn rows(app: &App, data: &TicketData) -> Vec<Row> {
         Some(n) => format!("{n} not pushed"),
         None => "-".to_string(),
     };
-    out.push(Row::Pair("commits".into(), commits, T.fg));
+    // The commits open the commits that the forge does not have, as `d` does, while the
+    // ticket holds a clone.
+    if data.view.clone.is_some() && !data.facts.finished {
+        out.push(Row::Link(
+            "commits".into(),
+            commits,
+            T.fg,
+            Act::Key(Key::Char('d')),
+        ));
+    } else {
+        out.push(Row::Pair("commits".into(), commits, T.fg));
+    }
     out.push(Row::Gap);
     out.push(Row::Title("QUESTIONS"));
     out.push(Row::Pair(
@@ -112,11 +143,15 @@ fn rows(app: &App, data: &TicketData) -> Vec<Row> {
     out.push(Row::Title("MARKS"));
     let short = |h: &str| h.chars().take(7).collect::<String>();
     let plan = match (&view.marks.plan, &data.plan) {
-        (Some(hash), _) => (format!("{} ✓", short(hash)), T.ok),
-        (None, Some(hash)) => (format!("{} waits", short(hash)), T.warn),
-        (None, None) => ("-".to_string(), T.fg),
+        (Some(hash), _) => Some((format!("{} ✓", short(hash)), T.ok)),
+        (None, Some(hash)) => Some((format!("{} waits", short(hash)), T.warn)),
+        (None, None) => None,
     };
-    out.push(Row::Pair("plan".into(), plan.0, plan.1));
+    // A plan opens, as `p` does.
+    out.push(match plan {
+        Some((value, color)) => Row::Link("plan".into(), value, color, Act::Key(Key::Char('p'))),
+        None => Row::Pair("plan".into(), "-".to_string(), T.fg),
+    });
     let mut jobs = data.jobs.clone();
     for mark in &view.marks.jobs {
         if !jobs.contains(&mark.name) {

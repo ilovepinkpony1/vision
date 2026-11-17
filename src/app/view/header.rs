@@ -1,5 +1,6 @@
-//! The parts that each screen shares: the header with the engine and the limits, the footer of
-//! keys, the strip of dots of the path, the spinner, and the notice at the bottom.
+//! The parts that each screen shares: the header with the back and the forward parts, the names
+//! of the places, the engine, and the limits; the footer of keys; the strip of dots of the path;
+//! the spinner; and the notice at the bottom.
 
 use std::time::Duration;
 
@@ -8,6 +9,7 @@ use super::theme::{Rgb, T};
 use crate::app::hits::{hint, Act};
 use crate::app::model::{App, Tone};
 use crate::app::msg::{JobKind, Key};
+use crate::app::nav::Place;
 use crate::app::text::{cut, width};
 use crate::snapshot::LimitView;
 
@@ -27,10 +29,44 @@ pub fn mmss(seconds: u64) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-/// The header: the gem and the name, a crumb, the engine, the two limits, and the local time.
-pub fn header(app: &App, c: &mut Canvas, crumb: Option<(&str, &str)>) {
-    let mut x = c.put(1, 0, "◆", ink(T.accent).bold());
+/// The longest name of a ticket key in the header, and of a pager.
+const KEY_MAX: usize = 24;
+const PAGER_MAX: usize = 30;
+
+/// The header: the back and the forward parts, the gem and the name, a name for each place on
+/// the way from Home to the place that shows, a title, the engine, the two limits, and the
+/// local time.
+///
+/// A click on `‹` goes back and a click on `›` goes forward, as in a browser. A click on a name
+/// goes to its place: `◆ VISION` to Home, the key of a ticket to its live view, and the name of
+/// a pager to that pager. The name of the place that shows is no part. While the line of `t` is
+/// open, the header has no part, so that a click cannot drop the text of the line.
+pub fn header(app: &App, c: &mut Canvas, title: &str) {
+    let telling = app.live.as_ref().is_some_and(|l| l.tell.is_some());
+    let place = app.place();
+    let parts = !telling && app.card.is_none();
+    let arrow = |on: bool| {
+        if on && parts {
+            ink(T.fg).bold()
+        } else {
+            ink(T.faint)
+        }
+    };
+    let can_back = !app.nav.back.is_empty();
+    let can_forward = !app.nav.forward.is_empty();
+    c.put(1, 0, "‹", arrow(can_back));
+    c.put(4, 0, "›", arrow(can_forward));
+    if parts && can_back {
+        c.click(0, 0, 3, 1, Act::Back);
+    }
+    if parts && can_forward {
+        c.click(3, 0, 3, 1, Act::Forward);
+    }
+    let mut x = c.put(7, 0, "◆", ink(T.accent).bold());
     x = c.put(x + 1, 0, "VISION", ink(T.fg).bold());
+    if parts && place.as_ref().is_some_and(|p| *p != Place::Home) {
+        c.click(7, 0, x - 7, 1, Act::Go(Place::Home));
+    }
     let (hour, minute) = app.clock.local_hm();
     let clock = format!("{hour:02}:{minute:02}");
     let mut r = c.w - 2;
@@ -46,15 +82,54 @@ pub fn header(app: &App, c: &mut Canvas, crumb: Option<(&str, &str)>) {
     let (state, color) = engine_state(app);
     r = c.right(r - 3, 0, &state, ink(color));
     let left = c.right(r - 1, 0, "engine", ink(T.dim));
-    if let Some((key, title)) = crumb {
+    // The names end two cells before the engine.
+    let end = left - 2;
+    let names = place.as_ref().map(|p| names(app, p)).unwrap_or_default();
+    let last = names.len();
+    for (i, (name, max)) in names.iter().enumerate() {
+        if end - (x + 3) < 2 {
+            break;
+        }
         x = c.put(x + 1, 0, "▸", ink(T.faint));
-        x = c.put(x + 1, 0, &cut(key, 24), ink(T.accent).bold());
-        let room = (left - 2 - (x + 2)).clamp(0, 34) as usize;
-        if !title.is_empty() && room > 1 {
-            c.put(x + 2, 0, &cut(title, room), ink(T.dim));
+        let shown = cut(name, ((end - (x + 1)).max(0) as usize).min(*max));
+        let current = i + 1 == last;
+        let style = if current {
+            ink(T.accent).bold()
+        } else if i == 0 {
+            ink(T.fg).bold()
+        } else {
+            ink(T.fg)
+        };
+        let start = x + 1;
+        x = c.put(start, 0, &shown, style);
+        if parts && !current {
+            if let Some(target) = place.as_ref().map(|p| p.up_to(i + 1)) {
+                c.click(start, 0, x - start, 1, Act::Go(target));
+            }
         }
     }
+    let room = (end - (x + 2)).clamp(0, 34) as usize;
+    if !title.is_empty() && room > 1 {
+        c.put(x + 2, 0, &cut(title, room), ink(T.dim));
+    }
     c.put(0, 1, &"─".repeat(c.w as usize), ink(T.line));
+}
+
+/// The names on the way from Home to a place, each with its longest width: the screen, and
+/// for the live view, the key of the ticket and the title of each pager.
+fn names(app: &App, place: &Place) -> Vec<(String, usize)> {
+    match place {
+        Place::Home => Vec::new(),
+        Place::Models => vec![("models".to_string(), PAGER_MAX)],
+        Place::Stats => vec![("stats".to_string(), PAGER_MAX)],
+        Place::Live { key, .. } => {
+            let mut out = vec![(key.clone(), KEY_MAX)];
+            if let Some(live) = app.live.as_ref().filter(|l| l.key == *key) {
+                out.extend(live.pagers.iter().map(|p| (p.title.clone(), PAGER_MAX)));
+            }
+            out
+        }
+    }
 }
 
 /// The state of the engine: off, a pass that runs, paused, or on.
