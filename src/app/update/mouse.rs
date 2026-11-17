@@ -9,11 +9,11 @@
 //!
 //! A part that sends something or records a decision acts only on a second click: the first
 //! click arms it, and a second click on it within [`ARM_FOR`] acts as its key. A click elsewhere
-//! and a step of the wheel take the arm away. A typed key and a paste take it away too, and the
-//! key acts at once, as always.
+//! and a step of the wheel, over a part or not, take the arm away. A typed key and a paste take
+//! it away too, and the key acts at once, as always.
 //!
-//! A click outside each part does nothing. A step of the wheel that moves nothing marks no
-//! change, so it makes no redraw.
+//! A click outside each part does nothing. A step of the wheel that moves nothing and takes no
+//! arm away marks no change, so it makes no redraw.
 
 use super::super::hits::{card_place, Act, Armed, ARM_FOR};
 use super::super::model::{App, Card};
@@ -42,10 +42,11 @@ pub fn on_mouse(app: &mut App, event: Mouse, fx: &mut Vec<Effect>) {
             }
         }
         MouseKind::WheelUp | MouseKind::WheelDown => {
+            // Each step of the wheel takes the arm away, also a step outside each part.
+            disarm(app);
             let Some(by) = app.hits.wheel_at(event.column, event.row) else {
                 return;
             };
-            disarm(app);
             let key = if event.kind == MouseKind::WheelUp {
                 Key::Up
             } else {

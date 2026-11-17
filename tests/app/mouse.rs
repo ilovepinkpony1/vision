@@ -446,6 +446,26 @@ fn a_click_elsewhere_a_key_a_paste_a_step_of_the_wheel_and_three_seconds_take_th
 }
 
 #[test]
+fn a_step_of_the_wheel_outside_each_part_takes_the_arm_away() {
+    let mut app = open_with(SIZE, vec![plan_item(false)]);
+    let buf = draw(&mut app);
+    let a = find_last(&buf, "a approve");
+    click(&mut app, 2.5, a);
+    assert_eq!(app.armed_act(), Some(&Act::Decide(Key::Char('a'))));
+    // The first cell of the header is outside the card, and no part of it scrolls.
+    assert_eq!(app.hits.wheel_at(0, 0), None);
+    mouse(&mut app, 2.6, MouseKind::WheelDown, (0, 0));
+    assert_eq!(app.armed, None, "the step of the wheel takes the arm away");
+    assert!(app.dirty, "the label of the part shows again");
+    // So the next click on `a` within 3 seconds arms it again, and approves nothing.
+    draw(&mut app);
+    let fx = click(&mut app, 2.7, a);
+    assert_eq!(fx, Vec::new());
+    assert_eq!(app.chain, None);
+    assert_eq!(app.armed_act(), Some(&Act::Decide(Key::Char('a'))));
+}
+
+#[test]
 fn a_typed_key_acts_at_once_also_while_a_click_armed_its_part() {
     let mut app = open_with(SIZE, vec![first_write("shadow")]);
     let buf = draw(&mut app);
