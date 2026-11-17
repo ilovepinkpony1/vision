@@ -940,6 +940,11 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         "issue_comment",
         json!({"number": 7, "id": 701, "login": "other", "body": "Can the calculator also divide?"}),
     );
+    // A note of a bot that needs no reply: the round reads it and answers nothing.
+    p.server.team(
+        "issue_comment",
+        json!({"number": 7, "id": 702, "login": "preview-bot", "body": "The preview of #7 is ready."}),
+    );
     p.tick_to("comments");
     p.tick_until("the comments that wait", |p| {
         p.doc("comments.json").is_some()
@@ -953,7 +958,12 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .collect();
     assert_eq!(
         kinds,
-        [(501, "inline"), (601, "review"), (701, "conversation")]
+        [
+            (501, "inline"),
+            (601, "review"),
+            (701, "conversation"),
+            (702, "conversation")
+        ]
     );
 
     // The Shepherd round: a fix, then its push and the replies, each in the mode auto. The
@@ -1013,6 +1023,19 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         ]
     );
 
+    // The round ended well, so Vision keeps the mark of each comment that it read, also of the
+    // note that got no reply.
+    let seen: Value = serde_json::from_str(&p.doc("comments-seen.json").unwrap()).unwrap();
+    assert_eq!(
+        seen,
+        json!([
+            "conversation:701:701",
+            "conversation:702:702",
+            "inline:501:501",
+            "review:601:601"
+        ])
+    );
+
     // ci-review: CI runs at the head of the comments. Only its green run moves the ticket to
     // rerequest, and that act step asks for the review again.
     p.tick_to("rerequest");
@@ -1056,7 +1079,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     assert_eq!(
         p.step().as_deref(),
         Some("in-review"),
-        "the review is asked again, and nothing waits"
+        "the review is asked again, and nothing waits: the note of the bot does not start a round"
     );
     p.server.team(
         "review",
@@ -2160,4 +2183,57 @@ fn a_late_comment_interrupts_a_wait_step_before_its_watch() {
     let detail: Value = serde_json::from_str(step.detail.as_deref().unwrap()).unwrap();
     assert_eq!(detail["how"], "on false");
     assert_eq!(detail["interrupt"], Value::Null);
+}
+
+#[test]
+fn a_round_of_comments_keeps_the_marks_only_after_its_end_facts_hold() {
+    // A note of a bot waits, and the Shepherd answers nothing. Its first result leaves a file
+    // outside a commit, so the end fact clean fails, and the note keeps waiting. The resume
+    // commits the file, the end facts hold, and Vision keeps the mark of the note.
+    let p = Project::new();
+    needs_the_person_at_refine(&p);
+    p.run(&["retry", KEY, "--step", "in-review"]).expect_code(0);
+    let number = pull_request_by_hand(&p);
+    p.server.team(
+        "issue_comment",
+        json!({"number": number, "id": 705, "login": "preview-bot", "body": "The preview is ready."}),
+    );
+    p.scenario(
+        "shepherd",
+        "comments",
+        json!([
+            runs_then(
+                "echo 'a note' > notes.txt",
+                result("Nothing needs a reply.", &[("verdicts.json", "[]")])
+            ),
+            runs_then(
+                "git add notes.txt && git commit -q -m 'Keep the note'",
+                result("Nothing needs a reply.", &[("verdicts.json", "[]")])
+            )
+        ]),
+    );
+    let failed = |p: &Project| {
+        p.ledger().events_of_ticket(KEY).unwrap().iter().any(|e| {
+            e.kind == "end-fact"
+                && e.detail.as_deref().is_some_and(|d| {
+                    d.contains("\"held\":false") || d.contains("\"fact\":\"clean\"")
+                })
+        })
+    };
+    p.tick_until("the failed end fact of the first result", failed);
+    assert_eq!(p.step().as_deref(), Some("comments"), "{}", p.report());
+    assert!(p
+        .doc("comments.json")
+        .unwrap()
+        .contains("\"mark\": \"conversation:705:705\""));
+    assert_eq!(
+        p.doc("comments-seen.json"),
+        None,
+        "a result whose end facts failed keeps no mark"
+    );
+    p.tick_until("the end of the round", |p| {
+        p.step().as_deref() != Some("comments")
+    });
+    let seen: Value = serde_json::from_str(&p.doc("comments-seen.json").unwrap()).unwrap();
+    assert_eq!(seen, json!(["conversation:705:705"]));
 }

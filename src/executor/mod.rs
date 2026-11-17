@@ -46,7 +46,10 @@ pub use jobs::{
     job, job_command, job_passed, job_passed_with, job_source, read, write_documents, JobResult,
     ReadAnswer, JOB_CHECK,
 };
-pub use observe::{observe_queue, observe_ticket, CiFacts, PrFacts, QueueTicket, TicketFacts};
+pub use observe::{
+    observe_queue, observe_ticket, seen_comments, CiFacts, PrFacts, QueueTicket, TicketFacts,
+    SEEN_COMMENTS,
+};
 pub use ops::{
     approve, approve_command, args_hash, change_mode, commit_arg, demoted, idempotency_key, lookup,
     mode_of, once_key, operation, operations_of, promoted, reconcile, release_failed, request,

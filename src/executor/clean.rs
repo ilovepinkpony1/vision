@@ -12,7 +12,7 @@ pub const DOCUMENT_MAX: usize = 4 * 1024 * 1024;
 
 /// The documents of the ticket folder that a script can never write, because the person or the
 /// pipeline owns them.
-pub const RESERVED_DOCUMENTS: [&str; 9] = [
+pub const RESERVED_DOCUMENTS: [&str; 10] = [
     "refine.md",
     "plan.md",
     "approved-plan.md",
@@ -22,6 +22,7 @@ pub const RESERVED_DOCUMENTS: [&str; 9] = [
     "notes.md",
     "description.md",
     "issue.json",
+    super::observe::SEEN_COMMENTS,
 ];
 
 /// A text of many lines: a string, or the JSON of another value. Empty for nothing.

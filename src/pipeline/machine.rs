@@ -529,6 +529,9 @@ fn test_turn_of(
         Check::Held => gate_notices(ctx, step, &found.docs)?,
         _ => Vec::new(),
     };
+    if check == Check::Held {
+        remember_seen_comments(ctx, &ticket.key, step, &found)?;
+    }
     // The commands of the secrets can be slow, so only a step with a gate reads them.
     let secrets = if step.expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
         Secrets::read(ctx.config()?)?
@@ -808,6 +811,41 @@ fn write_result_docs(
         Ok(())
     })?;
     Ok(())
+}
+
+/// Keeps the marks of the comments that a turn read, when its result gives verdicts on review
+/// comments and its end facts held: each mark of a list that the step reads, such as
+/// `comments.json`, joins the marks of the earlier rounds. `observe` gets them back in `seen`,
+/// so a comment that the round left without a reply, such as a note of a bot, does not start
+/// another round. The write comes before the end fact, and a second write gives the same file.
+fn remember_seen_comments(
+    ctx: &Ctx,
+    key: &TicketKey,
+    step: &Step,
+    found: &docs::ResultDocs,
+) -> Result<()> {
+    let StepKind::Turn(turn) = &step.kind else {
+        return Ok(());
+    };
+    if !found.docs.contains_key("verdicts.json") {
+        return Ok(());
+    }
+    let mut marks: BTreeSet<String> = executor::seen_comments(ctx, key)?.into_iter().collect();
+    let before = marks.len();
+    for name in &turn.reads {
+        if let Some(text) = read_optional(&ctx.paths.ticket_doc(key, name))? {
+            marks.extend(docs::comment_marks(&text));
+        }
+    }
+    if marks.len() == before {
+        return Ok(());
+    }
+    let list: Vec<&String> = marks.iter().collect();
+    let text = format!("{}\n", serde_json::to_string_pretty(&list)?);
+    atomic_write(
+        &ctx.paths.ticket_doc(key, executor::SEEN_COMMENTS),
+        text.as_bytes(),
+    )
 }
 
 /// The principles that a turn got (from its facts file) and the ones that its result applied.

@@ -14,6 +14,7 @@ use crate::adapter;
 use crate::ctx::Ctx;
 use crate::ledger::Ledger;
 use crate::paths::TicketKey;
+use crate::util::fs::read_optional;
 
 /// One ticket of the queue.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -120,9 +121,22 @@ pub fn observe_queue(ctx: &Ctx) -> Result<Vec<QueueTicket>> {
     Ok(tickets)
 }
 
+/// The file of the ticket folder that keeps the marks of the comments that a finished round
+/// of comments read. The pipeline writes it, and `observe` of the ticket gets its marks in
+/// `seen`, so that a comment that the round left without a reply does not start another round.
+pub const SEEN_COMMENTS: &str = "comments-seen.json";
+
+/// The marks of [`SEEN_COMMENTS`]: none when the file is missing or is not a list of texts.
+pub fn seen_comments(ctx: &Ctx, key: &TicketKey) -> Result<Vec<String>> {
+    let Some(text) = read_optional(&ctx.paths.ticket_doc(key, SEEN_COMMENTS))? else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_str(&text).unwrap_or_default())
+}
+
 /// `observe {"what": "ticket", ...}` with the branch, the pull request, and the clone of the
-/// ticket row (or the branch pattern of the adapter for a ticket with no row). The values of
-/// that clone apply.
+/// ticket row (or the branch pattern of the adapter for a ticket with no row), and the marks of
+/// the comments that finished rounds read. The values of that clone apply.
 pub fn observe_ticket(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<TicketFacts> {
     let adapter = adapter::load(ctx)?;
     let ticket = TicketContext::load(ledger, &adapter, key)?;
@@ -132,6 +146,7 @@ pub fn observe_ticket(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<Tic
         "branch": ticket.branch,
         "pr": ticket.pr,
         "clone": ticket.clone_text(),
+        "seen": seen_comments(ctx, key)?,
     });
     let answer = call(ctx, input, ticket.clone.as_deref())?;
     let wrong = |what: &str| format!("bin/observe answered {key} with a wrong {what}");

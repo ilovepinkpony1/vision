@@ -500,6 +500,19 @@ pub fn comment_authors(text: &str) -> BTreeMap<i64, String> {
         .collect()
 }
 
+/// The marks of the comments of a list that a step reads, such as `comments.json`: the text of
+/// `mark` of each item. A list of an adapter that gives no mark gives none.
+pub fn comment_marks(text: &str) -> BTreeSet<String> {
+    let Ok(Value::Array(items)) = loose_json(text) else {
+        return BTreeSet::new();
+    };
+    items
+        .iter()
+        .filter_map(|c| c.get("mark").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
 // ----- Arguments that name a document ----------------------------------------------------
 
 /// Replaces each `{doc:NAME}` in a string argument with the text of the document `NAME` of the
@@ -688,6 +701,18 @@ mod tests {
         assert_eq!(found[2].priority, None);
         assert_eq!(found[3].reason_code.as_deref(), Some("not_reproducible"));
         assert_eq!(found[4].reason_code.as_deref(), Some("pre_existing"));
+    }
+
+    #[test]
+    fn the_marks_of_a_list_of_comments_are_its_mark_texts() {
+        let text = r#"[{"id": 20, "kind": "inline", "mark": "inline:20:22"},
+                      {"id": 60, "kind": "conversation", "mark": "conversation:60:60"},
+                      {"id": 61, "kind": "conversation"},
+                      {"id": 62, "mark": 7}]"#;
+        let marks: Vec<String> = comment_marks(text).into_iter().collect();
+        assert_eq!(marks, ["conversation:60:60", "inline:20:22"]);
+        assert!(comment_marks("# not a list").is_empty());
+        assert!(comment_marks("{\"mark\": \"inline:1:1\"}").is_empty());
     }
 
     #[test]

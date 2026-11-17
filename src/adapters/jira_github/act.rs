@@ -1769,7 +1769,7 @@ fn review_rerequest(
     };
     let number = forge::int(&pull, "number")
         .ok_or_else(|| Error::Unexpected("KeyError: 'number'".into()))?;
-    let (facts, _state) = forge::pr_facts(&gh, &pull, config)?;
+    let (facts, _state) = forge::pr_facts(&gh, &pull, config, &std::collections::BTreeSet::new())?;
     let names = |key: &str| -> Vec<String> {
         facts
             .get(key)
@@ -1919,7 +1919,7 @@ fn github_pr(config: &Config, call: &Map<String, Value>) -> Res<Value> {
     };
     let n = forge::int(&pull, "number")
         .ok_or_else(|| Error::Unexpected("KeyError: 'number'".into()))?;
-    let (facts, review) = forge::pr_facts(&gh, &pull, config)?;
+    let (facts, review) = forge::pr_facts(&gh, &pull, config, &std::collections::BTreeSet::new())?;
     let reviews: Vec<Value> = gh
         .reviews(n)?
         .iter()

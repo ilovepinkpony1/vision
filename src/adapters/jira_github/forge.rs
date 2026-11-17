@@ -706,6 +706,10 @@ impl Ignore {
 /// A review or a conversation comment waits until a conversation comment of `own` answers it:
 /// one with its mark, or one that quotes its first line. A comment that `ignore` names never
 /// waits: the rows leave it out, as if nobody wrote it. The text of each row is untrusted.
+///
+/// Each row has a `mark` ([`comment_mark`]): its kind, its id, and the id of the last comment of
+/// its thread. Vision keeps the marks of the rows that a finished round of comments read, and
+/// gives them back to `observe` in `seen`.
 pub fn waiting_rows(
     reviews: &[Value],
     review_comments: &[Value],
@@ -744,9 +748,11 @@ pub fn waiting_rows(
             .or_else(|| first.get("original_line"))
             .cloned()
             .unwrap_or(Value::Null);
+        let last_id = int(last, "id").unwrap_or(root);
         rows.push(json!({
             "id": root,
             "kind": "inline",
+            "mark": comment_mark("inline", root, last_id),
             "author": user_of(last),
             "path": first.get("path").cloned().unwrap_or(Value::Null),
             "line": line,
@@ -793,6 +799,7 @@ pub fn waiting_rows(
         rows.push(json!({
             "id": id,
             "kind": "review",
+            "mark": comment_mark("review", id, id),
             "state": state,
             "author": name,
             "path": null,
@@ -821,6 +828,7 @@ pub fn waiting_rows(
         rows.push(json!({
             "id": id,
             "kind": "conversation",
+            "mark": comment_mark("conversation", id, id),
             "author": name,
             "path": null,
             "line": null,
@@ -831,12 +839,28 @@ pub fn waiting_rows(
     rows
 }
 
+/// The mark of a comment that waits: `<kind>:<id>:<last>`, such as `inline:20:22`, with the id
+/// of the last comment of its thread. A review and a conversation comment are threads of one
+/// comment. A new reply in a thread gives the thread a new mark.
+pub fn comment_mark(kind: &str, id: i64, last: i64) -> String {
+    format!("{kind}:{id}:{last}")
+}
+
 /// The pull request facts of design 11.1, with the review state of the in-review step.
 ///
 /// The review state is the first of these that holds: `merged`, `closed`, `comments` (a comment
 /// waits), `changes` (a reviewer asks for changes and is not asked again), `conflict` (the open
 /// pull request conflicts with its base), `approved`, and `waiting`.
-pub fn pr_facts(gh: &GitHub, pr: &Value, config: &Config) -> Res<(Map<String, Value>, String)> {
+///
+/// A comment whose mark is in `seen` does not wait: a finished round of comments read it, and
+/// it got nothing new since then. So a note that needs no reply, such as a summary of a review
+/// or a note of a bot, makes one round and not a loop.
+pub fn pr_facts(
+    gh: &GitHub,
+    pr: &Value,
+    config: &Config,
+    seen: &BTreeSet<String>,
+) -> Res<(Map<String, Value>, String)> {
     let Some(number) = int(pr, "number") else {
         return Err(Error::Unexpected("KeyError: 'number'".into()));
     };
@@ -873,13 +897,16 @@ pub fn pr_facts(gh: &GitHub, pr: &Value, config: &Config) -> Res<(Map<String, Va
         _ => BTreeSet::new(),
     };
     // Each comment that waits, of each kind: the same rows as the job comments gives.
-    let waiting = waiting_rows(
+    let waiting: Vec<Value> = waiting_rows(
         &reviews,
         &gh.review_comments(number)?,
         &gh.issue_comments(number)?,
         &own,
         &ignore,
-    );
+    )
+    .into_iter()
+    .filter(|row| !row["mark"].as_str().is_some_and(|m| seen.contains(m)))
+    .collect();
     let merged = truthy(pr.get("merged")).is_some() || truthy(pr.get("merged_at")).is_some();
     let closed = text(pr, "state") == "closed" && !merged;
     let conflict =

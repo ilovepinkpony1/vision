@@ -414,6 +414,57 @@ fn ticket_each_kind_of_comment_waits_and_the_state_agrees() {
 }
 
 #[test]
+fn ticket_a_comment_that_a_finished_round_saw_does_not_wait_again() {
+    let (t, w) = ticket_test();
+    {
+        let mut s = w.lock();
+        s.pr = Some(pull(false));
+        s.reviews = vec![
+            review(1, "lead", "APPROVED"),
+            review_with(
+                2,
+                "lead",
+                "COMMENTED",
+                "Re-review: each finding has its thread.",
+            ),
+        ];
+        s.comments = vec![comment(10, "lead", "Rename this")];
+        s.issue_comments = vec![issue_comment(60, "preview-bot", "Preview available.")];
+    }
+    let seen_by = |seen: Value| {
+        let result = t.observe(
+            json!({"what": "ticket", "key": KEY, "branch": BRANCH, "pr": 7,
+                                      "clone": null, "seen": seen, "config": t.config(json!({}))}),
+        );
+        assert_eq!(result.code, 0, "{result:?}");
+        result.json
+    };
+    let facts = seen_by(json!([]));
+    assert_eq!(facts["review"]["state"], "comments");
+    assert_eq!(facts["pr"]["comments_waiting"], 3);
+    // A finished round of comments saw each one, and none needs a reply: the state goes on.
+    let seen = json!(["review:2:2", "inline:10:10", "conversation:60:60"]);
+    let facts = seen_by(seen.clone());
+    assert_eq!(facts["pr"]["comments_waiting"], 0);
+    assert_eq!(facts["review"]["state"], "approved");
+    // A new reply of the reviewer in the thread gives the thread a new mark, so it waits.
+    w.lock()
+        .comments
+        .push(reply(11, "lead", "And the test?", 10));
+    let facts = seen_by(seen.clone());
+    assert_eq!(facts["pr"]["comments_waiting"], 1);
+    assert_eq!(facts["review"]["state"], "comments");
+    // A new comment waits too, and an old mark of another kind does not hide it.
+    w.lock().comments.pop();
+    w.lock()
+        .issue_comments
+        .push(issue_comment(2, "lead", "One more thing."));
+    let facts = seen_by(seen);
+    assert_eq!(facts["pr"]["comments_waiting"], 1);
+    assert_eq!(facts["review"]["state"], "comments");
+}
+
+#[test]
 fn ticket_a_comment_of_an_ignored_login_does_not_change_the_state() {
     let (t, w) = ticket_test();
     {

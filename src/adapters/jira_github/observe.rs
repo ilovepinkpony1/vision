@@ -2,6 +2,8 @@
 //!
 //! observe only reads. It never changes Jira or GitHub.
 
+use std::collections::BTreeSet;
+
 use serde_json::{json, Map, Value};
 
 use super::core::{
@@ -86,6 +88,19 @@ fn queue(config: &Config) -> Res<Value> {
     Ok(json!({ "tickets": tickets }))
 }
 
+/// The marks of the comments that a finished round of comments read, from the field `seen`:
+/// each text of a list. Another value gives none.
+fn seen_marks(call: &Map<String, Value>) -> BTreeSet<String> {
+    match call.get("seen") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => BTreeSet::new(),
+    }
+}
+
 /// The number of a pull request in a call field: an int, or a text of digits.
 pub fn pr_number(value: Option<&Value>) -> Option<i64> {
     match truthy(value)? {
@@ -106,7 +121,7 @@ fn ticket(config: &Config, call: &Map<String, Value>) -> Res<Value> {
     let pr = gh.find_pr(pr_number(call.get("pr")), branch)?;
     let (pr_view, review) = match &pr {
         Some(pr) => {
-            let (facts, state) = forge::pr_facts(&gh, pr, config)?;
+            let (facts, state) = forge::pr_facts(&gh, pr, config, &seen_marks(call))?;
             (Value::Object(facts), state)
         }
         None => (Value::Null, "none".to_string()),

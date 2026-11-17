@@ -690,6 +690,28 @@ fn comments_the_threads_that_wait() {
 }
 
 #[test]
+fn comments_each_row_has_a_mark_with_the_last_comment_of_its_thread() {
+    let (t, w) = comments_test();
+    {
+        let mut s = w.lock();
+        s.reviews = vec![review_with(40, "lead", "COMMENTED", "Why a new file?")];
+        s.issue_comments = vec![issue_comment(60, "lead", "Please add a note.")];
+    }
+    let rows = comment_rows(&comments_job(&t, json!({})));
+    let marks: Vec<&str> = rows.iter().map(|r| r["mark"].as_str().unwrap()).collect();
+    // The thread of 20 ends with the reply 22, so a new reply would give a new mark.
+    assert_eq!(
+        marks,
+        [
+            "inline:20:22",
+            "inline:30:30",
+            "review:40:40",
+            "conversation:60:60"
+        ]
+    );
+}
+
+#[test]
 fn comments_each_kind_of_comment_that_waits_is_one_row() {
     let (t, w) = comments_test();
     {

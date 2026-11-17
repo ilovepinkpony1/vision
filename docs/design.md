@@ -68,6 +68,7 @@ $VISION_HOME/
   tickets/<KEY>/
     refine.md plan.md plan.agent.md approved-plan.md answers.md pr.md review.md notes.md
     answer-drafts.json   the drafts of the question form of the app until the send (section 15.3)
+    comments-seen.json   the marks of the comments that a finished round of comments read (section 11.5)
     answer-send.json     the answers of one send of the form, only while the send runs
     turns/<turn-id>/
       facts.json         the input of the turn
@@ -810,7 +811,8 @@ A job with `env = "full"` gets the environment of the tick instead. A variable w
 ```
 observe  {"what": "queue", "config": {}}
       -> {"tickets": [{"key": "DEMO-12", "title": "...", "status": "To Do", "eligible": true, "reason": ""}]}
-observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 7, "clone": "/path", "config": {}}
+observe  {"what": "ticket", "key": "DEMO-12", "branch": "vision/DEMO-12", "pr": 7, "clone": "/path",
+          "seen": ["inline:501:501"], "config": {}}
       -> {"issue": {}, "tracker_status": "In Progress",
           "pr": {"number": 7, "draft": true, "head": "abc", "merged": false, "closed": false, "conflict": false,
                  "approved_by": [], "changes_requested": false, "comments_waiting": 0},
@@ -832,7 +834,7 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
 - The call object always has `config`: the `[adapter]` table of the configuration, with the `adapter` keys of the clone of the ticket over it.
 - `state` of an `act` answer is `confirmed`, `failed`, or `uncertain`.
 - `set` can give new values for the ticket row: `pr`, `head`.
-- `documents` of a job go to the ticket folder. The documents of an `act` answer with the state `confirmed` go there too. A later turn can read them. The runner masks each secret value in them. A script cannot write a document that the person or the pipeline owns, such as `plan.md` or `issue.json`.
+- `documents` of a job go to the ticket folder. The documents of an `act` answer with the state `confirmed` go there too. A later turn can read them. The runner masks each secret value in them. A script cannot write a document that the person or the pipeline owns, such as `plan.md`, `issue.json`, or `comments-seen.json`.
 - A reconcile call also has `external_id` and `started`. `external_id` is the id that the first answer stored, or `null`. `started` is the time of the first call.
 - A read verb changes nothing outside. A turn can ask for it, and the documents of its answer go to that turn.
 - If `act` ends with a different exit code, a signal, a time limit, or bad output, the operation becomes `uncertain`. The outside state is unknown then.
@@ -1189,6 +1191,8 @@ These rules keep the tokens and the repo safe:
 `vision app-token` prints an installation token of a GitHub App, for the command of the secret `FORGE_TOKEN`. The private key comes from a file or from the output of a command, and it never goes into a file. The command can print the key as a PEM file or as the PEM file in one base64 line.
 
 A comment that waits has one of three kinds. `inline` is a thread on a line of the diff, and its reply goes into the thread. `review` is a review with a text that asks for changes or that comments. `conversation` is a comment in the conversation of the pull request. A reply to a review or to a conversation comment is a new conversation comment. It quotes the first line of the comment, and it ends with a hidden mark that names the comment. So a later round does not answer the same comment again.
+
+Each row of `comments.json` has a `mark`, such as `inline:501:503`. The mark holds the kind, the id, and the id of the last comment of the thread. A review and a conversation comment are threads of one comment. When the end facts of a turn with `verdicts.json` hold, Vision keeps the mark of each row of the comments that the step read. The marks go to `comments-seen.json` in the ticket folder, and `observe` of the ticket gets them in `seen`. A comment whose mark is in `seen` does not wait, and it does not count in `comments_waiting` or in `review.state`. So a comment that needs no reply makes one round and not a loop. One example is a summary of a review whose findings have their own threads. Others are a note of a preview and a note of a bot that found nothing. A new reply in a thread gives the thread a new mark, so the thread waits again. An edit of a comment keeps its mark. The job `comments` still lists each comment that waits, also a seen one, so the agent of a round sees the whole talk.
 
 The key `own_logins` names the logins of the person and of the bot. The key `ignore_logins` names logins whose comments never wait, such as a CI bot. An entry can also be `<login>:<kind>`, with the kind `inline`, `review`, or `conversation`. Then only the comments of that kind of that login never wait. This fits a review bot that keeps one status comment in the conversation.
 
