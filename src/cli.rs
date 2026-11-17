@@ -246,11 +246,14 @@ pub enum PipelineCommand {
         key: TicketKey,
     },
 
-    /// Start the step of a ticket again
+    /// Start the step of a ticket again, or move the ticket to another step
     #[command(display_order = 21)]
     Retry {
         /// The ticket key, such as DEMO-12
         key: TicketKey,
+        /// Enter this step of the adapter instead of the current step, such as in-review
+        #[arg(long, value_name = "STEP")]
+        step: Option<String>,
     },
 
     /// Set the kind of a ticket, a kind of [kinds] of the adapter, such as bug
@@ -868,6 +871,7 @@ mod tests {
             &["diff", "DEMO-12"],
             &["stop", "DEMO-12"],
             &["retry", "DEMO-12"],
+            &["retry", "DEMO-12", "--step", "in-review"],
             &["needs"],
             &["needs", "--json"],
             &["needs", "--read", "N-3"],

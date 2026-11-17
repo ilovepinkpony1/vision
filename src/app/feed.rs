@@ -806,6 +806,7 @@ mod tests {
             ("event", "take", "user", null.clone(), Filter::You),
             ("event", "stop", "user", null.clone(), Filter::You),
             ("event", "retry", "user", null.clone(), Filter::You),
+            ("event", "move", "user", null.clone(), Filter::You),
             ("event", "pause", "user", null.clone(), Filter::You),
             ("event", "human", "user", null.clone(), Filter::You),
             ("event", "card-answered", "user", null.clone(), Filter::You),

@@ -55,7 +55,8 @@ pub struct Visit {
     pub n: u32,
     /// When the visit started.
     pub at: String,
-    /// How the ticket entered: `take`, `next`, `on <value>`, `retry`, or `restart`.
+    /// How the ticket entered: `take`, `next`, `on <value>`, `retry`, `restart`, or `move` (the
+    /// person moved it with `vision retry --step`).
     pub how: String,
     /// The number of turns of this step before the visit. The turns after it belong to it.
     pub turns: u32,
@@ -160,7 +161,7 @@ impl Counts {
     }
 
     /// Starts a new visit of `step`. A visit that counts as an entry adds one to the entries of
-    /// the step; a retry or a restart does not.
+    /// the step; a retry, a restart, or a move of the person does not.
     pub fn enter(
         &mut self,
         step: &Step,
@@ -183,7 +184,8 @@ impl Counts {
         };
         // A wait step with `from` opens at the first moment with that local time after the
         // entry. A visit that is no new entry (a retry, a restart, or a repair) keeps the
-        // moment of the visit that it replaces, so that a retry never waits for the next day.
+        // moment of the visit of the same step that it replaces, so that a retry never waits
+        // for the next day. A move of the person from another step gets a new moment.
         let opens = match &step.kind {
             StepKind::Wait(WaitStep {
                 from: Some(from), ..

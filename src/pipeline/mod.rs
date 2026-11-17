@@ -55,7 +55,7 @@ pub fn run(ctx: &Ctx, command: PipelineCommand) -> Result<()> {
         PipelineCommand::Log { key, json } => commands::log(ctx, &key, json),
         PipelineCommand::Diff { key, json } => commands::diff(ctx, &key, json),
         PipelineCommand::Stop { key } => commands::stop(ctx, &key),
-        PipelineCommand::Retry { key } => commands::retry(ctx, &key),
+        PipelineCommand::Retry { key, step } => commands::retry(ctx, &key, step.as_deref()),
         PipelineCommand::Report { key, week, json } => {
             commands::report(ctx, key.as_ref(), week, json)
         }

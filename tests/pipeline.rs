@@ -819,6 +819,228 @@ fn retry_after_vision_open_resumes_the_session_that_the_person_worked_in() {
 }
 
 #[test]
+fn retry_to_a_step_refuses_a_step_it_cannot_enter_and_each_case_that_a_plain_retry_refuses() {
+    let world = World::new();
+    world.scenario(
+        "scout",
+        "refine",
+        json!([
+            [{"do": "init"}, {"do": "sleep", "seconds": 60}, {"do": "result", "structured_output": {"kind": "result", "summary": "late"}}],
+            ends_with(result("Refined.", &[("refine.md", "R."), ("description.md", "D.")]))
+        ]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+
+    let unknown = world.run(&["retry", KEY, "--step", "nowhere"]);
+    unknown.expect_code(1);
+    assert!(
+        unknown.stderr.contains(
+            "the adapter demo has no step `nowhere`. Move the ticket to one of its steps: refine, plan, plan-ready, build, review, open-pr, ci, fix-ci, ready, comments, ci-review, ready-to-merge"
+        ),
+        "{unknown:?}"
+    );
+    assert!(
+        !unknown.stderr.contains("ready-to-merge, done"),
+        "the end step is no target: {unknown:?}"
+    );
+    let end = world.run(&["retry", KEY, "--step", "done"]);
+    end.expect_code(1);
+    assert!(
+        end.stderr.contains(
+            "`done` is the end step of the adapter demo, and only the pipeline moves a ticket there. To stop the ticket, run `vision stop DEMO-12`"
+        ),
+        "{end:?}"
+    );
+
+    // A turn that runs: the refusal names it.
+    world.tick_until("the running turn", LONG, |w| {
+        w.ledger().running_turns_of_ticket(KEY).unwrap() > 0
+            && w.scenario_runs("scout", "refine") >= 1
+    });
+    let turn = step_turns(&world, "refine")[0].id.clone();
+    let busy = world.run(&["retry", KEY, "--step", "plan"]);
+    busy.expect_code(1);
+    assert!(
+        busy.stderr.contains(&format!(
+            "the turn {turn} of DEMO-12 runs now. Wait for it, or run `vision stop DEMO-12`"
+        )),
+        "{busy:?}"
+    );
+
+    // A stopped ticket keeps the rule of a plain retry: `vision take` starts it again first.
+    world.run(&["stop", KEY]).expect_code(0);
+    for step in ["plan", "nowhere"] {
+        let stopped = world.run(&["retry", KEY, "--step", step]);
+        stopped.expect_code(1);
+        assert!(
+            stopped
+                .stderr
+                .contains("DEMO-12 is stopped. Run `vision take DEMO-12` to start it again"),
+            "{stopped:?}"
+        );
+    }
+
+    // An uncertain operation: the reconcile step of the tick settles it first.
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_to("plan");
+    let ops = world
+        .ledger()
+        .operations_of(KEY, Some("tracker.describe"))
+        .unwrap();
+    assert_eq!(ops.len(), 1);
+    world
+        .ledger()
+        .conn()
+        .execute(
+            "UPDATE operations SET state = 'uncertain' WHERE id = ?1",
+            [&ops[0].id],
+        )
+        .unwrap();
+    let uncertain = world.run(&["retry", KEY, "--step", "build"]);
+    uncertain.expect_code(1);
+    assert!(uncertain.stderr.contains(&ops[0].id), "{uncertain:?}");
+    assert!(
+        uncertain
+            .stderr
+            .contains("the reconcile step of the tick must settle it first"),
+        "{uncertain:?}"
+    );
+
+    // No refusal moved the ticket or wrote a row of a move.
+    assert_eq!(world.step().as_deref(), Some("plan"));
+    assert!(!world.event_kinds().iter().any(|k| k == "move"));
+    assert!(world
+        .ledger()
+        .human_of(Some(KEY))
+        .unwrap()
+        .iter()
+        .all(|h| h.kind != "move"));
+}
+
+#[test]
+fn a_move_clears_the_flags_of_a_retry_and_is_no_entry_for_the_cap_of_its_step() {
+    let world = World::new();
+    // refine and plan count their entries, and the cap review_rounds = 1 allows one each.
+    world.write_adapter(|text| {
+        let refine = "next = \"plan\"\n";
+        let plan = "next = \"plan-ready\"\n";
+        assert!(text.contains(refine) && text.contains(plan));
+        text.replacen(refine, &format!("cap = \"review_rounds\"\n{refine}"), 1)
+            .replacen(plan, &format!("cap = \"review_rounds\"\n{plan}"), 1)
+    });
+    world.edit_config(|doc| doc["caps"]["review_rounds"] = toml_edit::value(1));
+    simple_scenarios(&world);
+    world.scenario(
+        "builder",
+        "plan",
+        json!([ends_with(result("Planned nothing.", &[]))]),
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    assert_eq!(world.step().as_deref(), Some("plan"));
+    assert_eq!(step_turns(&world, "plan").len(), 2);
+    let reason = world.reason("needs-you");
+    // The person also took over the session: a retry clears both flags.
+    world.run(&["open", KEY]).expect_code(0);
+    assert!(has_flag(&world, "paused"));
+    let before = world.counts();
+    assert_eq!(before["entries"]["refine"], 1);
+
+    // Back to refine. As an entry of the pipeline, it is the second one, above the cap.
+    let moved = world.run(&["retry", KEY, "--step", "refine"]);
+    moved.expect_code(0);
+    assert!(
+        moved.stdout.contains(
+            "Moved DEMO-12 from the step plan to the step refine (cleared: needs-you, paused). The move does not count for the cap of refine. The next tick enters the step refine."
+        ),
+        "{moved:?}"
+    );
+    assert!(world.flags().is_empty());
+    let counts = world.counts();
+    assert_eq!(
+        counts["reasons"],
+        json!({}),
+        "the reasons go with the flags"
+    );
+    assert_eq!(world.step().as_deref(), Some("refine"));
+    assert_eq!(counts["entries"]["refine"], 1, "the move is no entry");
+    let visit = &counts["visit"];
+    assert_eq!(visit["step"], "refine");
+    assert_eq!(visit["how"], "move");
+    assert_eq!(visit["skip_cap"], true);
+    assert_eq!(
+        visit["turns"], 1,
+        "the turn of the first visit is not one of this visit"
+    );
+    assert_eq!(visit["resume"], Value::Null, "no session of plan resumes");
+    assert!(visit["seq"].as_u64().unwrap() > before["visit"]["seq"].as_u64().unwrap());
+
+    // The evidence: the event, the row of the person, the spans, and the log.
+    let human = world.ledger().human_of(Some(KEY)).unwrap();
+    let row = human.last().unwrap();
+    assert_eq!(
+        (row.kind.as_str(), row.object.as_str(), row.value.as_deref()),
+        ("move", KEY, Some("refine"))
+    );
+    assert_eq!(row.reason.as_deref(), Some(reason.as_str()));
+    assert!(row.seconds.is_some());
+    let event = world
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "move")
+        .expect("the event of the move");
+    assert_eq!(event.actor, "user");
+    let detail: Value = serde_json::from_str(event.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["from"], "plan");
+    assert_eq!(detail["to"], "refine");
+    assert_eq!(detail["cleared"], json!(["needs-you", "paused"]));
+    let spans = world.ledger().spans_of(Some(KEY)).unwrap();
+    let states: Vec<(&str, Option<&str>, bool)> = spans
+        .iter()
+        .map(|s| (s.state.as_str(), s.reason.as_deref(), s.ended.is_some()))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("refine", Some("take"), true),
+            ("plan", Some("next"), true),
+            ("refine", Some("move"), false)
+        ]
+    );
+    let log = world.run(&["log", KEY]);
+    log.expect_code(0);
+    assert!(
+        log.stdout
+            .contains("user moved the ticket from plan to refine"),
+        "{log:?}"
+    );
+
+    // The next tick starts a fresh turn of refine: the cap does not stop it.
+    world.tick_until("the second turn of refine", LONG, |w| {
+        step_turns(w, "refine").len() == 2
+    });
+    let turns = step_turns(&world, "refine");
+    assert_eq!(turns[1].resumes, None);
+    assert!(facts_of(&world, &turns[1].id)["message"]
+        .as_str()
+        .unwrap()
+        .contains("The person moved the ticket to this step from the step plan"));
+    // The move of the pipeline to plan counts: its second entry is above the cap.
+    world.tick_until("the cap of plan", LONG, |w| has_flag(w, "needs-you"));
+    assert_eq!(world.step().as_deref(), Some("plan"));
+    assert!(
+        world
+            .reason("needs-you")
+            .contains("the step plan reached its cap review_rounds = 1: this is entry 2"),
+        "{}",
+        world.reason("needs-you")
+    );
+    assert_eq!(step_turns(&world, "plan").len(), 2, "no turn above the cap");
+}
+
+#[test]
 fn pick_log_diff_and_report_show_the_ticket() {
     let world = World::new();
     simple_scenarios(&world);

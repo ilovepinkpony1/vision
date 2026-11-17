@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use super::machine::{dirty_lines, head_of, human_mark, in_tx, span, visit_turns, Ticket};
 use super::state::{flags_text, Counts, FlagReason, NEEDS_YOU, PAUSED, STOPPED};
 use super::view::{plan_hash, SHORT_HASH};
-use crate::adapter::{self, Adapter, StepKind};
+use crate::adapter::{self, Adapter, Step, StepKind};
 use crate::config::Config;
 use crate::ctx::Ctx;
 use crate::executor::{self, short, OpState, QueueTicket};
@@ -652,8 +652,76 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
     Ok(())
 }
 
-/// `vision retry KEY`.
-pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
+/// The word of a move by the person with `vision retry KEY --step STEP`: the way of its visit,
+/// the reason of its span, and the kind of its event and of its `human` row.
+pub const MOVE: &str = "move";
+
+/// The flags that a retry clears, with the reason of `needs-you`, and the seconds since the
+/// older of the two flags was set.
+struct Cleared {
+    flags: Vec<String>,
+    reason: Option<String>,
+    seconds: Option<i64>,
+}
+
+/// Clears the flags `needs-you` and `paused` of a ticket and their reasons. A plain retry and a
+/// move clear the same flags.
+fn clear_flags(ticket: &mut Ticket) -> Cleared {
+    let flags: Vec<String> = ticket
+        .flags
+        .iter()
+        .filter(|f| *f == NEEDS_YOU || *f == PAUSED)
+        .cloned()
+        .collect();
+    let reason = ticket
+        .counts
+        .reasons
+        .get(NEEDS_YOU)
+        .map(|r| r.reason.clone());
+    let seconds = flags
+        .iter()
+        .filter_map(|f| ticket.counts.reasons.get(f))
+        .filter_map(|r| seconds_since(&r.at))
+        .max();
+    ticket.flags.retain(|f| f != NEEDS_YOU && f != PAUSED);
+    for flag in &flags {
+        ticket.counts.reasons.remove(flag);
+    }
+    Cleared {
+        flags,
+        reason,
+        seconds,
+    }
+}
+
+/// The step that `vision retry KEY --step STEP` moves a ticket to: a step of the adapter, and
+/// not its end step, because only the pipeline ends a ticket.
+fn move_target(adapter: &Adapter, key: &TicketKey, name: &str) -> Result<Step> {
+    let Some(step) = adapter.step(name) else {
+        let steps: Vec<&str> = adapter
+            .steps
+            .iter()
+            .filter(|s| !matches!(s.kind, StepKind::End))
+            .map(|s| s.id.as_str())
+            .collect();
+        bail!(
+            "the adapter {} has no step `{name}`. Move the ticket to one of its steps: {}",
+            adapter.name,
+            steps.join(", ")
+        );
+    };
+    if matches!(step.kind, StepKind::End) {
+        bail!(
+            "`{name}` is the end step of the adapter {}, and only the pipeline moves a ticket there. To stop the ticket, run `vision stop {key}`",
+            adapter.name
+        );
+    }
+    Ok(step.clone())
+}
+
+/// `vision retry KEY [--step STEP]`. With a STEP that is not the current step, the ticket moves
+/// to that step (see [`move_ticket`]). A STEP that is the current step is a plain retry.
+pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
     ctx.require_setup()?;
     let _lock = wait_for_lock(ctx)?;
     let ledger = ctx.ledger()?;
@@ -666,6 +734,9 @@ pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
     if ticket.flags.iter().any(|f| f == STOPPED) {
         bail!("{key} is stopped. Run `vision take {key}` to start it again");
     }
+    let target = to
+        .map(|name| move_target(&adapter, key, name))
+        .transpose()?;
     for op in executor::operations_of(&ledger, key)? {
         if matches!(op.state, OpState::Uncertain | OpState::Executing) {
             bail!(
@@ -694,28 +765,16 @@ pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
             adapter.name
         );
     };
+    if let Some(target) = target.filter(|t| t.id != step.id) {
+        return move_ticket(ctx, &ledger, ticket, &target);
+    }
     let released = executor::release_failed(&ledger, key)?;
     let paused = ticket.flags.iter().any(|f| f == PAUSED);
-    let cleared: Vec<String> = ticket
-        .flags
-        .iter()
-        .filter(|f| *f == NEEDS_YOU || *f == PAUSED)
-        .cloned()
-        .collect();
-    let reason = ticket
-        .counts
-        .reasons
-        .get(NEEDS_YOU)
-        .map(|r| r.reason.clone());
-    let seconds = cleared
-        .iter()
-        .filter_map(|f| ticket.counts.reasons.get(f))
-        .filter_map(|r| seconds_since(&r.at))
-        .max();
-    ticket.flags.retain(|f| f != NEEDS_YOU && f != PAUSED);
-    for flag in &cleared {
-        ticket.counts.reasons.remove(flag);
-    }
+    let Cleared {
+        flags: cleared,
+        reason,
+        seconds,
+    } = clear_flags(&mut ticket);
     // A step whose turn result held and that stopped at an operation goes on with its `after`
     // verbs: a new turn would redo work that is done.
     let visit = ticket.visit();
@@ -835,6 +894,79 @@ pub fn retry(ctx: &Ctx, key: &TicketKey) -> Result<()> {
     Ok(())
 }
 
+/// The message of the first turn of a turn step after the person moved the ticket there.
+fn moved_message(from: &str) -> String {
+    format!(
+        "The person moved the ticket to this step from the step {from} with `vision retry --step`. Read the state of the clone first (git status, git log, and the files that changed), then do the step."
+    )
+}
+
+/// The move of `vision retry KEY --step STEP` to a step that is not the current step. It has
+/// the rules of a plain retry: the failed operations of the ticket can run again, the flags
+/// `needs-you` and `paused` clear, and the new visit does not count as an entry for the cap of
+/// its step. The visit resumes no session, and no turn or team member of an earlier visit
+/// counts for it, so the next tick acts on the step as after a move of the pipeline into it.
+/// The new state, the spans, the `human` row, and the event `move` are one transaction.
+fn move_ticket(ctx: &Ctx, ledger: &Ledger, mut ticket: Ticket, target: &Step) -> Result<()> {
+    let key = ticket.key.clone();
+    let from = ticket.state().to_string();
+    let released = executor::release_failed(ledger, &key)?;
+    let cleared = clear_flags(&mut ticket);
+    let now = time::now_rfc3339();
+    let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &target.id)?.len())?;
+    let head = ticket.clone_dir().ok().and_then(|c| head_of(&c).ok());
+    let mut visit = ticket.counts.enter(target, MOVE, &now, turns, head, false);
+    if matches!(target.kind, StepKind::Turn(_)) {
+        visit.message = Some(moved_message(&from));
+        ticket.counts.visit = Some(visit.clone());
+    }
+    ticket.row.state = Some(target.id.clone());
+    in_tx(ledger, |ledger| {
+        ledger.set_ticket_state(
+            key.as_str(),
+            &target.id,
+            &flags_text(&ticket.flags),
+            &ticket.counts.text(),
+            &now,
+        )?;
+        ledger.close_spans(key.as_str(), &now)?;
+        ledger.open_span(&span(&ticket, target, MOVE, &now))?;
+        ledger.add_human(&HumanRow {
+            at: now.clone(),
+            ticket: Some(key.to_string()),
+            kind: MOVE.into(),
+            object: key.to_string(),
+            value: Some(target.id.clone()),
+            reason: cleared.reason.clone(),
+            seconds: cleared.seconds,
+        })?;
+        ledger.add_event(
+            &Event::now("user", MOVE).ticket(key.as_str()).detail(json!({
+                "from": from, "to": target.id, "cleared": cleared.flags, "released": released,
+                "n": visit.n, "seq": visit.seq,
+            })),
+        )?;
+        Ok(())
+    })?;
+    ctx.log(&format!("retry: {key} moved from {from} to {}", target.id));
+    let mut text = format!("Moved {key} from the step {from} to the step {}", target.id);
+    if !cleared.flags.is_empty() {
+        text.push_str(&format!(" (cleared: {})", cleared.flags.join(", ")));
+    }
+    if released > 0 {
+        text.push_str(&format!(". {released} failed operation(s) can run again"));
+    }
+    if target.cap.is_some() {
+        text.push_str(&format!(
+            ". The move does not count for the cap of {}",
+            target.id
+        ));
+    }
+    text.push_str(&format!(". The next tick enters the step {}", target.id));
+    println!("{text}.");
+    Ok(())
+}
+
 // ----- log -------------------------------------------------------------------------------
 
 /// One line of `vision log`.
@@ -907,6 +1039,12 @@ pub fn event_entry(e: &EventRow) -> Option<LogEntry> {
         "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
         "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
         "kind" => format!("{} kind {}", e.actor, field("kind")),
+        MOVE => format!(
+            "{} moved the ticket from {} to {}",
+            e.actor,
+            field("from"),
+            field("to")
+        ),
         "told" => format!(
             "{} told {}: {}",
             e.actor,

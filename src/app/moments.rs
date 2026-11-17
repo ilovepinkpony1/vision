@@ -261,6 +261,15 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
                 s(d, "step").unwrap_or("of the ticket")
             ),
         ),
+        crate::pipeline::commands::MOVE => (
+            "you",
+            Hue::Primary,
+            format!(
+                "moved the ticket from {} to {}",
+                s(d, "from").unwrap_or("?"),
+                s(d, "to").unwrap_or("?")
+            ),
+        ),
         "pause" => (
             "you",
             Hue::Primary,
@@ -445,5 +454,38 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
         text,
         turn: None,
         filter: Filter::All,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn event(kind: &str, who: &str, detail: Value) -> LogEntry {
+        LogEntry {
+            at: "2026-11-17T10:00:00Z".into(),
+            source: "event".into(),
+            kind: kind.into(),
+            id: None,
+            text: String::new(),
+            who: who.into(),
+            detail,
+        }
+    }
+
+    #[test]
+    fn a_move_of_the_person_names_both_steps_in_the_tab_you() {
+        let m = moment(&event(
+            "move",
+            "user",
+            json!({"from": "review-lanes", "to": "in-review", "cleared": ["needs-you"]}),
+        ));
+        assert_eq!((m.who.as_str(), m.word.as_str()), ("you", "you"));
+        assert_eq!(m.what, "move");
+        assert_eq!(m.text, "moved the ticket from review-lanes to in-review");
+        assert_eq!(m.filter, Filter::You);
+        let retry = moment(&event("retry", "user", json!({"step": "build"})));
+        assert_eq!(retry.text, "started the step build again");
     }
 }

@@ -1479,3 +1479,91 @@ fn a_private_adapter_with_the_built_in_scripts_keeps_each_write_in_shadow() {
         }
     }
 }
+
+#[test]
+fn the_person_moves_a_ticket_from_a_turn_step_to_in_review_and_the_next_tick_follows_the_review() {
+    let p = Project::new();
+    // The scout writes no description, so after a resume the ticket needs the person at refine,
+    // a turn step.
+    p.scenario(
+        "scout",
+        "refine",
+        json!([ends_with(result(
+            "Refined.",
+            &[("refine.md", "# Refine\n")]
+        ))]),
+    );
+    p.run(&["take", KEY]).expect_code(0);
+    p.tick_until_flag("needs-you");
+    assert_eq!(p.step().as_deref(), Some("refine"));
+
+    // The person did the work by hand: a commit, the push, and the pull request. Then the lead
+    // asks for a change, so the review state is `comments`.
+    std::fs::write(
+        p.clone.join("calc.sh"),
+        format!("{TOY_CALC}\n# Gives a minus b.\nsubtract() {{ echo $(($1 - $2)); }}\n"),
+    )
+    .unwrap();
+    git(&p.clone, &["commit", "--quiet", "-am", "Add subtract"]);
+    git(&p.clone, &["push", "--quiet", "origin", BRANCH]);
+    let number = p.server.world.lock().unwrap().open_pull(BRANCH);
+    p.server.team(
+        "comment",
+        json!({"number": number, "id": 501, "login": "lead", "path": "calc.sh", "line": 5,
+               "body": "Add a test for subtract."}),
+    );
+
+    let moved = p.run(&["retry", KEY, "--step", "in-review"]);
+    moved.expect_code(0);
+    assert!(
+        moved.stdout.contains(
+            "Moved DEMO-12 from the step refine to the step in-review (cleared: needs-you). The next tick enters the step in-review."
+        ),
+        "{moved:?}"
+    );
+    assert!(p.flags().is_empty());
+    assert_eq!(p.step().as_deref(), Some("in-review"));
+    assert_eq!(p.counts()["visit"]["how"], "move");
+    assert_eq!(
+        p.counts()["visit"]["message"],
+        Value::Null,
+        "a wait step has no turn"
+    );
+
+    // The next tick observes in-review as after a move of the pipeline into it: the value
+    // comments sends the ticket to the step comments.
+    p.tick();
+    assert_eq!(p.step().as_deref(), Some("comments"), "{}", p.report());
+    assert_eq!(p.path(), ["refine", "in-review", "comments"]);
+    let step = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "step")
+        .expect("the move of the pipeline");
+    let detail: Value = serde_json::from_str(step.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (&detail["from"], &detail["to"], &detail["how"]),
+        (
+            &json!("in-review"),
+            &json!("comments"),
+            &json!("on comments")
+        )
+    );
+    assert_eq!(p.counts()["entries"]["comments"], 1);
+    assert_eq!(
+        p.server.state()["issues"][KEY]["status"],
+        "To Do",
+        "the move ran no verb of the steps it skipped"
+    );
+    let log = p.run(&["log", KEY]);
+    log.expect_code(0);
+    assert!(
+        log.stdout
+            .contains("user moved the ticket from refine to in-review"),
+        "{log:?}"
+    );
+    let human = p.ledger().human_of(Some(KEY)).unwrap();
+    assert_eq!(human.last().map(|h| h.kind.as_str()), Some("move"));
+}
