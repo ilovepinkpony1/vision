@@ -313,7 +313,7 @@ fn x_opens_the_stop_card_and_enter_runs_stop() {
     assert_eq!(app.card, None);
     assert_eq!(
         notice(&app),
-        "Stopped DEMO-12. Its branch stays in its clone. Press Enter to start it again."
+        "Stopped DEMO-12. Its branch stays in its clone. Press Enter to continue it."
     );
     assert!(matches!(app.screen, Screen::Live { .. }), "the view stays");
 
@@ -331,7 +331,7 @@ fn x_on_a_stopped_or_done_ticket_only_says_why() {
     assert_eq!(app.card, None);
     assert_eq!(
         notice(&app),
-        "DEMO-12 is already stopped. Press Enter to start it again."
+        "DEMO-12 is already stopped. Press Enter to continue it."
     );
 
     let held = resting("done");
@@ -404,21 +404,94 @@ fn r_retries_a_ticket_that_waits_for_the_person() {
 }
 
 #[test]
-fn enter_on_a_stopped_ticket_opens_the_resume_card() {
+fn enter_on_a_stopped_ticket_opens_the_continue_card() {
     let mut app = working_live(SIZE);
     assert!(actions(&key(&mut app, 3.0, Key::Enter)).is_empty());
     assert_eq!(app.card, None, "Enter does nothing while a turn runs");
 
     let mut app = resting_live("review", &[("stopped", "you stopped it")]);
-    key(&mut app, 3.0, Key::Enter);
-    let Some(Card::Resume(card)) = &app.card else {
-        panic!("no resume card: {:?}", app.card);
+    let fx = key(&mut app, 3.0, Key::Enter);
+    assert!(fx.contains(&Effect::LoadResume("DEMO-12".into())), "{fx:?}");
+    let Some(Card::Continue(card)) = &app.card else {
+        panic!("no continue card: {:?}", app.card);
     };
-    assert_eq!(card.key, "DEMO-12");
-    let fx = key(&mut app, 3.1, Key::Enter);
+    assert_eq!(
+        (card.key.as_str(), card.stored.as_str()),
+        ("DEMO-12", "review")
+    );
+    assert!(card.stopped);
+    // Enter before the read ends does nothing.
+    assert!(actions(&key(&mut app, 3.05, Key::Enter)).is_empty());
+    read_resume(
+        &mut app,
+        3.1,
+        "DEMO-12",
+        Ok(continue_view("DEMO-12", "review", Some("comments"), true)),
+    );
+    let fx = key(&mut app, 3.2, Key::Enter);
     assert_eq!(
         actions(&fx)[0].1,
-        Action::Take {
+        Action::TakeAt {
+            key: "DEMO-12".into(),
+            step: "comments".into()
+        }
+    );
+
+    // Over the live view of its ticket, the card has no key v, and v only closes it.
+    let mut app = resting_live("review", &[("stopped", "you stopped it")]);
+    key(&mut app, 3.0, Key::Enter);
+    assert!(!super::support::screen(&app).contains("v live view"));
+    let fx = key(&mut app, 3.1, Key::Char('v'));
+    assert_eq!(app.card, None);
+    assert!(matches!(&app.screen, Screen::Live { key } if key == "DEMO-12"));
+    assert!(fx.is_empty(), "{fx:?}");
+}
+
+#[test]
+fn enter_on_a_paused_ticket_opens_the_continue_card_and_r_retries_with_no_rule() {
+    let mut app = resting_live("review", &[("paused", "you took over the session")]);
+    let fx = key(&mut app, 3.0, Key::Enter);
+    assert!(fx.contains(&Effect::LoadResume("DEMO-12".into())), "{fx:?}");
+    let Some(Card::Continue(card)) = &app.card else {
+        panic!("no continue card: {:?}", app.card);
+    };
+    assert!(!card.stopped);
+    read_resume(
+        &mut app,
+        3.1,
+        "DEMO-12",
+        Ok(continue_view("DEMO-12", "review", Some("comments"), false)),
+    );
+    // The person picks the stored step, five steps up: the paused ticket goes on there with
+    // retry --step.
+    for i in 0..5 {
+        key(&mut app, 3.2 + f64::from(i) / 100.0, Key::Up);
+    }
+    let fx = key(&mut app, 3.6, Key::Enter);
+    assert_eq!(
+        actions(&fx)[0].1,
+        Action::RetryAt {
+            key: "DEMO-12".into(),
+            step: "review".into()
+        }
+    );
+
+    // r is a plain retry: its card runs `vision retry`, and no rule runs.
+    let mut app = resting_live("review", &[("paused", "you took over the session")]);
+    let fx = key(&mut app, 3.0, Key::Char('r'));
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::LoadResume(_))),
+        "{fx:?}"
+    );
+    assert!(matches!(&app.card, Some(Card::Retry(card)) if card.paused));
+    let fx = key(&mut app, 3.1, Key::Enter);
+    assert!(
+        !fx.iter().any(|e| matches!(e, Effect::LoadResume(_))),
+        "{fx:?}"
+    );
+    assert_eq!(
+        actions(&fx)[0].1,
+        Action::Retry {
             key: "DEMO-12".into()
         }
     );
@@ -474,11 +547,23 @@ fn o_on_a_resting_ticket_opens_the_session_and_the_card_after_it_retries() {
     };
     assert_eq!(card.code, Some(0));
     assert_eq!(card.error, None);
+    // Enter opens the continue card of the paused ticket. With no suggestion, the stored step
+    // is selected, and Enter continues there.
     let fx = key(&mut app, 9.1, Key::Enter);
+    assert!(fx.contains(&Effect::LoadResume("DEMO-12".into())), "{fx:?}");
+    assert!(matches!(&app.card, Some(Card::Continue(c)) if !c.stopped));
+    read_resume(
+        &mut app,
+        9.2,
+        "DEMO-12",
+        Ok(continue_view("DEMO-12", "build", None, false)),
+    );
+    let fx = key(&mut app, 9.3, Key::Enter);
     assert_eq!(
         actions(&fx)[0].1,
-        Action::Retry {
-            key: "DEMO-12".into()
+        Action::RetryAt {
+            key: "DEMO-12".into(),
+            step: "build".into()
         }
     );
 

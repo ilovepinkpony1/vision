@@ -6,8 +6,8 @@ mod pipeline_support;
 use std::time::{Duration, Instant};
 
 use pipeline_support::{
-    ends_with, git, plan_hash_of, result, runs_then, simple_scenarios, take_and_approve, World,
-    KEY, PLAN,
+    ends_with, git, plan_hash_of, result, runs_then, simple_scenarios, take_and_approve,
+    without_resume, World, KEY, PLAN,
 };
 use serde_json::{json, Value};
 use vision::paths::{TicketKey, TurnId};
@@ -805,6 +805,10 @@ fn retry_after_vision_open_resumes_the_session_that_the_person_worked_in() {
 
     world.run(&["retry", KEY]).expect_code(0);
     assert!(world.flags().is_empty());
+    // A plain retry runs no rule, also with the [[resume]] rules of the demo adapter.
+    let kinds = world.event_kinds();
+    assert_eq!(kinds.last().map(String::as_str), Some("retry"), "{kinds:?}");
+    assert!(!kinds.iter().any(|k| k == "resumed"), "{kinds:?}");
     world.tick_to("plan-ready");
     let turns = step_turns(&world, "plan");
     assert_eq!(turns.len(), 3);
@@ -920,13 +924,16 @@ fn retry_to_a_step_refuses_a_step_it_cannot_enter_and_each_case_that_a_plain_ret
 #[test]
 fn a_move_clears_the_flags_of_a_retry_and_is_no_entry_for_the_cap_of_its_step() {
     let world = World::new();
-    // refine and plan count their entries, and the cap review_rounds = 1 allows one each.
+    // refine and plan count their entries, and the cap review_rounds = 1 allows one each. With
+    // no [[resume]] table, the move of a paused ticket runs no rule, as before the table.
     world.write_adapter(|text| {
         let refine = "next = \"plan\"\n";
         let plan = "next = \"plan-ready\"\n";
         assert!(text.contains(refine) && text.contains(plan));
-        text.replacen(refine, &format!("cap = \"review_rounds\"\n{refine}"), 1)
-            .replacen(plan, &format!("cap = \"review_rounds\"\n{plan}"), 1)
+        without_resume(
+            text.replacen(refine, &format!("cap = \"review_rounds\"\n{refine}"), 1)
+                .replacen(plan, &format!("cap = \"review_rounds\"\n{plan}"), 1),
+        )
     });
     world.edit_config(|doc| doc["caps"]["review_rounds"] = toml_edit::value(1));
     simple_scenarios(&world);

@@ -83,6 +83,9 @@ pub struct Visit {
     /// A wait step: when the visit began to watch, after its `start` verbs. The `limit` of the
     /// step counts from here.
     pub since: Option<String>,
+    /// A wait step: the interrupt that fired at the last look, if one did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interrupt: Option<Interrupt>,
     /// A wait step with `from`: the first moment with that local time after the entry, in
     /// UTC. The visit does nothing before it: no start verb and no look.
     pub opens: Option<String>,
@@ -115,13 +118,52 @@ impl Visit {
     }
 }
 
+/// An interrupt of a wait step that fired: a path of observe, its value, and the step of that
+/// value in `interrupt` of the step.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Interrupt {
+    pub path: String,
+    pub value: String,
+    pub to: String,
+}
+
+impl Interrupt {
+    /// The first interrupt of a wait step that fires in an answer of observe: the paths in
+    /// their sorted order, and the first value that names a step.
+    pub fn first(wait: &WaitStep, facts: &TicketFacts) -> Option<Interrupt> {
+        wait.interrupt.iter().find_map(|(path, steps)| {
+            let value = facts.watch_text(path)?;
+            let to = steps.get(&value)?;
+            Some(Interrupt {
+                path: path.clone(),
+                value,
+                to: to.clone(),
+            })
+        })
+    }
+
+    /// The way of the move, for its event and its visit, such as
+    /// `interrupt review.state = comments`.
+    pub fn how(&self) -> String {
+        format!("interrupt {} = {}", self.path, self.value)
+    }
+}
+
 /// Why a flag is set.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FlagReason {
     pub reason: String,
     pub at: String,
+    /// What set the flag, when it is not a rule of the tick: [`RESUME`] for the test of the
+    /// head of a continue. The next continue clears such a flag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
 }
+
+/// The mark of a flag that the test of the head of a continue set (see [`FlagReason::by`]).
+pub const RESUME: &str = "resume";
 
 /// The last facts of `observe`, as the status view shows them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -264,5 +306,74 @@ pub fn clear_command(flag: &str, key: &str) -> String {
         STOPPED => format!("vision take {key}"),
         WAITS_FOR_LIMIT => "none: the tick clears it when the limit allows a turn again".into(),
         _ => format!("vision retry {key}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn facts(answer: serde_json::Value) -> TicketFacts {
+        TicketFacts {
+            answer,
+            issue: serde_json::Value::Null,
+            tracker_status: None,
+            pr: None,
+            ci: None,
+            envs: Default::default(),
+        }
+    }
+
+    fn wait(interrupt: &[(&str, &[(&str, &str)])]) -> WaitStep {
+        WaitStep {
+            watch: "envs.staging.deployed".into(),
+            every: 60,
+            wait: None,
+            limit: None,
+            from: None,
+            interrupt: interrupt
+                .iter()
+                .map(|(path, steps)| {
+                    let steps = steps
+                        .iter()
+                        .map(|(v, s)| (v.to_string(), s.to_string()))
+                        .collect();
+                    (path.to_string(), steps)
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_first_interrupt_that_fires_takes_the_paths_in_their_sorted_order() {
+        let step = wait(&[
+            (
+                "review.state",
+                &[("comments", "comments"), ("changes", "comments")],
+            ),
+            ("ci.state", &[("red", "fix-ci")]),
+        ]);
+        let late = facts(json!({"review": {"state": "comments"}, "ci": {"state": "green"}}));
+        assert_eq!(
+            Interrupt::first(&step, &late),
+            Some(Interrupt {
+                path: "review.state".into(),
+                value: "comments".into(),
+                to: "comments".into()
+            })
+        );
+        assert_eq!(
+            Interrupt::first(&step, &late).unwrap().how(),
+            "interrupt review.state = comments"
+        );
+        // Both fire: ci.state comes first in the sorted order of the paths.
+        let both = facts(json!({"review": {"state": "changes"}, "ci": {"state": "red"}}));
+        assert_eq!(Interrupt::first(&step, &both).unwrap().to, "fix-ci");
+        // No value names a step, or the answer has no such path: nothing fires.
+        let calm = facts(json!({"review": {"state": "waiting"}, "ci": {"state": "green"}}));
+        assert_eq!(Interrupt::first(&step, &calm), None);
+        assert_eq!(Interrupt::first(&step, &facts(json!({}))), None);
+        assert_eq!(Interrupt::first(&wait(&[]), &late), None);
     }
 }

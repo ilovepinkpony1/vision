@@ -23,6 +23,7 @@ pub mod git_verbs;
 pub mod kind;
 mod machine;
 mod request;
+pub mod resume;
 pub mod rounds;
 pub mod state;
 mod team;
@@ -49,7 +50,7 @@ pub use view::{plan_hash, TicketView, SHORT_HASH};
 pub fn run(ctx: &Ctx, command: PipelineCommand) -> Result<()> {
     match command {
         PipelineCommand::Pick { json } => commands::pick(ctx, json),
-        PipelineCommand::Take { keys } => commands::take(ctx, &keys),
+        PipelineCommand::Take { keys, step } => commands::take(ctx, &keys, step.as_deref()),
         PipelineCommand::Plan { key } => commands::plan(ctx, &key),
         PipelineCommand::ApprovePlan { key, hash } => commands::approve_plan(ctx, &key, &hash),
         PipelineCommand::Log { key, json } => commands::log(ctx, &key, json),

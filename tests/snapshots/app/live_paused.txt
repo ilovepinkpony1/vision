@@ -2,9 +2,9 @@
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  PATH                      │ NOW                                                    │ TICKET
  ✓ refine          4m $0.21│ ╭────────────────────────────────────────────────────╮ │ cost              $1.03
- ✓ plan            9m $0.88│ │  paused  you took over its session      r continue │ │ time                38m
+ ✓ plan            9m $0.88│ │  paused  you work in its session    enter continue │ │ time                38m
  ✓ plan-ready      2m      │ │ No new turn starts while you work in the session.  │ │ turns                 3
- ◉ build                you│ │ Press r to continue. The next turn resumes it.     │ │ commits    none to push
+ ◉ build                you│ │ Press Enter to continue. The next turn resumes it. │ │ commits    none to push
  ○ review                  │ ╰────────────────────────────────────────────────────╯ │
  ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
  ○ ci                      │ All 13  Agents 7  Questions 0  Steps 3  Writes 1     › │ to you                0
@@ -28,5 +28,5 @@
                            │                                                        │
                            │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- r continue   t tell   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
+ enter continue   t tell   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
 

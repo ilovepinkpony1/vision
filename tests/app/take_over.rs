@@ -1,7 +1,8 @@
 //! The flow that takes over the session of a running turn, in the update: `o` on the open card
-//! of a running turn runs `vision stop`, then gives the terminal to `vision open`; the card
-//! after the session offers to continue, which runs `vision take` and then `vision retry`. A
-//! failed step stops the flow and says what is true now. With text snapshots of each state.
+//! of a running turn runs `vision stop`, then gives the terminal to `vision open`; Enter on the
+//! card after the session opens the continue card, whose Enter at the stored step runs
+//! `vision take KEY --step STEP` and then `vision retry`. A failed step stops the flow, says
+//! what is true now, and reads the ticket again. With text snapshots of each state.
 
 use vision::app::chain::{Check, CheckFacts, End, Owner};
 use vision::app::model::{App, Card};
@@ -23,6 +24,18 @@ fn none(_: &Check) -> CheckFacts {
 
 fn args(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
+}
+
+/// Enter on the card after the session: the continue card opens and reads the ticket, which
+/// is stopped, and paused when the session opened. With no suggestion, the stored step build
+/// is selected.
+fn continue_card(app: &mut App, at: f64, paused: bool) {
+    let fx = key(app, at, Key::Enter);
+    assert!(fx.contains(&Effect::LoadResume("DEMO-12".into())), "{fx:?}");
+    assert!(matches!(&app.card, Some(Card::Continue(c)) if c.stopped));
+    let mut view = continue_view("DEMO-12", "build", None, true);
+    view.paused = paused;
+    read_resume(app, at + 0.05, "DEMO-12", Ok(view));
 }
 
 fn session_ended(app: &mut App, at: f64, code: i32) -> Vec<Effect> {
@@ -73,18 +86,22 @@ fn o_stops_the_turn_then_opens_its_session_and_enter_continues_the_ticket() {
     assert_eq!(app.chain, None);
     assert_snapshot("take_over_back", &screen(&app));
 
-    let fx = key(&mut app, 5.1, Key::Enter);
-    send(&mut app, 5.2, Msg::Tick);
+    continue_card(&mut app, 5.1, true);
+    let fx = key(&mut app, 5.2, Key::Enter);
+    send(&mut app, 5.25, Msg::Tick);
     assert_snapshot("take_over_continue_runs", &screen(&app));
     let done = drive(&mut app, 5.3, fx, None, none);
     assert_eq!(
         done.actions,
-        [args(&["take", "DEMO-12"]), args(&["retry", "DEMO-12"])]
+        [
+            args(&["take", "DEMO-12", "--step", "build"]),
+            args(&["retry", "DEMO-12"])
+        ]
     );
     assert_eq!(app.card, None);
     assert_eq!(
         app.notice.as_ref().unwrap().text,
-        "DEMO-12 goes on. Its next turn resumes the session that you worked in."
+        "DEMO-12 goes on at the step build. Its next turn resumes the session that you worked in."
     );
 }
 
@@ -126,23 +143,40 @@ fn a_failed_retry_after_the_session_names_the_state_between_the_steps() {
     let fx = key(&mut app, 3.1, Key::Char('o'));
     drive(&mut app, 3.2, fx, None, none);
     session_ended(&mut app, 5.0, 0);
-    let fx = key(&mut app, 5.1, Key::Enter);
-    let done = drive(&mut app, 5.2, fx, Some("retry"), none);
+    continue_card(&mut app, 5.1, true);
+    let fx = key(&mut app, 5.2, Key::Enter);
+    let done = drive(&mut app, 5.25, fx, Some("retry"), none);
     assert_eq!(
         done.actions,
-        [args(&["take", "DEMO-12"]), args(&["retry", "DEMO-12"])]
+        [
+            args(&["take", "DEMO-12", "--step", "build"]),
+            args(&["retry", "DEMO-12"])
+        ]
     );
     match app.chain.as_ref().and_then(|c| c.end.clone()) {
         Some(End::Failed { state, .. }) => assert_eq!(
             state,
-            "DEMO-12 is no longer stopped, and it is still paused. Press n to continue it."
+            "DEMO-12 is no longer stopped, and it is still paused."
         ),
         other => panic!("the flow did not fail: {other:?}"),
     }
-    // A second Enter does not start the flow again: the card shows its end.
+    // The card reads the ticket again, and a second Enter waits for that read: the card shows
+    // the end of the flow.
+    assert_eq!(done.other, [Effect::LoadResume("DEMO-12".into())]);
     assert!(jobs(&key(&mut app, 5.3, Key::Enter)).is_empty());
     send(&mut app, 5.4, Msg::Tick);
     assert_snapshot("take_over_continue_failed", &screen(&app));
+    // The new read: the ticket is paused and no longer stopped, so Enter continues it with
+    // retry --step.
+    let mut view = continue_view("DEMO-12", "build", None, false);
+    view.paused = true;
+    read_resume(&mut app, 5.5, "DEMO-12", Ok(view));
+    let fx = key(&mut app, 5.6, Key::Enter);
+    let done = drive(&mut app, 5.7, fx, None, none);
+    assert_eq!(
+        done.actions,
+        [args(&["retry", "DEMO-12", "--step", "build"])]
+    );
 }
 
 #[test]
@@ -156,14 +190,16 @@ fn a_session_that_did_not_open_continues_with_no_pause() {
         panic!("no card after the session: {:?}", app.card)
     };
     assert!(card.error.is_some());
-    let fx = key(&mut app, 5.1, Key::Enter);
-    let done = drive(&mut app, 5.2, fx, None, none);
+    // The ticket is only stopped: the take at its step is enough.
+    continue_card(&mut app, 5.1, false);
+    let fx = key(&mut app, 5.2, Key::Enter);
+    let done = drive(&mut app, 5.3, fx, None, none);
     assert_eq!(
         done.actions,
-        [args(&["take", "DEMO-12"]), args(&["retry", "DEMO-12"])]
+        [args(&["take", "DEMO-12", "--step", "build"])]
     );
     assert_eq!(
         app.notice.as_ref().unwrap().text,
-        "DEMO-12 goes on at its step."
+        "DEMO-12 goes on at the step build."
     );
 }

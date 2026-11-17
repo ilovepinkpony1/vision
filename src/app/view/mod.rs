@@ -18,6 +18,7 @@ pub mod boot;
 pub mod canvas;
 mod cards;
 mod chain_rows;
+mod continue_card;
 pub mod face;
 pub mod header;
 pub mod home;

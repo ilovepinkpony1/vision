@@ -1567,3 +1567,597 @@ fn the_person_moves_a_ticket_from_a_turn_step_to_in_review_and_the_next_tick_fol
     let human = p.ledger().human_of(Some(KEY)).unwrap();
     assert_eq!(human.last().map(|h| h.kind.as_str()), Some("move"));
 }
+
+// ----- The rules of a continue: [[resume]] --------------------------------------------------
+
+/// The scout writes no description, so the ticket needs the person at refine. Gives the
+/// number of requests that the world recorded then.
+fn needs_the_person_at_refine(p: &Project) -> usize {
+    p.scenario(
+        "scout",
+        "refine",
+        json!([ends_with(result(
+            "Refined.",
+            &[("refine.md", "# Refine\n")]
+        ))]),
+    );
+    p.run(&["take", KEY]).expect_code(0);
+    p.tick_until_flag("needs-you");
+    assert_eq!(p.step().as_deref(), Some("refine"));
+    p.server.requests().len()
+}
+
+/// The person does the rest by hand: a commit in the clone, the push, and an open pull request
+/// that is ready. Gives its number.
+fn pull_request_by_hand(p: &Project) -> i64 {
+    std::fs::write(
+        p.clone.join("calc.sh"),
+        format!("{TOY_CALC}\n# Gives a minus b.\nsubtract() {{ echo $(($1 - $2)); }}\n"),
+    )
+    .unwrap();
+    git(&p.clone, &["commit", "--quiet", "-am", "Add subtract"]);
+    git(&p.clone, &["push", "--quiet", "origin", BRANCH]);
+    p.server.world.lock().unwrap().open_pull(BRANCH)
+}
+
+/// A ticket that stopped at review, a turn step of the self-review, while the person opened
+/// the pull request by hand. The person moves the ticket from refine to review, which runs no
+/// rule because the ticket is not paused, and stops it there. Gives the number of the pull
+/// request.
+fn stopped_at_review_with_a_pull_request(p: &Project) -> i64 {
+    let requests = needs_the_person_at_refine(p);
+    p.run(&["retry", KEY, "--step", "review"]).expect_code(0);
+    assert_eq!(
+        p.server.requests().len(),
+        requests,
+        "a move of a ticket that is not paused calls no observe"
+    );
+    p.run(&["stop", KEY]).expect_code(0);
+    assert_eq!(p.flags(), ["stopped"]);
+    assert_eq!(p.step().as_deref(), Some("review"));
+    pull_request_by_hand(p)
+}
+
+/// The detail of the last event `resumed` of the ticket, an event of the person.
+fn last_resumed(p: &Project) -> Value {
+    let event = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "resumed")
+        .expect("an event resumed");
+    assert_eq!(event.actor, "user");
+    serde_json::from_str(event.detail.as_deref().unwrap()).unwrap()
+}
+
+#[test]
+fn a_stopped_ticket_goes_on_where_the_rules_find_it_and_takes_the_head_that_the_person_pushed() {
+    let p = Project::new();
+    let number = stopped_at_review_with_a_pull_request(&p);
+    let events = p.ledger().events_of_ticket(KEY).unwrap().len();
+
+    // A plain take does not continue: it prints the suggestion of the rules with its reason and
+    // the two commands, exits with code 1, and changes nothing.
+    let take = p.run(&["take", KEY]);
+    take.expect_code(1);
+    assert_eq!(
+        take.stdout,
+        format!(
+            "Vision thinks that DEMO-12 is at the step in-review, not at the step review where it stopped: the pull request #{number} is open and ready (rule 4). It did not continue the ticket.\nVision read:\n  the tracker status is To Do\n  the pull request #{number} is open and ready\n  the review state is waiting and no review comment waits\n  CI has no run\n  the branch of the clone is at the head of the pull request\nTo continue at in-review:  vision take DEMO-12 --step in-review\nTo continue at review:     vision take DEMO-12 --step review\n"
+        ),
+        "{take:?}"
+    );
+    assert_eq!(p.flags(), ["stopped"]);
+    assert_eq!(p.step().as_deref(), Some("review"));
+    assert_eq!(
+        p.ledger().events_of_ticket(KEY).unwrap().len(),
+        events,
+        "a take that does not continue writes no event"
+    );
+
+    // A copy of the remote as it is now, without the next commit of the person.
+    let root = p._dir.path();
+    let stale = root.join("stale.git");
+    git(
+        root,
+        &[
+            "clone",
+            "--quiet",
+            "--bare",
+            p.remote.to_str().unwrap(),
+            stale.to_str().unwrap(),
+        ],
+    );
+    // The person pushes one more commit from another clone, so the clone of Vision does not
+    // have the head of the pull request.
+    let person = root.join("person");
+    git(
+        root,
+        &[
+            "clone",
+            "--quiet",
+            "--branch",
+            BRANCH,
+            p.remote.to_str().unwrap(),
+            person.to_str().unwrap(),
+        ],
+    );
+    git(&person, &["config", "user.name", "person"]);
+    git(&person, &["config", "user.email", "person@example.invalid"]);
+    std::fs::write(
+        person.join("test_subtract.sh"),
+        ". ./calc.sh\n[ \"$(subtract 5 3)\" = 2 ]\n",
+    )
+    .unwrap();
+    git(&person, &["add", "--all"]);
+    git(&person, &["commit", "--quiet", "-m", "Test subtract"]);
+    git(&person, &["push", "--quiet", "origin", BRANCH]);
+    let pushed = git(&person, &["rev-parse", "HEAD"]);
+    let before = p.head();
+
+    // The remote of the clone of Vision does not have the head: the take at the suggestion
+    // fetches, the head is still not there, so nothing moves, and the ticket gets the flag
+    // needs-you with the fix.
+    let origin = git(&p.clone, &["remote", "get-url", "origin"]);
+    git(
+        &p.clone,
+        &["remote", "set-url", "origin", stale.to_str().unwrap()],
+    );
+    let behind = p.run(&["take", KEY, "--step", "in-review"]);
+    behind.expect_code(1);
+    let clone = p.clone.display().to_string();
+    assert!(
+        behind.stderr.contains(&format!(
+            "the clone is behind the remote: Vision fetched, and the head {} of the pull request #{number} is still not in the clone {clone}. Push that commit to the remote of the clone, or fetch it into the clone by hand, then run `vision take DEMO-12 --step in-review` again. Nothing moved, and DEMO-12 has the flag needs-you until a continue takes the head",
+            &pushed[..12]
+        )),
+        "{behind:?}"
+    );
+    assert_eq!(p.step().as_deref(), Some("review"));
+    assert_eq!(p.flags(), ["stopped", "needs-you"]);
+    assert_eq!(p.counts()["reasons"]["needs-you"]["by"], "resume");
+    assert_eq!(p.head(), before);
+
+    // With the head on the remote of the clone, the take fetches it by itself, moves the
+    // branch of the clone forward to it, and moves the ticket to in-review: a new visit that
+    // does not count for the cap of its step. The person runs no fetch. Vision now reads the
+    // push by hand and suggests ci-review, but the person picks in-review.
+    git(&p.clone, &["remote", "set-url", "origin", &origin]);
+    let moved = p.run(&["take", KEY, "--step", "in-review"]);
+    moved.expect_code(0);
+    assert_eq!(
+        moved.stdout,
+        format!(
+            "Moved DEMO-12 from the step review to the step in-review (cleared: stopped, needs-you). Vision suggested the step ci-review (rule 3): the pull request #{number} is open and ready and the pull request has later commits than the clone, such as a push by hand. Vision read: the tracker status is To Do. The pull request #{number} is open and ready. The review state is waiting and no review comment waits. CI has no run. The pull request has later commits than the clone, such as a push by hand. It took the head {} of the pull request #{number} that someone pushed by hand: the branch of the clone moved forward to it. The next tick enters the step in-review.\n",
+            &pushed[..12]
+        ),
+        "{moved:?}"
+    );
+    assert!(p.flags().is_empty());
+    assert_eq!(p.step().as_deref(), Some("in-review"));
+    assert_eq!(p.head(), pushed);
+    assert_eq!(
+        p.row().unwrap().head.as_deref(),
+        Some(pushed.as_str()),
+        "the ticket row takes the head of the pull request"
+    );
+    assert_eq!(
+        p.row().unwrap().pr,
+        Some(number),
+        "the ticket row takes the number of the pull request"
+    );
+    let status = p.run(&["status", "--json"]);
+    status.expect_code(0);
+    let view = status.json()["tickets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["key"] == KEY)
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        view["pr"],
+        json!(number),
+        "vision status shows the pull request"
+    );
+    let counts = p.counts();
+    assert_eq!(counts["visit"]["how"], "move");
+    assert_eq!(counts["visit"]["skip_cap"], true);
+    let detail = last_resumed(&p);
+    assert_eq!(
+        (
+            &detail["from"],
+            &detail["step"],
+            &detail["suggestion"],
+            &detail["took"],
+            &detail["rule"],
+            &detail["how"]
+        ),
+        (
+            &json!("review"),
+            &json!("in-review"),
+            &json!("ci-review"),
+            &json!(false),
+            &json!(3),
+            &json!("move")
+        )
+    );
+    assert_eq!(detail["head"], json!({"from": before, "to": pushed}));
+    assert_eq!(detail["pr_head"], json!(pushed));
+    assert_eq!(detail["pr"], json!(number));
+    assert_eq!(detail["pr_written"], json!(number));
+    assert_eq!(detail["pr_kept"], Value::Null);
+    let human = p.ledger().human_of(Some(KEY)).unwrap();
+    let row = human.last().unwrap();
+    assert_eq!(
+        (row.kind.as_str(), row.value.as_deref()),
+        ("resume", Some("in-review"))
+    );
+
+    // The next tick acts at in-review: it observes review.state, and a waiting comment of the
+    // lead sends the ticket to comments.
+    p.server.team(
+        "comment",
+        json!({"number": number, "id": 501, "login": "lead", "path": "calc.sh", "line": 5,
+               "body": "Name subtract in the README."}),
+    );
+    p.tick();
+    assert_eq!(p.step().as_deref(), Some("comments"), "{}", p.report());
+    let step = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "step")
+        .expect("the move of the pipeline");
+    let detail: Value = serde_json::from_str(step.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (&detail["from"], &detail["to"], &detail["how"]),
+        (
+            &json!("in-review"),
+            &json!("comments"),
+            &json!("on comments")
+        )
+    );
+    let log = p.run(&["log", KEY]);
+    log.expect_code(0);
+    assert!(
+        log.stdout.contains(&format!(
+            "user resumed the ticket at in-review; Vision suggested ci-review, and took the head {} of the pull request",
+            &pushed[..12]
+        )),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn waiting_comments_suggest_comments_and_an_observe_that_fails_suggests_nothing() {
+    let p = Project::new();
+    let number = stopped_at_review_with_a_pull_request(&p);
+    p.server.team(
+        "comment",
+        json!({"number": number, "id": 502, "login": "lead", "path": "calc.sh", "line": 5,
+               "body": "Add a test for subtract."}),
+    );
+    let take = p.run(&["take", KEY]);
+    take.expect_code(1);
+    assert!(
+        take.stdout.starts_with(&format!(
+            "Vision thinks that DEMO-12 is at the step comments, not at the step review where it stopped: the pull request #{number} is open and ready, the review state is comments, and 1 review comment waits (rule 2). It did not continue the ticket.\nVision read:\n  the tracker status is To Do\n  the pull request #{number} is open and ready\n  the review state is comments and 1 review comment waits\n  CI has no run\n  the branch of the clone is at the head of the pull request\nTo continue at comments:  vision take DEMO-12 --step comments\n"
+        )),
+        "{take:?}"
+    );
+    assert_eq!(p.flags(), ["stopped"]);
+
+    // The forge does not answer: the rules suggest nothing, so the take starts the stored step
+    // again, as a take with no rule does, and says why it suggests nothing.
+    let path = p.vision.join("config.toml");
+    let mut doc: DocumentMut = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    doc["adapter"]["github_api"] = toml_edit::value("http://127.0.0.1:9");
+    std::fs::write(&path, doc.to_string()).unwrap();
+    let take = p.run(&["take", KEY]);
+    take.expect_code(0);
+    assert!(
+        take.stdout.starts_with("DEMO-12 starts again at the step review in the clone ")
+            && take.stdout.contains(
+                " Vision could not check the tracker and the pull request, so it suggested nothing: "
+            ),
+        "{take:?}"
+    );
+    assert!(p.flags().is_empty());
+    assert_eq!(p.step().as_deref(), Some("review"));
+    assert_eq!(p.counts()["visit"]["how"], "restart");
+    let detail = last_resumed(&p);
+    assert_eq!(
+        (
+            &detail["step"],
+            &detail["how"],
+            &detail["failed"],
+            &detail["suggestion"],
+            &detail["took"]
+        ),
+        (
+            &json!("review"),
+            &json!("restart"),
+            &json!(true),
+            &Value::Null,
+            &json!(false)
+        )
+    );
+}
+
+#[test]
+fn a_paused_ticket_goes_on_with_retry_step_after_the_rules() {
+    let p = Project::new();
+    needs_the_person_at_refine(&p);
+    // The person takes over the session, then opens the pull request by hand.
+    p.run(&["open", KEY]).expect_code(0);
+    assert_eq!(p.flags(), ["needs-you", "paused"]);
+    let number = pull_request_by_hand(&p);
+    let requests = p.server.requests().len();
+
+    let moved = p.run(&["retry", KEY, "--step", "in-review"]);
+    moved.expect_code(0);
+    assert!(
+        moved.stdout.starts_with(&format!(
+            "Moved DEMO-12 from the step refine to the step in-review (cleared: needs-you, paused). Vision suggested this step (rule 4): the pull request #{number} is open and ready. Vision read: the tracker status is To Do. The pull request #{number} is open and ready. The review state is waiting and no review comment waits. CI has no run. The branch of the clone is at the head of the pull request. The next tick enters the step in-review."
+        )),
+        "{moved:?}"
+    );
+    assert!(
+        p.server.requests().len() > requests,
+        "the rules called observe"
+    );
+    assert!(p.flags().is_empty());
+    assert_eq!(p.step().as_deref(), Some("in-review"));
+    let detail = last_resumed(&p);
+    assert_eq!(
+        (
+            &detail["from"],
+            &detail["step"],
+            &detail["suggestion"],
+            &detail["took"],
+            &detail["pr_head"]
+        ),
+        (
+            &json!("refine"),
+            &json!("in-review"),
+            &json!("in-review"),
+            &json!(true),
+            &json!(p.head())
+        )
+    );
+    // The next tick acts at in-review: no comment waits, so it waits for the review.
+    p.tick();
+    assert_eq!(p.step().as_deref(), Some("in-review"), "{}", p.report());
+}
+
+#[test]
+fn with_no_resume_table_a_take_of_a_stopped_ticket_calls_no_observe_and_starts_the_stored_step() {
+    let p = Project::with_adapter(pipeline_support::without_resume(fast_adapter()));
+    let requests = needs_the_person_at_refine(&p);
+    p.run(&["stop", KEY]).expect_code(0);
+    pull_request_by_hand(&p);
+    let take = p.run(&["take", KEY]);
+    take.expect_code(0);
+    assert_eq!(
+        take.stdout,
+        format!(
+            "DEMO-12 starts again at the step refine in the clone {} on the branch {BRANCH}.\n",
+            p.clone.display()
+        )
+    );
+    assert_eq!(p.server.requests().len(), requests, "no call of observe");
+    assert_eq!(p.flags(), ["needs-you"]);
+    let event = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "take")
+        .expect("the take");
+    let detail: Value = serde_json::from_str(event.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["restart"], true);
+    assert!(!p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .iter()
+        .any(|e| e.kind == "resumed"));
+}
+
+#[test]
+fn a_push_by_hand_and_a_late_comment_take_a_ticket_back_from_ready_to_merge() {
+    let p = Project::new();
+    needs_the_person_at_refine(&p);
+    // The ticket waits at ready-to-merge after the review, and the person stops it there.
+    p.run(&["retry", KEY, "--step", "ready-to-merge"])
+        .expect_code(0);
+    p.run(&["stop", KEY]).expect_code(0);
+    let number = pull_request_by_hand(&p);
+    p.server.team(
+        "review",
+        json!({"number": number, "id": 601, "login": "lead", "state": "APPROVED"}),
+    );
+    // The person pushes one more commit from another checkout: head.state is forward after
+    // the fetch, so the rule of a push by hand takes the ticket back to ci-review.
+    let root = p._dir.path();
+    let person = root.join("person");
+    git(
+        root,
+        &[
+            "clone",
+            "--quiet",
+            "--branch",
+            BRANCH,
+            p.remote.to_str().unwrap(),
+            person.to_str().unwrap(),
+        ],
+    );
+    git(&person, &["config", "user.name", "person"]);
+    git(&person, &["config", "user.email", "person@example.invalid"]);
+    std::fs::write(person.join("NOTES.txt"), "A late change.\n").unwrap();
+    git(&person, &["add", "--all"]);
+    git(&person, &["commit", "--quiet", "-m", "A late change"]);
+    git(&person, &["push", "--quiet", "origin", BRANCH]);
+    let pushed = git(&person, &["rev-parse", "HEAD"]);
+    let take = p.run(&["take", KEY]);
+    take.expect_code(1);
+    assert!(
+        take.stdout.starts_with(
+            "Vision thinks that DEMO-12 is at the step ci-review, not at the step ready-to-merge where it stopped (rule 3). This goes back from ready-to-merge: the pull request has later commits than the clone, such as a push by hand. It did not continue the ticket.\nVision read:\n"
+        ),
+        "{take:?}"
+    );
+    assert!(
+        take.stdout.contains(&format!(
+            "  the tracker status is To Do\n  the pull request #{number} is open and ready\n  the review state is approved and no review comment waits\n"
+        )) && take.stdout.contains("  the pull request has later commits than the clone, such as a push by hand\n"),
+        "{take:?}"
+    );
+    assert_eq!(p.flags(), ["stopped"]);
+    assert_eq!(p.step().as_deref(), Some("ready-to-merge"));
+
+    // The lead comments late: the comments rule comes first, and it takes the ticket back to
+    // comments, with each fact that Vision read.
+    p.server.team(
+        "comment",
+        json!({"number": number, "id": 503, "login": "lead", "path": "calc.sh", "line": 5,
+               "body": "One more test, please."}),
+    );
+    let take = p.run(&["take", KEY]);
+    take.expect_code(1);
+    assert!(
+        take.stdout.starts_with(
+            "Vision thinks that DEMO-12 is at the step comments, not at the step ready-to-merge where it stopped (rule 2). This goes back from ready-to-merge: the review state is comments and 1 review comment waits. It did not continue the ticket.\nVision read:\n"
+        ),
+        "{take:?}"
+    );
+    assert!(
+        take.stdout.ends_with(
+            "To continue at comments:        vision take DEMO-12 --step comments\nTo continue at ready-to-merge:  vision take DEMO-12 --step ready-to-merge\n"
+        ),
+        "{take:?}"
+    );
+    let moved = p.run(&["take", KEY, "--step", "comments"]);
+    moved.expect_code(0);
+    assert!(
+        moved.stdout.starts_with(
+            "Moved DEMO-12 from the step ready-to-merge to the step comments (cleared: stopped). Vision suggested this step (rule 2). This goes back from ready-to-merge: the review state is comments and 1 review comment waits. Vision read: the tracker status is To Do. "
+        ),
+        "{moved:?}"
+    );
+    assert!(p.flags().is_empty());
+    assert_eq!(p.step().as_deref(), Some("comments"));
+    assert_eq!(p.head(), pushed, "the clone took the head of the person");
+    let detail = last_resumed(&p);
+    assert_eq!(
+        (
+            &detail["from"],
+            &detail["step"],
+            &detail["suggestion"],
+            &detail["took"],
+            &detail["back"],
+            &detail["rule"]
+        ),
+        (
+            &json!("ready-to-merge"),
+            &json!("comments"),
+            &json!("comments"),
+            &json!(true),
+            &json!(true),
+            &json!(2)
+        )
+    );
+    let facts: Vec<String> = serde_json::from_value(detail["facts"].clone()).unwrap();
+    assert_eq!(facts[0], "the tracker status is To Do");
+    assert!(
+        facts.contains(&"the review state is comments and 1 review comment waits".to_string()),
+        "{facts:?}"
+    );
+    let log = p.run(&["log", KEY]);
+    log.expect_code(0);
+    assert!(
+        log.stdout.contains(
+            "user resumed the ticket at comments, as Vision suggested, back from ready-to-merge"
+        ),
+        "{log:?}"
+    );
+}
+
+/// The adapter of the repo with an interrupt on the wait step ready: a waiting comment or a
+/// change request takes the ticket to comments before pr.draft counts.
+fn interrupt_adapter() -> String {
+    let watch = "on = { \"false\" = \"in-review\" }\n";
+    let text = fast_adapter();
+    assert_eq!(text.matches(watch).count(), 1);
+    text.replace(
+        watch,
+        &format!("{watch}interrupt = {{ \"review.state\" = {{ comments = \"comments\", changes = \"comments\" }} }}\n"),
+    )
+}
+
+#[test]
+fn a_late_comment_interrupts_a_wait_step_before_its_watch() {
+    // The pull request is ready, and a comment waits: the interrupt moves the ticket to
+    // comments, not the watch of pr.draft to in-review.
+    let p = Project::with_adapter(interrupt_adapter());
+    needs_the_person_at_refine(&p);
+    p.run(&["retry", KEY, "--step", "ready"]).expect_code(0);
+    let number = pull_request_by_hand(&p);
+    p.server.team(
+        "comment",
+        json!({"number": number, "id": 504, "login": "lead", "path": "calc.sh", "line": 5,
+               "body": "A late comment."}),
+    );
+    p.tick_until("the move from ready", |p| {
+        p.step().as_deref() != Some("ready")
+    });
+    assert_eq!(p.step().as_deref(), Some("comments"), "{}", p.report());
+    let step = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "step")
+        .expect("the move of the interrupt");
+    let detail: Value = serde_json::from_str(step.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            &detail["from"],
+            &detail["to"],
+            &detail["how"],
+            &detail["interrupt"],
+            &detail["value"]
+        ),
+        (
+            &json!("ready"),
+            &json!("comments"),
+            &json!("interrupt review.state = comments"),
+            &json!("review.state"),
+            &json!("comments")
+        )
+    );
+    assert_eq!(p.counts()["entries"]["comments"], 1, "an entry of comments");
+
+    // With no comment, no interrupt fires, and the watch moves the ticket as before.
+    let p = Project::with_adapter(interrupt_adapter());
+    needs_the_person_at_refine(&p);
+    p.run(&["retry", KEY, "--step", "ready"]).expect_code(0);
+    pull_request_by_hand(&p);
+    p.tick_until("the move from ready", |p| {
+        p.step().as_deref() != Some("ready")
+    });
+    assert_eq!(p.step().as_deref(), Some("in-review"), "{}", p.report());
+    let step = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "step")
+        .unwrap();
+    let detail: Value = serde_json::from_str(step.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["how"], "on false");
+    assert_eq!(detail["interrupt"], Value::Null);
+}

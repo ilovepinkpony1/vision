@@ -1,32 +1,32 @@
  ◆ VISION ▸ DEMO-12  Export the report of the month as…     engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- PATH                      │ NOW                                                    │ TICKET
- ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  builder works                               │ cost              $1.03
- ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  step build · turn 3 of this ticket          │ time                38m
- ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
- ⠧ build               6:00│   ▀▀▀▀▀▀▀  ⠧ 6:00 · 5 tool calls                       │ commits    none to push
- ○ review        ╭─ Back from the session of DEMO-12 ───────────────────────────────────────╮
- ○ open-pr       │                                                                          │NS
- ○ ci            │  You left the session.                                                   │               0
- ○ fix-ci        │                                                                          │ry             1
- ○ ready         │  DEMO-12 is stopped and paused. The turn of builder that ran is lost,    │Judge          0
- ○ comments      │  and its session keeps what the agent did.                               │
- ○ ci-review     │                                                                          │
- ○ ready-to-merge│  Continue: Vision starts DEMO-12 again at its step, then clears the      │       3f2a1b4 ✓
- ○ done          │  pause, so that the next turn of builder resumes the session. Keep it    │               -
-                 │  stopped: nothing moves until you press n and continue it there.         │               -
- TEAM            │                                                                          │               -
- ✓ scout     fabl│  ⠧ start DEMO-12 again at its step                                       │
- ● builder   opus│  · continue DEMO-12: its next turn resumes the session                   │
- · reviewer  opus│                                                                          │━━━━━━ 31% of 60
- · tester    opus│  esc close this card; the action goes on                                 │ts at 18:00
- · shepherd  opus│                                                                          │━━━━━━ 71% of 85
- · judge     fabl╰──────────────────────────────────────────────────────────────────────────╯
- · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │ ENGINE
-                           │                month next.                             │ ● on   last pass 1s ago
-                           │                                                        │
-                           │                                                        │
-                           │                                                        │
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- t tell builder   o open session   x stop   esc home   l log and tool calls   f filter   p plan   ? keys
+─────────────╭─ Continue DEMO-12 ───────────────────────────────────────────────────────────────╮─────────────
+ PATH        │                                                                                  │
+ ✓ refine    │  Export the report of the month as a CSV file                                    │       $1.03
+ ✓ plan      │                                                                                  │         38m
+ ✓ plan-ready│  DEMO-12 is stopped and paused at the step build.                                │           3
+ ⠇ build     │  Vision found nothing further: no rule holds.                                    │none to push
+ ○ review    │  Vision read:                                                                    │
+ ○ open-pr   │  · the tracker status is In Review                                               │
+ ○ ci        │  · the pull request #7 is open and ready                                         │           0
+ ○ fix-ci    │  · the review state is comments and 2 review comments wait                       │           1
+ ○ ready     │  · CI is green at 3f2a1b4c5d6e                                                   │e          0
+ ○ comments  │  · the branch of the clone is at the head of the pull request                    │
+ ○ ci-review │                                                                                  │
+ ○ ready-to-m│    refine                                                                        │   3f2a1b4 ✓
+ ○ done      │    plan                                                                          │           -
+             │    plan-ready                                                                    │           -
+ TEAM        │  ▸ build            stopped here                                                 │           -
+ ✓ scout     │    review                                                                        │
+ ● builder   │    open-pr                                                                       │
+ · reviewer  │    ci                                                                            │━━ 31% of 60
+ · tester    │    fix-ci                                                                        │t 18:00
+ · shepherd  │    ready                                                                         │━━ 71% of 85
+ · judge     │    comments                                                                      │
+ · curator   │                                                              ▼ 2 more · ↑↓ pick  │
+             │  ⠇ continue DEMO-12 at the step build                                            │ pass 1s ago
+             │  · clear the pause of DEMO-12: its next turn resumes the session                 │
+             │                                                                                  │
+             │  esc close this card; the action goes on                                         │
+─────────────│                                                                                  │─────────────
+ t tell build╰──────────────────────────────────────────────────────────────────────────────────╯ ? keys
 

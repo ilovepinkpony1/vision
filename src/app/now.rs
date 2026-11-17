@@ -137,14 +137,14 @@ pub fn now(input: &Input) -> Now {
         let mut now = Now::new(
             Kind::Stopped,
             Tone::Rest,
-            "stopped · Enter starts it again".into(),
+            "stopped · Enter continues it".into(),
             "stopped".into(),
             vec![
                 format!("You stopped it at the step {step}. Its branch stays in its clone."),
-                "Press Enter to start it again.".into(),
+                "Press Enter to continue it.".into(),
             ],
         );
-        now.key = Some(("enter", "resume"));
+        now.key = Some(("enter", "continue"));
         return now;
     }
     if has_flag(PAUSED) {
@@ -152,13 +152,13 @@ pub fn now(input: &Input) -> Now {
             Kind::Paused,
             Tone::Need,
             "paused · you took over its session".into(),
-            "you took over its session".into(),
+            "you work in its session".into(),
             vec![
                 "No new turn starts while you work in the session.".into(),
-                "Press r to continue. The next turn resumes it.".into(),
+                "Press Enter to continue. The next turn resumes it.".into(),
             ],
         );
-        now.key = Some(("r", "continue"));
+        now.key = Some(("enter", "continue"));
         return now;
     }
     if let Some(turn) = &facts.work {

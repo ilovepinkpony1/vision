@@ -28,10 +28,11 @@ use crate::paths::Paths;
 pub use find::{locate, Located, Origin};
 pub use model::{
     cap_names, disk_answers, Adapter, AdapterAgent, AskStep, CheckStep, Entry, EntryKind, Expect,
-    Gate, GateRule, HumanStep, Job, JobEnv, JobStep, Kinds, LocalTime, Member, Severity, Step,
-    StepKind, TurnStep, Verb, WaitStep, Width, CHANGED, COMMITS, CR_NET_MAX, DEFAULT_AGENT_EFFORT,
-    DEFAULT_BASE, DEFAULT_BRANCH, DEFAULT_EVERY, DEFAULT_ROUNDS, DEFAULT_WIDTH_DOC,
-    DEFAULT_WIDTH_FILES, FINDINGS, MAX_ROUNDS, NARROW, NONE, QA_BLOCK, SAME, WIDE,
+    Gate, GateRule, HumanStep, Job, JobEnv, JobStep, Kinds, LocalTime, Member, ResumeRule,
+    Severity, Step, StepKind, TurnStep, Verb, WaitStep, Width, CHANGED, COMMITS, CR_NET_MAX,
+    DEFAULT_AGENT_EFFORT, DEFAULT_BASE, DEFAULT_BRANCH, DEFAULT_EVERY, DEFAULT_ROUNDS,
+    DEFAULT_WIDTH_DOC, DEFAULT_WIDTH_FILES, FINDINGS, HEAD_STATE, HEAD_STATES, MAX_ROUNDS, NARROW,
+    NONE, QA_BLOCK, SAME, WIDE,
 };
 
 /// The name of the step list in an adapter folder.

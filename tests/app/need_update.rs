@@ -853,12 +853,12 @@ fn the_keys_of_a_flag() {
     key(&mut app, 3.0, Key::Char('x'));
     assert!(matches!(&app.card, Some(Card::Stop(c)) if c.step == "build"));
 
-    // A stopped ticket: Enter opens the card that starts it again, and r does nothing.
+    // A stopped ticket: Enter opens the continue card, and r does nothing.
     let mut app = open_with(SIZE, vec![flag(true)]);
     assert!(jobs(&key(&mut app, 3.0, Key::Char('r'))).is_empty());
     assert!(matches!(app.card, Some(Card::Need(_))));
     key(&mut app, 3.1, Key::Enter);
-    assert!(matches!(&app.card, Some(Card::Resume(c)) if c.key == "DEMO-12"));
+    assert!(matches!(&app.card, Some(Card::Continue(c)) if c.key == "DEMO-12" && c.stopped));
 
     // With no turn yet, o says that there is no session.
     let mut item = flag_item(false);
@@ -874,22 +874,29 @@ fn the_keys_of_a_flag() {
 
 #[test]
 fn the_keys_of_a_paused_ticket() {
+    // Enter opens the continue card, whose read runs the rules.
     let mut app = open_with(SIZE, vec![paused(false)]);
     let fx = key(&mut app, 3.0, Key::Enter);
+    assert!(fx.contains(&Effect::LoadResume("DEMO-12".into())), "{fx:?}");
+    assert!(matches!(&app.card, Some(Card::Continue(c)) if c.key == "DEMO-12" && !c.stopped));
+
+    // r continues it at its step with a plain retry, which runs no rule.
+    let mut app = open_with(SIZE, vec![paused(false)]);
+    let fx = key(&mut app, 3.0, Key::Char('r'));
+    assert!(!fx.iter().any(|e| matches!(e, Effect::LoadResume(_))));
     let done = drive(&mut app, 3.1, fx, None, none);
     assert_eq!(done.actions, [args(&["retry", "DEMO-12"])]);
-
-    let mut app = open_with(SIZE, vec![paused(true)]);
-    let fx = key(&mut app, 3.0, Key::Char('r'));
-    let done = drive(&mut app, 3.1, fx, None, none);
-    assert_eq!(
-        done.actions,
-        [args(&["take", "DEMO-12"]), args(&["retry", "DEMO-12"])]
-    );
     assert_eq!(
         notice(&app),
-        "DEMO-12 goes on. Its next turn resumes the session that you worked in."
+        "DEMO-12 goes on, and its next turn resumes the session that you worked in."
     );
+
+    // A ticket that the person took over and that is also stopped: r does nothing, and Enter
+    // opens the continue card, whose chain starts with the take.
+    let mut app = open_with(SIZE, vec![paused(true)]);
+    assert!(jobs(&key(&mut app, 3.0, Key::Char('r'))).is_empty());
+    key(&mut app, 3.1, Key::Enter);
+    assert!(matches!(&app.card, Some(Card::Continue(c)) if c.stopped));
 }
 
 #[test]

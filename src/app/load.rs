@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use ::time::OffsetDateTime;
 
-use super::model::{FirstStep, Held, Local, Setup, SetupError, StartInfo, Week};
+use super::model::{ContinueView, FirstStep, Held, Local, Setup, SetupError, StartInfo, Week};
 use crate::adapter::{self, StepKind};
 use crate::config::Mode;
 use crate::ctx::Ctx;
@@ -158,6 +158,17 @@ fn read_local(
 /// The queue of the tracker: the rows of `vision pick`.
 pub fn queue(paths: &Paths) -> Result<Vec<PickRow>, String> {
     pick_rows(&Ctx::new(paths.clone())).map_err(|e| format!("{e:#}"))
+}
+
+/// What the continue card shows for a stopped or paused ticket. It makes the one call of
+/// observe of the `[[resume]]` rules of the adapter, and it changes nothing.
+pub fn resume(paths: &Paths, key: &str) -> Result<ContinueView, String> {
+    let read = || -> anyhow::Result<ContinueView> {
+        let ctx = Ctx::new(paths.clone());
+        let key = TicketKey::parse(key)?;
+        crate::pipeline::resume::read_view(&ctx, &key)
+    };
+    read().map_err(|e| format!("{e:#}"))
 }
 
 /// What the start card says about a ticket.

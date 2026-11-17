@@ -23,6 +23,7 @@ mod models;
 mod mouse;
 mod needs;
 mod pager;
+mod resume;
 mod stats;
 mod tell;
 
@@ -104,6 +105,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
         Msg::LocalSame => data::on_local_same(app, &mut fx),
         Msg::Queue(result) => data::on_queue(app, result, &mut fx),
         Msg::StartInfo { key, info } => cards::on_start_info(app, &key, info),
+        Msg::Resume { key, view } => resume::on_view(app, &key, *view),
         Msg::JobDone(done) => engine::on_done(app, done, &mut fx),
     }
     boot::leave_when_ready(app);

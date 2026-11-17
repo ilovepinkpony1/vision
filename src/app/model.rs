@@ -88,7 +88,8 @@ pub enum Screen {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Card {
     Start(StartCard),
-    Resume(ResumeCard),
+    /// Enter on a stopped or paused ticket: where it goes on.
+    Continue(ContinueCard),
     Kill(KillCard),
     Quit,
     Help,
@@ -105,7 +106,8 @@ pub enum Card {
     Retry(RetryCard),
     /// `o` of the live view: what an open of the session does.
     Open(OpenCard),
-    /// After the session of `vision open` ended: continue the ticket, or keep it paused.
+    /// After the session of `vision open` ended: continue the ticket, or keep it paused. Enter
+    /// opens the continue card.
     Opened(OpenedCard),
 }
 
@@ -153,9 +155,8 @@ pub struct OpenedCard {
     pub code: Option<i32>,
     /// Why it did not start, or the last line of its error text.
     pub error: Option<String>,
-    pub run: Run,
     /// The agent whose running turn the person stopped to take over its session: the ticket
-    /// is stopped and paused, and continuing it runs the take and then the retry.
+    /// is stopped and paused.
     pub took_over: Option<String>,
 }
 
@@ -192,15 +193,51 @@ pub struct StartCard {
     pub run: Run,
 }
 
+/// The continue card of a stopped or paused ticket. It names the stored step, and a thread
+/// reads what the `[[resume]]` rules of the adapter find. Then it lists the steps of the path,
+/// with the suggestion selected and the stored step marked, and Enter continues at the
+/// selected step. The action is a chain of [`crate::app::recipes::resume`].
 #[derive(Clone, Debug, PartialEq)]
-pub struct ResumeCard {
+pub struct ContinueCard {
     pub key: String,
     pub title: String,
-    pub step: String,
-    pub clone: Option<String>,
-    pub branch: Option<String>,
-    pub run: Run,
+    /// The step that the ticket holds.
+    pub stored: String,
+    /// True for a stopped ticket, false for a paused one, as the card opened.
+    pub stopped: bool,
+    /// What the rules found and the steps to pick, from the read of the thread: `None` while
+    /// it runs.
+    pub view: Option<Result<ContinueView, String>>,
+    /// The selected row of the steps of the view.
+    pub selected: usize,
 }
+
+impl ContinueCard {
+    /// The card of a ticket at the step `stored`, while its read runs.
+    pub fn new(key: &str, title: &str, stored: &str, stopped: bool) -> ContinueCard {
+        ContinueCard {
+            key: key.to_string(),
+            title: title.to_string(),
+            stored: stored.to_string(),
+            stopped,
+            view: None,
+            selected: 0,
+        }
+    }
+
+    /// The view, once its read worked.
+    pub fn loaded(&self) -> Option<&ContinueView> {
+        self.view.as_ref().and_then(|v| v.as_ref().ok())
+    }
+
+    /// The selected step, once the read worked.
+    pub fn chosen(&self) -> Option<&str> {
+        self.loaded()?.steps.get(self.selected).map(String::as_str)
+    }
+}
+
+/// What the read of the continue card gives: the view of the pipeline.
+pub type ContinueView = crate::pipeline::resume::View;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KillCard {
@@ -623,11 +660,10 @@ impl App {
         }
         let card = match &self.card {
             Some(Card::Start(card)) => card.info.is_none() || card.run.job().is_some(),
-            Some(Card::Resume(card)) => card.run.job().is_some(),
+            Some(Card::Continue(card)) => card.view.is_none(),
             Some(Card::Kill(card)) => card.run.job().is_some(),
             Some(Card::Stop(card)) => card.run.job().is_some(),
             Some(Card::Retry(card)) => card.run.job().is_some(),
-            Some(Card::Opened(card)) => card.run.job().is_some(),
             Some(Card::Need(card)) => card.items.is_none(),
             _ => false,
         };

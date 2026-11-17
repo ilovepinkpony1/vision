@@ -15,7 +15,7 @@
  ○ ready-to-merge│  build and the branch vision/DEMO-12, and its clone is free for          │       3f2a1b4 ✓
  ○ done          │  another ticket. No new turn starts until you resume it.                 │               -
                  │                                                                          │               -
- TEAM            │  Later, Enter on the stopped ticket starts it again at the same step.    │               -
+ TEAM            │  Later, Enter on the stopped ticket opens the card that continues it.    │               -
  ✓ scout     fabl│                                                                          │
  ● builder   opus│  enter stop    esc cancel                                                │
  · reviewer  opus│                                                                          │━━━━━━ 31% of 60

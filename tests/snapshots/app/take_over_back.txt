@@ -6,17 +6,17 @@
  ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  claude-opus-5-5 · xhigh                     │ turns                 3
  ⠴ build               6:00│   ▀▀▀▀▀▀▀  ⠴ 6:00 · 5 tool calls                       │ commits    none to push
  ○ review                  │                                                        │
- ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
- ○ ci            ╭─ Back from the session of DEMO-12 ───────────────────────────────────────╮               0
- ○ fix-ci        │                                                                          │ry             1
- ○ ready         │  You left the session.                                                   │Judge          0
- ○ comments      │                                                                          │
- ○ ci-review     │  DEMO-12 is stopped and paused. The turn of builder that ran is lost,    │
- ○ ready-to-merge│  and its session keeps what the agent did.                               │       3f2a1b4 ✓
- ○ done          │                                                                          │               -
-                 │  Continue: Vision starts DEMO-12 again at its step, then clears the      │               -
- TEAM            │  pause, so that the next turn of builder resumes the session. Keep it    │               -
- ✓ scout     fabl│  stopped: nothing moves until you press n and continue it there.         │
+ ○ open-pr       ╭─ Back from the session of DEMO-12 ───────────────────────────────────────╮NS
+ ○ ci            │                                                                          │               0
+ ○ fix-ci        │  You left the session.                                                   │ry             1
+ ○ ready         │                                                                          │Judge          0
+ ○ comments      │  DEMO-12 is stopped and paused. The turn of builder that ran is lost,    │
+ ○ ci-review     │  and its session keeps what the agent did.                               │
+ ○ ready-to-merge│                                                                          │       3f2a1b4 ✓
+ ○ done          │  Continue: Enter opens the card that continues DEMO-12 at its step,      │               -
+                 │  or at a step that you pick. At its step, the next turn of builder       │               -
+ TEAM            │  resumes the session. Keep it stopped: nothing moves until you           │               -
+ ✓ scout     fabl│  continue it.                                                            │
  ● builder   opus│                                                                          │
  · reviewer  opus│  enter continue    esc keep it stopped                                   │━━━━━━ 31% of 60
  · tester    opus│                                                                          │ts at 18:00

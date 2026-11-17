@@ -96,6 +96,9 @@ pub enum KindFacts {
         watch: String,
         /// The value of `watch` at the last observe.
         watched: Option<String>,
+        /// An interrupt of the step that fired at the last observe: its step, and the way of
+        /// the move. It wins over `on`.
+        interrupt: Option<(String, String)>,
         /// The step of `on` for that value.
         target: Option<String>,
         /// `wait` of the step: the values that mean "not yet". `None`: each value waits.
@@ -305,6 +308,7 @@ pub fn decide(facts: &Facts) -> Next {
             start,
             watch,
             watched,
+            interrupt,
             target,
             waits,
             limit,
@@ -318,6 +322,12 @@ pub fn decide(facts: &Facts) -> Next {
             }
             if let Some(stop) = ops_next(List::Start, start) {
                 return stop;
+            }
+            if let Some((to, how)) = interrupt {
+                return Next::Move {
+                    to: to.clone(),
+                    how: how.clone(),
+                };
             }
             if let Some(to) = target {
                 return Next::Move {
@@ -1267,6 +1277,7 @@ kind = "end"
                 start,
                 watch: "ci.state".into(),
                 watched: watched.map(str::to_string),
+                interrupt: None,
                 target: target.map(str::to_string),
                 waits: None,
                 limit: None,
@@ -1296,6 +1307,49 @@ kind = "end"
     }
 
     #[test]
+    fn an_interrupt_of_a_wait_step_moves_the_ticket_before_its_watched_value_counts() {
+        let wait = |interrupt: Option<(&str, &str)>, watched: &str, target: Option<&str>| {
+            let mut facts = turn_facts(None, Vec::new());
+            facts.step = "deployed-staging".into();
+            facts.next = None;
+            facts.kind = KindFacts::Wait {
+                start: vec![("deploy".to_string(), known(Outcome::Confirmed))],
+                watch: "envs.staging.deployed".into(),
+                watched: Some(watched.into()),
+                interrupt: interrupt.map(|(to, how)| (to.to_string(), how.to_string())),
+                target: target.map(str::to_string),
+                waits: Some(vec!["false".into()]),
+                limit: Some(60),
+                waited: Some(10_000),
+                until: None,
+            };
+            decide(&facts)
+        };
+        let late = Some(("comments", "interrupt review.state = comments"));
+        // A late comment wins over the watched value, over a value that nothing names, and over
+        // the limit.
+        for (watched, target) in [("true", Some("qa-staging")), ("odd", None), ("false", None)] {
+            assert_eq!(
+                wait(late, watched, target),
+                Next::Move {
+                    to: "comments".into(),
+                    how: "interrupt review.state = comments".into()
+                },
+                "{watched}"
+            );
+        }
+        // No interrupt fired: the watch decides as before.
+        assert_eq!(
+            wait(None, "true", Some("qa-staging")),
+            Next::Move {
+                to: "qa-staging".into(),
+                how: "on true".into()
+            }
+        );
+        assert!(matches!(wait(None, "false", None), Next::Flag { .. }));
+    }
+
+    #[test]
     fn a_wait_step_before_its_time_runs_no_start_verb_and_no_watch() {
         let mut facts = turn_facts(None, Vec::new());
         facts.step = "regression".into();
@@ -1305,6 +1359,7 @@ kind = "end"
                 start: vec![("ci.run".to_string(), OpFact::NotAsked)],
                 watch: "tracker_status".into(),
                 watched: watched.map(str::to_string),
+                interrupt: None,
                 target: target.map(str::to_string),
                 waits: Some(vec!["none".into()]),
                 limit: Some(60),
@@ -1340,6 +1395,7 @@ kind = "end"
                 start: vec![("ci.run".to_string(), known(Outcome::Confirmed))],
                 watch: "ci.state".into(),
                 watched: watched.map(str::to_string),
+                interrupt: None,
                 target: None,
                 waits: waits.map(|w| w.iter().map(|v| v.to_string()).collect()),
                 limit,

@@ -989,6 +989,23 @@ The kind comes from `issue.type` of the first `observe` after `take`: an exact m
 
 A step can have `when`, such as `when = ["bug"]` or `when = ["wide"]`. Its words are kinds, `wide`, and `narrow`. Kinds are ORed, widths are ORed, and the two groups are ANDed. A step whose `when` does not hold is skipped in the same tick, with the event `skipped <step>: <why>`. A width word whose document does not exist yet sets the flag `needs-you`. The end step and a wait step have no `when`.
 
+The adapter can name the rules of a continue, after its steps:
+
+```toml
+[[resume]]
+when = { "pr.merged" = true }
+step = "done"
+
+[[resume]]
+when = { "review.state" = ["comments", "changes"] }
+step = "comments"
+back = true
+```
+
+The `when` of a rule differs from the `when` of a step. It maps a path of the answer of `observe`, the same paths as `watch`, to a value or a list of values. If each path gives one of its values, the rule holds. A value is a string, true, or false. Write a number as a string, such as "0". A missing path and a null give `none`. The loader refuses a step that the adapter does not have, a missing or empty `when`, an empty list, and another type of value. A rule can name the end step. The rules run only at a continue (section 11.3).
+
+A rule can have `back = true`, and the default is false. Such a rule can also suggest a step before the stored step, a move back. One example is a move from `ready-to-merge` to `comments` after a late comment. One path of `when` comes from Vision and not from `observe`: `head.state`. It compares the head of the open pull request with the branch of the clone, after the fetch of a continue. Its values are none, same, forward, ahead, behind, apart, dirty, elsewhere, and unread. None means that no pull request is open. Forward means that the pull request has later commits, such as a push by hand. The loader also refuses another value of `head.state` and a value of `back` that is not true or false. It refuses a key other than `when`, `step`, and `back` too.
+
 A turn step can have `team` in the place of `agent`, `turn`, and `expects`:
 
 ```toml
@@ -1033,6 +1050,8 @@ cap = 2
 A line equal to `stop_line` sets the flag `needs-you`: the person chose to drop the ticket, and runs `vision stop KEY`. A line equal to `line` moves the ticket to `next`. Else the ticket moves to `fail`, which counts against `cap`.
 
 A wait step can have `from`, a time of day such as `"09:00"` in the local time of the machine.
+
+A wait step can have `interrupt`, such as `interrupt = { "review.state" = { comments = "comments", changes = "comments" } }`. It maps a path of the answer of `observe` to a table from a value to a step. Each look of the step reads the interrupts first, from the same answer, and then `watch`. If the value of a path names a step, the ticket moves there at that tick. With no interrupt that fires, `watch` and `on` decide. The move counts as an entry of its step, as a move of `on` does. The event `step` has `how` = `interrupt <path> = <value>`, and the keys `interrupt` and `value`. With several paths, Vision reads them in their sorted order, and the first value that names a step wins. A look comes after `from` and after the start verbs, so a deploy that the step starts runs first. The loader refuses `interrupt` on another kind of step, an empty table, a key that is not a path, and the path `head.state`. It also refuses a target that is not a string, a step that does not exist, and the step itself. A path that the answer does not have gives none, so its interrupt never fires. The answer of `observe` of the adapter for Jira and GitHub always holds `review.state`, so an interrupt on it costs no extra call.
 
 A job can have `command`, a shell command of the person, with `doc` and `env`. The loader refuses `doc` and `env` without `command`, a `doc` that is not a plain file name, and a `doc` that the person or the pipeline owns, such as `plan.md`.
 
@@ -1095,9 +1114,19 @@ The column NOW of `vision status` says the same thing for people. After a turn t
 A ticket can have four flags. A ticket with a flag starts no new turn, no job, and no operation.
 
 - `needs-you`: a rule stopped the ticket. `vision retry KEY` clears the flag and enters the step again. `vision retry KEY --step STEP` enters the step STEP instead, with the rules of a plain retry: the same refusals, a new visit that does not count for the cap of the step, and the same flags cleared. It refuses a step that the adapter does not have, the end step, and a ticket whose turn runs. Its event says that the person moved the ticket, from which step to which step, and the first turn of a turn step gets a message that says so. If the turn of the step ended well and an `after` verb stopped the ticket, `vision retry KEY` starts no new turn. It only requests the `after` verbs again. On an act step, `vision retry KEY` starts no turn either. It requests the verbs of `run` that are not `confirmed`.
-- `paused`: the person took over the session with `vision open KEY`. `vision retry KEY` clears the flag and enters the step again. The new turn resumes the session, and its message says that the person worked in the session.
+- `paused`: the person took over the session with `vision open KEY`. `vision retry KEY` clears the flag and enters the step again. The new turn resumes the session, and its message says that the person worked in the session. `vision retry KEY --step STEP` continues it at STEP after the rules of a continue.
 - `waits-for-limit`: a limit of section 4 refused a turn. The tick clears the flag after the limit allows a turn again.
-- `stopped`: `vision stop KEY` killed the running turn and freed the clone. The branch stays in that clone. `vision take KEY` starts the ticket again at the same step.
+- `stopped`: `vision stop KEY` killed the running turn and freed the clone. The branch stays in that clone. `vision take KEY` continues the ticket, and the next paragraphs say where.
+
+A continue of a stopped or paused ticket reads the facts first. It calls `observe` one time, and it compares the head of the pull request with the clone (see below). Then it reads the rules of the adapter in order (section 11.2). A rule that holds and names the stored step ends the search: the facts confirm the step where the ticket is, and nothing is suggested. A rule that holds and names a later step is the suggestion. A later step is one that the step list has later, and the links of the steps lead there. In a loop, the step list decides, and the targets of `interrupt` count as links. A rule that holds and names an earlier step, or a step with no order, is the suggestion only with `back = true`. Without `back`, the search skips the rule and reads the next one. If no rule applies, nothing is suggested, and the reason names the rules that held but named an earlier step. A rule never moves a ticket by itself. The person takes the suggestion or picks another step. A plain retry, a tick, and a turn run no rule. With no `[[resume]]` table, a continue runs no `observe`, and nothing changes.
+
+`vision take KEY` of a stopped ticket starts the stored step again. If a rule suggests another step, the command changes nothing. It prints the suggestion, its reason, and the two commands, and it exits with code 1. `vision take KEY --step STEP` continues a stopped ticket at STEP, and `vision retry KEY --step STEP` does the same for a paused ticket. At another step, this is the move of `vision retry --step`, and the move clears the stop too. A move to the end step needs a rule that suggests it at that moment.
+
+A plain `vision take KEY`, the line of a continue, and the continue card list each fact that Vision read, in words, in a fixed order. The order is the tracker status, the pull request, the review state, CI, each env, and the head state. The pull request gives its number, draft or ready, merged, closed, and a conflict. The review state comes with the comments that wait and a change request. Each env says whether it holds the head and whether it runs it. A suggestion that goes back says so. One example is "This goes back from ready-to-merge: 1 review comment waits". A call of `observe` that fails gives no facts.
+
+If the pull request is open, a continue compares its head with the branch in the clone. If the clone does not have that commit, Vision fetches first. The head can be a later commit of the branch, such as a push of the person from another checkout. Then the branch moves forward to it. This move is a fast-forward, and Vision never resets a branch. The row of the ticket then takes that commit as its head. In four cases nothing moves: the fetch fails, the commit is still missing after the fetch, the branches went apart, or the work tree has changes. Then the ticket gets the flag `needs-you` with the reason and the fix, and the next continue clears that flag. If the row of the ticket has no number of a pull request, the continue writes the number of the open pull request.
+
+A continue that read the rules writes the event `resumed` and a row of `human` with the kind `resume`. The event names the stored step, the chosen step, the suggestion, whether the person took it, and the head that the continue took. `vision log` and the tab You say it in words. The event also has `back`, which is true for a suggestion that goes back, and `facts`, the list of the facts in words. For a move back that the person took, `vision log` says "back from <step>".
 
 A `failed` operation is final for its key. `vision retry KEY` frees the key, so that the verb can run again at the same commit. If an operation of the ticket is `uncertain`, `vision retry KEY` refuses, because the reconcile step must settle it first.
 
@@ -1112,6 +1141,8 @@ The proof gets the approved plan in `args.plan`. A line `Proof: green` in the pl
 `adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
 
 Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `open-pr`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. The commits of `build` and `review` stay in the clone. Then the act step `open-pr` runs `git.push`, and `pr.open` with the text of `pr.md`. So nothing leaves the machine before the review. `fix-ci` and `comments` push their own commits with `after`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
+
+The three demo adapters have the same rules of a continue. They suggest `done` for a merged pull request or the status Done. A change request gives `comments`, and a push by hand gives `ci-review`, both with `back = true`. An open and ready pull request gives `comments`, and an open draft gives `ci`.
 
 `adapters/demo-investigate` uses the scripts of `adapters/demo` and starts with the investigation: `refine`, `investigate` (a team by kind), `analyze`, `critic` (wide) or `critic-narrow` (narrow), `questions` (ask), `amend`, `reproduced` (check, bugs only), `plan-ready`, and then the rest of the demo path from `build`. The fake `codex` of the tests stands in for Codex.
 
@@ -1135,6 +1166,8 @@ The path has these parts:
 10. After the approval, the person merges, and the ticket ends.
 
 A round of comments never goes back to the review, the QA, or `open-pr`, and a late round after the approval takes the same path. No commit leaves the machine before the review and the local QA hold. The steps after `open-pr`, such as `fix-ci`, `comments`, and `fix-ci-review`, push their own commits.
+
+The adapter has five rules of a continue. A merged pull request gives `done`. A comment or a change request that waits gives `comments`, with `back = true`, so a late comment also reaches a tested ticket. A push by hand on an open pull request gives `ci-review`, with `back = true` too. An open and ready pull request gives `in-review`, and an open draft gives `ci`. So a ticket whose pull request the person opened by hand goes on in the code review, and its own review does not run again. The comment block of its `adapter.toml` shows an `interrupt` on the deploy steps of an env, so that a late comment ends their wait.
 
 These rules keep the tokens and the repo safe:
 
@@ -1223,6 +1256,7 @@ vision on | off                    the kill switch
 vision doctor                      test the setup
 vision pick                        the eligible tickets, with the reason for each other one
 vision take KEY...                 start a ticket
+vision take KEY --step STEP        continue a stopped ticket at a step
 vision kind KEY NAME               set the kind of a ticket; an unknown kind is refused
 vision plan KEY                    show the plan
 vision approve-plan KEY HASH       approve the plan with that hash
@@ -1233,6 +1267,7 @@ vision open KEY                    attach to the running turn and type, or take 
 vision tell KEY "TEXT"             send a message to the running turn, or to the next one
 vision diff KEY                    the commits of the ticket that are not on the forge
 vision stop KEY | retry KEY        stop a ticket, or start its step again
+vision retry KEY --step STEP       move a ticket to a step; a paused ticket reads the rules first
 vision needs | answer | answers | correct      section 8.4
 vision memory ...                  section 9.2
 vision curate                      run the Curator now
@@ -1325,7 +1360,7 @@ If the home folder has the file `loader.ans`, the loader shows that picture in p
 
 The room for the picture is the rows above the title and the width of the window less 4 columns. A picture that fits the room shows cell for cell. A larger picture shrinks until all of it fits the room. Its columns and its rows shrink by the same factor, so its shape stays. A picture never grows. A picture of only spaces and blocks of quadrants and halves shrinks as pixels. Each cell holds two by two pixels, and each new pixel is the mean color of the pixels that it covers. Each new cell gets the block and the two colors that show its four pixels best, and a part with no color stays with no color. Any other picture, such as text or braille, keeps the nearest cell. The app fits the picture once for each size of the window.
 
-Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or opens the start card for a ticket of the queue. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
+Home lists the tickets in progress and the queue of the tracker. Each ticket in progress shows its place on the path of the adapter, what happens now, its cost, and its time. Enter opens the live view of a ticket in progress, or the start card for a ticket of the queue. On a stopped or paused ticket, Enter opens the continue card. The start card names the clone, the branch, the path, the first agent with its model, and the modes of the write verbs. A refresh keeps the selection on the same ticket.
 
 One state function says what happens to a ticket now, in the words of the app, and Home and the live view both use it. It reads facts that the pipeline gives as data: the turn that runs, the entry of the step that is not done, the wait of the step, and the limit. No text of it names a command.
 
@@ -1344,12 +1379,16 @@ These keys act on the ticket of the live view:
 - `t` opens a line that sends a text to the running turn, or keeps it for the next turn.
 - `n` opens the first thing of the ticket that waits for the person.
 - `o` opens the session of the last turn in the same terminal.
-- `x` stops the ticket, and Enter starts a stopped ticket again.
-- `r` retries a ticket that waits for the person, or continues a paused ticket.
+- `x` stops the ticket. Enter on a stopped or paused ticket opens the continue card.
+- `r` retries a ticket that waits for the person or that is paused, and it reads no rule of a continue.
 - `l`, `p`, and `d` open a pager with the log, the plan, or the commits that the forge does not have. The footer names `l` as the log and the tool calls.
 - `f` shows the next tab of ACTIVITY, and `F` shows the tab before. The digits 1 to 7 pick a tab.
 
 If the footer is too narrow, its hints change in this order until it fits: `d` and `p` go, the hint of `t` becomes `tell`, `o` and `x` go, and the hint of `l` becomes `log`. So `f` stays at each width of 100 columns or more.
+
+Enter on a stopped or paused ticket opens the continue card. This works on Home, in the live view, on the card of the things that wait, and on the card after a session. The card names the stored step. While `observe` runs, it says "Vision checks the tracker and the pull request". Then it shows the suggestion with its reason, or that Vision found nothing further, or why the check failed. Under it, the card lists each fact that Vision read, after "Vision read:". A suggestion that goes back shows in the color of a warning, with the sentence "This goes back from <step>: <why>". It lists the steps of the path, with the suggestion selected and the stored step marked. The window of the steps keeps the stored step and the selection in view while both fit. The arrows, the wheel, and a click select a step, and Enter continues there. Esc closes the card, and the ticket stays as it is. `v` closes the card and opens the live view of the ticket.
+
+For a stopped ticket, Enter runs `vision take KEY --step STEP`. Then a plain `vision retry KEY` follows at the stored step for a ticket that is also paused or that waits for the person. For a paused ticket, Enter runs `vision retry KEY --step STEP`. A clone that stays behind the remote after the fetch gets a line that says how to fix it. After a failed step of the chain, the card reads the ticket again.
 
 In the log, Enter on a turn shows the events of that turn. Esc closes a pager, and then the view.
 
@@ -1364,7 +1403,7 @@ Each kind of thing has its card:
 - A write in the mode `ask`, or a held diff, shows what it sends. `y` approves it. In the mode `ask`, `a` approves it and moves its verb to the mode `auto`.
 - The first write of a verb in the mode `shadow` or `hold` shows the text that the mode kept back. `y` sends it and moves the verb to the mode `ask`. `a` sends it and moves the verb to the mode `auto`. `n` leaves it.
 - A rule that stopped a ticket shows its reason. `r` tries the step again, `o` opens the session, and `x` stops the ticket. On an act step, `r` runs the writes of the step again that are not done, and no agent starts.
-- A paused ticket takes Enter to continue.
+- A paused ticket takes Enter, which opens the continue card.
 - A proposal of the Curator takes Enter. The app then gives the terminal to `vision memory review --proposal NAME`.
 - A notice lists the issues that a passing gate qa found and that do not block, each with its id, its severity, and its title. Enter marks it read. A notice stays until the person reads it. It never stops a ticket, never marks the ticket as one that needs the person, and comes after each other thing that waits.
 
@@ -1394,7 +1433,7 @@ The wheel acts as the up and down arrows on the part under the pointer. One step
 
 A part that sends something or records a decision acts only on a second click. The first click arms the part. Its label says `click again`, and nothing else changes. A second click on the same part within 3 seconds acts as its key. A click elsewhere, a key, a paste, a step of the wheel, and the end of the 3 seconds take the arm away. The arm ends on the first message after its time, such as the tick of each second, so no fast loop runs for it. A typed key acts at once, as before. If a different thing replaces the card between the two clicks, the arm goes, so a second click never acts on a thing that the first click did not see.
 
-Enter arms on the cards that start, resume, stop, or retry a ticket, on the kill switch, on the quit card, and on the card after a session. On the open card, Enter and `o` arm. On the card of the things that wait, `a` of a plan, `y` and `a` of a write, `r` of a rule, and Enter of a paused ticket and of a notice arm. The send of the question form, the send of the line of `t`, and Enter and `u` of Models arm too.
+Enter arms on the cards that start, stop, or retry a ticket, on the continue card, on the kill switch, and on the quit card. On the open card, Enter and `o` arm. On the card of the things that wait, `a` of a plan, `y` and `a` of a write, `r` of a rule, and Enter of a notice arm. The send of the question form, the send of the line of `t`, and Enter and `u` of Models arm too.
 
 A card takes each click, and the parts of the screen under it do not act. A click outside each part does nothing. A click with Shift, Alt, or Ctrl does nothing. While a line is open, a key goes into the line. So the box of NOW and the mark `▲ N below` are no parts while the line of `t` is open. The keys card of `?` has three more lines: what a click does, which keys need two clicks, and how to select text.
 
@@ -1415,7 +1454,7 @@ The key `y` of a first write runs this chain:
 
 If the pass did not ask for the write yet, one more pass runs, up to three passes. The key `a` promotes up to the mode `auto`. Its last check reads that the write ran.
 
-While a turn runs, the card of `o` has a second `o`. It stops the turn with `vision stop` and gives the terminal to `vision open`. The turn that ran is lost, and its session keeps what the agent did. After the session, the card says that the ticket is stopped and paused. Enter continues it with `vision take` and then `vision retry`. The next turn then resumes the session of the person.
+While a turn runs, the card of `o` has a second `o`. It stops the turn with `vision stop` and gives the terminal to `vision open`. The turn that ran is lost, and its session keeps what the agent did. After the session, the card says that the ticket is stopped and paused, and Enter opens the continue card. The next turn then resumes the session of the person.
 
 `m` on Home opens Models. It has one row for each agent: its model, its effort, pinned or the default, and its measured turns with their mean cost. With more agents than fit above the box of the recommendation, the rows show a window that follows the selection. A mark above and a mark below the rows say how many agents are out of view. The left and right arrows change the model, and `e` changes the effort. Enter runs `vision model set`, and `u` runs `vision model reset`. A change that is not pinned has a mark, and Esc drops it. A change holds for the next turn of the agent, not for a turn that runs now.
 

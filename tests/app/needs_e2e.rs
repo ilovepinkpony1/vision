@@ -11,9 +11,10 @@
 //! - The first write of a verb in the mode shadow: `y` and `a`, with the same rows in the
 //!   ledger as the commands of today; a write whose arguments changed in the middle is not
 //!   approved; a mode that the person changed stops the chain; a failed step stops it.
-//! - The take over of a running turn: stop, the session, then take and retry; the next turn
-//!   resumes the session. A failed step says that the ticket is stopped and paused, and the
-//!   card of `n` continues it.
+//! - The take over of a running turn: stop, the session, then the continue card, whose read
+//!   runs the rules of the demo with one call of observe, and whose Enter runs take --step and
+//!   retry; the next turn resumes the session. A failed step says that the ticket is stopped
+//!   and paused, and the card of `n` continues it.
 //!
 //! A wrapper of the binary fails one command on purpose: the command whose marker file
 //! `fail-<command>` is in the home.
@@ -938,6 +939,39 @@ fn take_over(world: &World, rt: &mut Runtime) {
     );
 }
 
+/// Waits until the continue card read the ticket, and gives what the read found: the ticket is
+/// stopped and paused at refine, and no rule of the demo holds, because it has no pull request
+/// and its status is not Done. The stored step is selected.
+fn continue_read(rt: &mut Runtime) -> vision::app::model::ContinueView {
+    assert!(
+        rt.run_until(LIMIT, |app| matches!(
+            &app.card,
+            Some(Card::Continue(c)) if c.view.is_some()
+        )),
+        "the continue card never read the ticket: {:?}",
+        rt.app.card
+    );
+    let Some(Card::Continue(card)) = &rt.app.card else {
+        unreachable!()
+    };
+    let view = match card.view.clone() {
+        Some(Ok(view)) => view,
+        other => panic!("the read failed: {other:?}"),
+    };
+    assert_eq!(card.chosen(), Some("refine"));
+    assert_eq!(
+        (view.stored.as_str(), view.stopped, view.paused),
+        ("refine", true, true)
+    );
+    assert_eq!(
+        view.found,
+        Some(vision::pipeline::resume::Found::Nothing(
+            "no rule holds".into()
+        ))
+    );
+    view
+}
+
 /// The turns of refine after the take over: the last one resumes the session of the first.
 fn resumes_the_session(world: &World) {
     world.tick_until("a new turn of refine", LIMIT, |w| {
@@ -958,13 +992,31 @@ fn the_take_over_of_a_running_turn_ends_with_a_turn_that_resumes_the_session() {
     let mut rt = start(&world);
     take_over(&world, &mut rt);
     rt.handle(Msg::Key(Key::Enter));
+    continue_read(&mut rt);
+    rt.handle(Msg::Key(Key::Enter));
     wait_chain(&mut rt);
     assert_eq!(rt.app.chain, None, "{:?}", rt.app.chain);
     assert_eq!(
         notice(&rt.app),
-        "DEMO-12 goes on. Its next turn resumes the session that you worked in."
+        "DEMO-12 goes on at the step refine. Its next turn resumes the session that you worked in."
     );
     assert!(world.flags().is_empty(), "{:?}", world.flags());
+    // The take at the stored step wrote the event resumed with what the rules found.
+    let events = world.ledger().events_of_ticket(KEY).unwrap();
+    let resumed: Vec<Value> = events
+        .iter()
+        .filter(|e| e.kind == "resumed")
+        .map(|e| serde_json::from_str(e.detail.as_deref().unwrap()).unwrap())
+        .collect();
+    assert_eq!(resumed.len(), 1, "{events:?}");
+    assert_eq!(
+        (
+            &resumed[0]["step"],
+            &resumed[0]["suggestion"],
+            &resumed[0]["nothing"]
+        ),
+        (&json!("refine"), &Value::Null, &json!("no rule holds"))
+    );
     resumes_the_session(&world);
     world.settle();
 }
@@ -976,11 +1028,18 @@ fn a_failed_take_after_the_session_says_the_state_and_n_continues_the_ticket() {
     take_over(&world, &mut rt);
     std::fs::write(world.vision.join("fail-take"), "").unwrap();
     rt.handle(Msg::Key(Key::Enter));
+    continue_read(&mut rt);
+    rt.handle(Msg::Key(Key::Enter));
     wait_chain(&mut rt);
     let (text, state) = failure(&rt.app);
     assert_eq!(text, "the take failed in the test");
-    assert_eq!(state, "DEMO-12 is stopped and paused.");
+    assert_eq!(
+        state,
+        "DEMO-12 is still stopped and paused at the step refine."
+    );
     assert!(has_flag(&world, "stopped") && has_flag(&world, "paused"));
+    // The card reads the ticket again after the failure.
+    continue_read(&mut rt);
     std::fs::remove_file(world.vision.join("fail-take")).unwrap();
 
     // Esc keeps it stopped; the card of `n` continues it.
@@ -991,6 +1050,8 @@ fn a_failed_take_after_the_session_says_the_state_and_n_continues_the_ticket() {
         panic!("not the paused ticket: {:?}", shown(&rt.app));
     };
     assert!(flag.stopped);
+    rt.handle(Msg::Key(Key::Enter));
+    continue_read(&mut rt);
     rt.handle(Msg::Key(Key::Enter));
     wait_chain(&mut rt);
     assert_eq!(rt.app.chain, None, "{:?}", rt.app.chain);

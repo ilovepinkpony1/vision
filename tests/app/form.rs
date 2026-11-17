@@ -374,9 +374,77 @@ fn the_parts_that_a_click_can_hit_are_where_the_view_draws_them() {
     assert!(cell(x, y, 40).contains("Must the file have a header row?"));
 }
 
+/// The writer of a FIFO in a test. After its start, it opens the FIFO each time that a reader
+/// waits on it, and it closes the FIFO at once, so the reader reads the end of the file. It goes
+/// on until it drops, so a reader that comes late never waits for ever. A test declares it
+/// before a runtime: the runtime drops first, and the drop of the runtime waits for the reader
+/// of its drafts writer. [`super::fifo::Fifo`] waits in a blocking open, and the drafts writer
+/// removes the FIFO, so that open can wait for ever on a FIFO with no name. This writer polls
+/// with O_NONBLOCK instead.
+struct Opener {
+    fifo: std::path::PathBuf,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    first: Option<std::sync::mpsc::Receiver<std::time::Instant>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Opener {
+    fn new(fifo: &std::path::Path) -> Opener {
+        Opener {
+            fifo: fifo.to_path_buf(),
+            stop: Default::default(),
+            first: None,
+            thread: None,
+        }
+    }
+
+    /// Starts the writer: after `after`, it opens the FIFO each time that a reader waits on it.
+    fn start(&mut self, after: std::time::Duration) {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.first = Some(rx);
+        let (fifo, stop) = (self.fifo.clone(), self.stop.clone());
+        self.thread = Some(std::thread::spawn(move || {
+            let from = Instant::now() + after;
+            let mut first = Some(tx);
+            while !stop.load(Ordering::SeqCst) {
+                // An open for a write with O_NONBLOCK fails while no reader waits on the FIFO.
+                let open = (Instant::now() >= from).then(|| {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&fifo)
+                });
+                if let Some(Ok(file)) = open {
+                    drop(file);
+                    if let Some(tx) = first.take() {
+                        let _ = tx.send(Instant::now());
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }));
+    }
+
+    /// The time when the writer let the first reader go, after a wait of up to `limit`.
+    fn first(&self, limit: std::time::Duration) -> Option<std::time::Instant> {
+        self.first.as_ref()?.recv_timeout(limit).ok()
+    }
+}
+
+impl Drop for Opener {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 #[test]
 fn the_drafts_file_is_written_away_from_the_loop_and_a_load_of_the_card_waits_for_it() {
-    use std::os::unix::fs::OpenOptionsExt;
     use std::time::{Duration, Instant};
     use vision::app::runtime::Runtime;
     use vision::app::view::theme::ColorMode;
@@ -387,6 +455,16 @@ fn the_drafts_file_is_written_away_from_the_loop_and_a_load_of_the_card_waits_fo
     let paths = Paths::new(dir.path().join("home"));
     let ticket = TicketKey::parse("DEMO-12").unwrap();
     std::fs::create_dir_all(paths.ticket_dir(&ticket)).unwrap();
+    // The drafts file is a FIFO: its read waits for a writer. The writer lives longer than the
+    // runtime. Else a drafts writer that reads the FIFO after the end of the writer waits for
+    // ever, and so does the drop of the runtime, which waits for that drafts writer.
+    let drafts = vision::app::drafts::path(&paths, &ticket);
+    let made = std::process::Command::new("mkfifo")
+        .arg(&drafts)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let mut opener = Opener::new(&drafts);
     let worker = WorkerConfig {
         exe: "/usr/bin/true".into(),
         home: paths.home().to_path_buf(),
@@ -400,33 +478,8 @@ fn the_drafts_file_is_written_away_from_the_loop_and_a_load_of_the_card_waits_fo
         .pop()
         .expect("the send runs");
     rt.app = app;
-    // The drafts file is a FIFO: its read waits for a writer, which comes 2 seconds later.
-    let drafts = vision::app::drafts::path(&paths, &ticket);
-    let made = std::process::Command::new("mkfifo")
-        .arg(&drafts)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    let opener = {
-        let drafts = drafts.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(2));
-            let until = Instant::now() + Duration::from_secs(20);
-            loop {
-                let open = std::fs::OpenOptions::new()
-                    .write(true)
-                    .custom_flags(libc::O_NONBLOCK)
-                    .open(&drafts);
-                match open {
-                    Ok(_) => return Some(Instant::now()),
-                    Err(_) if Instant::now() < until => {
-                        std::thread::sleep(Duration::from_millis(10))
-                    }
-                    Err(_) => return None,
-                }
-            }
-        })
-    };
+    // The writer comes 2 seconds after the end of the send.
+    opener.start(Duration::from_secs(2));
     // The send ended well, so its drafts go from the file: the loop does not wait for it.
     let started = Instant::now();
     rt.handle(Msg::JobDone(JobDone {
@@ -454,8 +507,7 @@ fn the_drafts_file_is_written_away_from_the_loop_and_a_load_of_the_card_waits_fo
         }
     };
     let opened = opener
-        .join()
-        .unwrap()
+        .first(Duration::from_secs(20))
         .expect("nothing read the drafts file");
     let loaded = loaded.expect("the load of the card never ended");
     assert!(

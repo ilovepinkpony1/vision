@@ -299,9 +299,18 @@ pub fn live(
 ) -> App {
     let data = data_of(&tickets[0], &needs);
     let key = tickets[0].view.key.clone();
-    let mut app = home_with(size, local(tickets, needs), Some(queue()));
+    // Enter on a stopped or paused ticket opens the continue card, so Home holds the ticket
+    // with no such flag until the live view is open. The next local data gives the flags.
+    let mut first = tickets.clone();
+    first[0]
+        .view
+        .flags
+        .retain(|f| f.flag != "stopped" && f.flag != "paused");
+    first[0].stopped = false;
+    let mut app = home_with(size, local(first, needs.clone()), Some(queue()));
     send(&mut app, 2.0, Msg::Key(Key::Enter));
     assert!(matches!(&app.screen, vision::app::model::Screen::Live { key: k } if *k == key));
+    send(&mut app, 2.05, Msg::Local(Ok(local(tickets, needs))));
     send(
         &mut app,
         2.1,

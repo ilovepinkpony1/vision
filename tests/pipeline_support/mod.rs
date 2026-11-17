@@ -394,6 +394,17 @@ impl World {
 }
 
 /// Runs git in `dir` with no signing and no hooks, and gives its standard output.
+/// The text of an adapter with no `[[resume]]` table: a continue then runs no rule and no
+/// call of observe, as before the table existed.
+pub fn without_resume(text: String) -> String {
+    let mut doc: DocumentMut = text.parse().unwrap();
+    assert!(
+        doc.remove("resume").is_some(),
+        "the adapter has no [[resume]] table"
+    );
+    doc.to_string()
+}
+
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")

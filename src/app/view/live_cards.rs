@@ -35,7 +35,7 @@ pub fn stop(app: &App, card: &StopCard, c: &mut Canvas) {
     rows.blank();
     rows.text(
         3,
-        "Later, Enter on the stopped ticket starts it again at the same step.",
+        "Later, Enter on the stopped ticket opens the card that continues it.",
         ink(T.faint),
     );
     rows.blank();
@@ -172,9 +172,9 @@ pub fn open(app: &App, card: &OpenCard, c: &mut Canvas) {
     }
 }
 
-pub fn opened(app: &App, card: &OpenedCard, c: &mut Canvas) {
+pub fn opened(card: &OpenedCard, c: &mut Canvas) {
     if let Some(agent) = &card.took_over {
-        return took_over(app, card, agent, c);
+        return took_over(card, agent, c);
     }
     let mut rows = Rows::default();
     match (&card.error, card.code) {
@@ -192,29 +192,15 @@ pub fn opened(app: &App, card: &OpenedCard, c: &mut Canvas) {
     rows.para(
         3,
         &format!(
-            "{} stays paused until you continue it. Continue: Vision starts the step again, and the next turn resumes your session. Keep it paused: nothing moves until you press r.",
+            "{} stays paused until you continue it. Enter opens the card that continues it at its step, or at a step that you pick. At its step, the next turn resumes your session. Keep it paused: nothing moves until you continue it.",
             card.key
         ),
         68,
         ink(T.dim),
     );
     rows.blank();
-    match card.run {
-        crate::app::model::Run::Idle => {
-            rows.keys_with(
-                &[("enter", "continue"), ("esc", "keep it paused")],
-                &[Key::Enter],
-                app.armed_act(),
-            );
-        }
-        _ => action_rows(
-            app,
-            &mut rows,
-            &card.run,
-            "continue",
-            &format!("retries {}", card.key),
-        ),
-    }
+    // Enter only opens the continue card, whose Enter acts, so a click here acts at once.
+    rows.keys(&[("enter", "continue"), ("esc", "keep it paused")]);
     show(
         c,
         76,
@@ -226,7 +212,7 @@ pub fn opened(app: &App, card: &OpenedCard, c: &mut Canvas) {
 
 /// The card after a session that the person took over from a running turn: the ticket is
 /// stopped and paused.
-fn took_over(app: &App, card: &OpenedCard, agent: &str, c: &mut Canvas) {
+fn took_over(card: &OpenedCard, agent: &str, c: &mut Canvas) {
     let key = &card.key;
     let mut rows = Rows::default();
     match &card.error {
@@ -253,28 +239,14 @@ fn took_over(app: &App, card: &OpenedCard, agent: &str, c: &mut Canvas) {
     rows.para(
         3,
         &format!(
-            "Continue: Vision starts {key} again at its step, then clears the pause, so that the next turn of {agent} resumes the session. Keep it stopped: nothing moves until you press n and continue it there."
+            "Continue: Enter opens the card that continues {key} at its step, or at a step that you pick. At its step, the next turn of {agent} resumes the session. Keep it stopped: nothing moves until you continue it."
         ),
         68,
         ink(T.dim),
     );
     rows.blank();
-    match app.chain_of(&Owner::Continue(key.clone())) {
-        Some(chain) => {
-            chain_rows::rows(app, chain, &mut rows, 68, usize::MAX);
-            rows.blank();
-            if chain.running() {
-                rows.keys(&[("esc", "close this card; the action goes on")]);
-            } else {
-                rows.keys(&[("esc", "close")]);
-            }
-        }
-        None => rows.keys_with(
-            &[("enter", "continue"), ("esc", "keep it stopped")],
-            &[Key::Enter],
-            app.armed_act(),
-        ),
-    }
+    // Enter only opens the continue card, whose Enter acts, so a click here acts at once.
+    rows.keys(&[("enter", "continue"), ("esc", "keep it stopped")]);
     show(
         c,
         76,
@@ -294,8 +266,8 @@ pub fn help(c: &mut Canvas) {
         ("l  p  d", "the log, the plan, the commits to push"),
         ("", "Enter on a turn of the log shows its tool calls"),
         ("x", "stop the ticket"),
-        ("r", "start the step again, or continue"),
-        ("enter", "start a stopped ticket again"),
+        ("r", "start the step again, or continue at it"),
+        ("enter", "continue a stopped or paused ticket"),
         ("↑↓  j k", "scroll the activity"),
         ("pgup pgdn", "scroll the activity by a page"),
         ("G  end", "back to the end of the activity"),

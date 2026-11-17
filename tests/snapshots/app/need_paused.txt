@@ -13,13 +13,13 @@
  ╰───────│  You took over the session of DEMO-12.                                                   │───────╯
          │                                                                                          │
   READY T│  No new turn starts while the ticket is paused.                                          │n start
- ╭───────│  Continue starts the step build again, and the next turn of builder resumes the session  │───────╮
- │   DEMO│  that you worked in. It gets a note that you worked there.                               │ To Do │
- │   DEMO│                                                                                          │equest │
- ╰───────│  enter continue    esc later                                                             │───────╯
+ ╭───────│  Enter opens the card that continues it at the step build, or at a step that you pick.   │───────╮
+ │   DEMO│  At its step, the next turn of builder resumes the session that you worked in, with a    │ To Do │
+ │   DEMO│  note that you worked there.                                                             │equest │
+ ╰───────│                                                                                          │───────╯
+         │  enter continue    esc later                                                             │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

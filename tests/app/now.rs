@@ -642,11 +642,11 @@ fn cases() -> Vec<Case> {
     out.push(Case {
         kind: Kind::Stopped,
         tone: Tone::Rest,
-        short: "stopped · Enter starts it again",
+        short: "stopped · Enter continues it",
         title: "stopped",
         lines: &[
             "You stopped it at the step review. Its branch stays in its clone.",
-            "Press Enter to start it again.",
+            "Press Enter to continue it.",
         ],
         ..case("stopped", v, f)
     });
@@ -662,10 +662,10 @@ fn cases() -> Vec<Case> {
         kind: Kind::Paused,
         tone: Tone::Need,
         short: "paused · you took over its session",
-        title: "you took over its session",
+        title: "you work in its session",
         lines: &[
             "No new turn starts while you work in the session.",
-            "Press r to continue. The next turn resumes it.",
+            "Press Enter to continue. The next turn resumes it.",
         ],
         ..case("paused", v, f)
     });

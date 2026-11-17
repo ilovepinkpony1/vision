@@ -312,15 +312,15 @@ fn each_key_of_the_things_that_wait_that_decides_arms_on_the_first_click_and_act
         fx.contains(&Effect::OpenSession("DEMO-12".into())),
         "{fx:?}"
     );
-    // A paused ticket goes on, and a notice gets its mark of read.
-    for (item, hint) in [
-        (paused(false), "enter continue"),
-        (notice_item(false), "enter mark it read"),
-    ] {
-        let app = open_with(SIZE, vec![item]);
-        let (done, _) = two_clicks_are_key(&app, hint, "enter click again", Key::Enter);
-        assert!(started(&done).is_some(), "{hint}");
-    }
+    // A notice gets its mark of read.
+    let app = open_with(SIZE, vec![notice_item(false)]);
+    let (done, _) = two_clicks_are_key(&app, "enter mark it read", "enter click again", Key::Enter);
+    assert!(started(&done).is_some());
+    // Enter on a paused ticket only opens the continue card, so it acts on the first click.
+    let app = open_with(SIZE, vec![paused(false)]);
+    let (opened, fx) = click_is_key(&app, "enter continue", Key::Enter);
+    assert!(matches!(&opened.card, Some(Card::Continue(c)) if c.key == "DEMO-12"));
+    assert!(fx.contains(&Effect::LoadResume("DEMO-12".into())), "{fx:?}");
     // The review of a proposal only opens its session, so it acts on the first click.
     let review = open_with(SIZE, vec![proposal(false)]);
     let (reviewed, _) = click_is_key(&review, "enter review", Key::Enter);
@@ -673,6 +673,82 @@ fn a_click_selects_a_ticket_of_home_and_a_second_click_opens_it() {
         }
     );
     assert!(fx.contains(&Effect::LoadTicket("DEMO-7".into())));
+}
+
+#[test]
+fn a_click_and_the_wheel_select_a_step_of_the_continue_card_and_two_clicks_on_it_continue() {
+    let tickets = vec![stopped(
+        "DEMO-3",
+        "Rename the setting of the weekly email",
+        "review",
+    )];
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    send(&mut app, 2.0, Msg::Key(Key::Enter));
+    read_resume(
+        &mut app,
+        2.1,
+        "DEMO-3",
+        Ok(continue_view("DEMO-3", "review", Some("comments"), true)),
+    );
+    let chosen = |app: &App| match &app.card {
+        Some(Card::Continue(card)) => card.chosen().map(str::to_string),
+        other => panic!("no continue card: {other:?}"),
+    };
+    assert_eq!(chosen(&app).as_deref(), Some("comments"));
+    // A click on another step selects it and starts nothing.
+    let buf = draw(&mut app);
+    let fx = click(&mut app, 2.2, find(&buf, "ready-to-merge"));
+    assert!(jobs(&fx).is_empty(), "{fx:?}");
+    assert_eq!(chosen(&app).as_deref(), Some("ready-to-merge"));
+    assert_eq!(app.chain, None);
+    // A step of the wheel over the card moves the selection as an arrow does.
+    let buf = draw(&mut app);
+    mouse(&mut app, 2.3, MouseKind::WheelUp, find(&buf, "ci-review"));
+    assert_eq!(chosen(&app).as_deref(), Some("ci-review"));
+    // A click on the selected step acts as Enter: the first click arms, the second continues.
+    let buf = draw(&mut app);
+    let row = find(&buf, "ci-review");
+    let first = click(&mut app, 2.4, row);
+    assert!(jobs(&first).is_empty(), "{first:?}");
+    assert!(app.armed.is_some());
+    let buf = draw(&mut app);
+    assert!(
+        super::support::text(&buf).contains("enter click again"),
+        "{}",
+        super::support::text(&buf)
+    );
+    let second = click(&mut app, 2.5, row);
+    assert_eq!(
+        jobs(&second)
+            .into_iter()
+            .map(|job| job.kind)
+            .collect::<Vec<_>>(),
+        vec![JobKind::Action(Action::TakeAt {
+            key: "DEMO-3".into(),
+            step: "ci-review".into()
+        })]
+    );
+}
+
+#[test]
+fn a_click_on_v_of_the_continue_card_opens_the_live_view_as_the_key_does() {
+    let tickets = vec![stopped(
+        "DEMO-3",
+        "Rename the setting of the weekly email",
+        "review",
+    )];
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    send(&mut app, 2.0, Msg::Key(Key::Enter));
+    read_resume(
+        &mut app,
+        2.1,
+        "DEMO-3",
+        Ok(continue_view("DEMO-3", "review", Some("comments"), true)),
+    );
+    let (opened, fx) = click_is_key(&app, "v live view", Key::Char('v'));
+    assert_eq!(opened.card, None);
+    assert!(matches!(&opened.screen, Screen::Live { key } if key == "DEMO-3"));
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-3".into())), "{fx:?}");
 }
 
 #[test]

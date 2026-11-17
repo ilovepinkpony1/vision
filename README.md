@@ -105,8 +105,8 @@ The live view shows the path of the ticket, what happens now, and the work of th
 
 - `t` sends a line to the agent that works, or keeps it for the next turn.
 - `n` opens what waits for you on this ticket.
-- `o` opens the session of the last turn in this terminal. The ticket pauses. While a turn runs, `o` on its card stops the turn first. Press Enter afterwards to continue the ticket.
-- `x` stops the ticket. Enter starts a stopped ticket again.
+- `o` opens the session of the last turn in this terminal. The ticket pauses. While a turn runs, `o` on its card stops the turn first. Press Enter afterwards to open the continue card.
+- `x` stops the ticket. Enter on a stopped or paused ticket opens the continue card. Vision reads every fact first, such as the Jira status, the pull request, the review, CI, each env, and a push by hand. Then it suggests the step where the ticket really is. Work that you did by hand does not run again, and new work, such as a late comment, can send a tested ticket back. Take the suggestion or pick another step. `v` on the card opens the live view of the ticket.
 - `r` retries a ticket that waits for you.
 - `l` shows the log, `p` shows the plan, and `d` shows the commits that the forge does not have yet. In the log, Enter on a turn shows its tool calls.
 - The activity shows only the words of the agents and of Vision, with no line for a tool call. `f` and `F` switch its tab (All, Agents, Questions, Steps, Writes, Problems, You), and the digits 1 to 7 pick one.

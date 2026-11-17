@@ -11,13 +11,14 @@ use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::Terminal;
 use time::macros::datetime;
 use vision::app::hits::HitMap;
-use vision::app::model::{App, Clock, Held, Local, Setup, Week};
+use vision::app::model::{App, Clock, ContinueView, Held, Local, Setup, Week};
 use vision::app::msg::{ChildResult, Effect, JobDone, Msg};
 use vision::app::update::{start, update};
 use vision::app::view::{self, theme::ColorMode};
 use vision::ledger::LimitReading;
 use vision::pipeline::commands::PickRow;
 use vision::pipeline::facts::{StateFacts, TurnFact, WaitFacts};
+use vision::pipeline::resume::{Found, Head};
 use vision::pipeline::view::{FlagView, Marks, Works};
 use vision::pipeline::TicketView;
 use vision::snapshot::{LimitView, LimitsView, Need, NeedKind};
@@ -185,6 +186,73 @@ pub fn stopped(key: &str, title: &str, step: &str) -> Held {
         stopped: true,
         needs_you: false,
     }
+}
+
+/// The reason of the suggestion of [`continue_view`].
+pub const REASON: &str = "the pull request #7 is open and ready, and 2 review comments wait";
+
+/// What the read of the continue card gives for a ticket at the step `stored` of the demo:
+/// the steps with no end step, and the suggestion `suggest` of the rule 3, or no rule that
+/// holds. The ticket is stopped, else paused.
+pub fn continue_view(
+    key: &str,
+    stored: &str,
+    suggest: Option<&str>,
+    stopped: bool,
+) -> ContinueView {
+    ContinueView {
+        key: key.into(),
+        stored: stored.into(),
+        steps: STEPS
+            .iter()
+            .filter(|s| **s != "done")
+            .map(|s| s.to_string())
+            .collect(),
+        rules: true,
+        found: Some(match suggest {
+            Some(step) => Found::Step {
+                rule: 3,
+                step: step.into(),
+                reason: REASON.into(),
+                back: None,
+            },
+            None => Found::Nothing("no rule holds".into()),
+        }),
+        head: Head::None,
+        pr: Some(7),
+        clone: Some("~/clones/demo-1".into()),
+        stopped,
+        paused: !stopped,
+        needs_you: false,
+        facts: FACTS.iter().map(|f| f.to_string()).collect(),
+        back: None,
+    }
+}
+
+/// The facts of [`continue_view`] that Vision read, in words.
+pub const FACTS: [&str; 5] = [
+    "the tracker status is In Review",
+    "the pull request #7 is open and ready",
+    "the review state is comments and 2 review comments wait",
+    "CI is green at 3f2a1b4c5d6e",
+    "the branch of the clone is at the head of the pull request",
+];
+
+/// Hands the read of the continue card of `key` to the update.
+pub fn read_resume(
+    app: &mut App,
+    at: f64,
+    key: &str,
+    view: Result<ContinueView, String>,
+) -> Vec<Effect> {
+    send(
+        app,
+        at,
+        Msg::Resume {
+            key: key.into(),
+            view: Box::new(view),
+        },
+    )
 }
 
 pub fn limits() -> LimitsView {

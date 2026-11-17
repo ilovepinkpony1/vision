@@ -149,28 +149,195 @@ fn enter_on_a_ticket_that_cannot_start_shows_its_reason() {
 }
 
 #[test]
-fn enter_on_a_stopped_ticket_asks_to_resume_it_with_take() {
+fn enter_on_a_stopped_ticket_opens_the_continue_card_with_the_suggestion_selected() {
+    let tickets = vec![stopped("DEMO-3", "Rename a setting", "review")];
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    let fx = key(&mut app, 2.0, Key::Enter);
+    assert!(fx.contains(&Effect::LoadResume("DEMO-3".into())), "{fx:?}");
+    let Some(Card::Continue(card)) = &app.card else {
+        panic!("no continue card: {:?}", app.card);
+    };
+    assert_eq!(
+        (card.key.as_str(), card.stored.as_str(), card.view.is_none()),
+        ("DEMO-3", "review", true)
+    );
+    read_resume(
+        &mut app,
+        2.1,
+        "DEMO-3",
+        Ok(continue_view("DEMO-3", "review", Some("comments"), true)),
+    );
+    let Some(Card::Continue(card)) = &app.card else {
+        panic!()
+    };
+    assert_eq!(card.chosen(), Some("comments"));
+    let fx = key(&mut app, 2.2, Key::Enter);
+    assert_eq!(
+        runs(&fx),
+        vec![JobKind::Action(Action::TakeAt {
+            key: "DEMO-3".into(),
+            step: "comments".into()
+        })]
+    );
+    assert!(app.chain.as_ref().is_some_and(|c| c.running()));
+    assert!(matches!(app.card, Some(Card::Continue(_))));
+}
+
+/// Home with the continue card of the stopped DEMO-3 at review open, after its read.
+fn continue_open(
+    view: Result<vision::app::model::ContinueView, String>,
+) -> vision::app::model::App {
     let tickets = vec![stopped("DEMO-3", "Rename a setting", "review")];
     let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
     key(&mut app, 2.0, Key::Enter);
-    let Some(Card::Resume(card)) = &app.card else {
-        panic!("no resume card: {:?}", app.card);
-    };
-    assert_eq!(
-        (card.key.as_str(), card.step.as_str()),
-        ("DEMO-3", "review")
-    );
-    let fx = key(&mut app, 2.1, Key::Enter);
+    read_resume(&mut app, 2.1, "DEMO-3", view);
+    app
+}
+
+fn chosen(app: &vision::app::model::App) -> Option<String> {
+    match &app.card {
+        Some(Card::Continue(card)) => card.chosen().map(str::to_string),
+        other => panic!("no continue card: {other:?}"),
+    }
+}
+
+/// The actions of the chain that runs.
+fn chain_actions(app: &vision::app::model::App) -> Vec<Action> {
+    app.chain
+        .as_ref()
+        .map(|c| {
+            c.steps
+                .iter()
+                .filter_map(|s| match &s.work {
+                    vision::app::chain::Work::Act(action) => Some(action.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn the_continue_card_continues_at_a_step_that_the_arrows_pick_and_esc_leaves_the_ticket() {
+    let mut app = continue_open(Ok(continue_view(
+        "DEMO-3",
+        "review",
+        Some("comments"),
+        true,
+    )));
+    // Down, j, and k move the selection, and it stops at each end of the list.
+    key(&mut app, 2.2, Key::Down);
+    key(&mut app, 2.3, Key::Char('j'));
+    assert_eq!(chosen(&app).as_deref(), Some("ready-to-merge"));
+    key(&mut app, 2.4, Key::Char('j'));
+    assert_eq!(chosen(&app).as_deref(), Some("ready-to-merge"));
+    key(&mut app, 2.5, Key::Char('k'));
+    let fx = key(&mut app, 2.6, Key::Enter);
     assert_eq!(
         runs(&fx),
-        vec![JobKind::Action(Action::Take {
-            key: "DEMO-3".into()
+        vec![JobKind::Action(Action::TakeAt {
+            key: "DEMO-3".into(),
+            step: "ci-review".into()
         })]
     );
-    let Some(Card::Resume(card)) = &app.card else {
-        panic!()
-    };
-    assert!(matches!(card.run, Run::Running { .. }));
+    assert_eq!(
+        chain_actions(&app),
+        vec![Action::TakeAt {
+            key: "DEMO-3".into(),
+            step: "ci-review".into()
+        }],
+        "a move to another step clears each flag, so no retry follows"
+    );
+
+    // Esc closes the card, starts nothing, and the ticket stays as it is.
+    let mut app = continue_open(Ok(continue_view(
+        "DEMO-3",
+        "review",
+        Some("comments"),
+        true,
+    )));
+    let fx = key(&mut app, 2.2, Key::Esc);
+    assert!(runs(&fx).is_empty());
+    assert_eq!(app.card, None);
+    assert_eq!(app.chain, None);
+}
+
+#[test]
+fn v_on_the_continue_card_opens_the_live_view_of_the_ticket() {
+    // Also while the read runs: the card closes, and the live view of the ticket opens.
+    let tickets = vec![stopped("DEMO-3", "Rename a setting", "review")];
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    key(&mut app, 2.0, Key::Enter);
+    assert!(screen(&app).contains("v live view"), "{}", screen(&app));
+    let fx = key(&mut app, 2.1, Key::Char('v'));
+    assert_eq!(app.card, None);
+    assert_eq!(
+        app.screen,
+        Screen::Live {
+            key: "DEMO-3".into()
+        }
+    );
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-3".into())), "{fx:?}");
+    assert!(runs(&fx).is_empty());
+    // After the read too, and nothing starts.
+    let mut app = continue_open(Ok(continue_view(
+        "DEMO-3",
+        "review",
+        Some("comments"),
+        true,
+    )));
+    let fx = key(&mut app, 2.2, Key::Char('v'));
+    assert!(matches!(&app.screen, Screen::Live { key } if key == "DEMO-3"));
+    assert!(runs(&fx).is_empty());
+    assert_eq!(app.chain, None);
+}
+
+#[test]
+fn the_continue_card_selects_the_stored_step_when_the_rules_find_nothing_or_the_read_fails() {
+    // The observe failed: no suggestion, so the stored step is selected, and Enter continues
+    // there.
+    let mut failed = continue_view("DEMO-3", "review", None, true);
+    failed.found = Some(vision::pipeline::resume::Found::Failed(
+        "the forge did not answer".into(),
+    ));
+    let mut app = continue_open(Ok(failed));
+    assert_eq!(chosen(&app).as_deref(), Some("review"));
+    let fx = key(&mut app, 2.2, Key::Enter);
+    assert_eq!(
+        runs(&fx),
+        vec![JobKind::Action(Action::TakeAt {
+            key: "DEMO-3".into(),
+            step: "review".into()
+        })]
+    );
+
+    // A ticket with the flag needs-you of a rule at its stored step: the take keeps that flag,
+    // so a plain retry follows it.
+    let mut held = continue_view("DEMO-3", "review", None, true);
+    held.needs_you = true;
+    let mut app = continue_open(Ok(held));
+    key(&mut app, 2.2, Key::Enter);
+    assert_eq!(
+        chain_actions(&app),
+        vec![
+            Action::TakeAt {
+                key: "DEMO-3".into(),
+                step: "review".into()
+            },
+            Action::Retry {
+                key: "DEMO-3".into()
+            }
+        ]
+    );
+
+    // The read failed: the card says why, and Enter and the arrows do nothing.
+    let mut app = continue_open(Err("Vision has no ticket DEMO-3".into()));
+    assert_eq!(chosen(&app), None);
+    assert!(runs(&key(&mut app, 2.2, Key::Enter)).is_empty());
+    key(&mut app, 2.3, Key::Down);
+    assert_eq!(app.chain, None);
+    assert!(screen(&app)
+        .contains("Vision could not read where the ticket is: Vision has no ticket DEMO-3"));
 }
 
 #[test]

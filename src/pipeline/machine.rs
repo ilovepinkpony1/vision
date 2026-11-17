@@ -17,7 +17,9 @@ use super::decide::{
 };
 use super::docs::{self, result_documents};
 use super::gates;
-use super::state::{flags_of, flags_text, waits_on, Counts, FlagReason, Seen, WAITS_FOR_LIMIT};
+use super::state::{
+    flags_of, flags_text, waits_on, Counts, FlagReason, Interrupt, Seen, WAITS_FOR_LIMIT,
+};
 use crate::adapter::when::Holds;
 use crate::adapter::{self, Adapter, Entry, EntryKind, Expect, GateRule, Step, StepKind};
 use crate::ctx::Ctx;
@@ -940,9 +942,13 @@ fn observe_wait(
         })
     });
     ticket.counts.seen = Some(Seen::of(&facts, &at));
+    // The interrupts of the step, from the same answer: one that fires moves the ticket before
+    // the watched value counts.
+    let interrupt = Interrupt::first(wait, &facts);
     if let Some(visit) = ticket.counts.visit.as_mut() {
         visit.observed = Some(at.clone());
         visit.watched = watched.clone();
+        visit.interrupt = interrupt;
     }
     // The CI facts of each observe answer, whatever the step watches: a run that ended is one
     // check row for its commit and its result.
@@ -1604,6 +1610,15 @@ pub(crate) fn gather(
             start: op_facts(ctx, ledger, ticket, &step.start, None)?,
             watch: wait.watch.clone(),
             watched: visit.watched.clone(),
+            interrupt: visit.interrupt.clone().map(|hit| {
+                // The event of the move names the interrupt.
+                branch = Some(Branch {
+                    to: hit.to.clone(),
+                    how: hit.how(),
+                    detail: Some(json!({"interrupt": hit.path, "value": hit.value})),
+                });
+                (hit.to.clone(), hit.how())
+            }),
             target: wait_target(&step.on, visit.watched.as_deref()),
             waits: wait.wait.clone(),
             limit: wait.limit,
@@ -2169,6 +2184,7 @@ pub fn set_flag(pass: &mut Pass, set: &FlagSet) -> Result<()> {
         FlagReason {
             reason: set.reason.clone(),
             at: now.clone(),
+            by: None,
         },
     );
     save(

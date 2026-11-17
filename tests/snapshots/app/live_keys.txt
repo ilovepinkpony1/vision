@@ -11,8 +11,8 @@
  ○ fix-ci           │  l  p  d      the log, the plan, the commits to push               │emory             1
  ○ ready            │               Enter on a turn of the log shows its tool calls      │he Judge          0
  ○ comments         │  x            stop the ticket                                      │
- ○ ci-review        │  r            start the step again, or continue                    │S
- ○ ready-to-merge   │  enter        start a stopped ticket again                         │          3f2a1b4 ✓
+ ○ ci-review        │  r            start the step again, or continue at it              │S
+ ○ ready-to-merge   │  enter        continue a stopped or paused ticket                  │          3f2a1b4 ✓
  ○ done             │  ↑↓  j k      scroll the activity                                  │f                 -
                     │  pgup pgdn    scroll the activity by a page                        │                  -
  TEAM               │  G  end       back to the end of the activity                      │                  -

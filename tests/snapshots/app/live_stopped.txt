@@ -4,7 +4,7 @@
  ✓ refine          4m $0.21│   ▀▀▀▀▀▀▀  stopped                                     │ cost              $1.03
  ✓ plan            9m $0.88│   ▀▀▀▀▀▀▀  You stopped it at the step review. Its      │ time                38m
  ✓ plan-ready      2m      │   ▀▀▀▀▀▀▀  branch stays in its clone.                  │ turns                 3
- ✓ build                   │   ▀▀▀▀▀▀▀  Press Enter to start it again.              │ commits    none to push
+ ✓ build                   │   ▀▀▀▀▀▀▀  Press Enter to continue it.                 │ commits    none to push
  ◉ review           stopped│                                                        │
  ○ open-pr                 │ ACTIVITY ───────────────────────────────────────────── │ QUESTIONS
  ○ ci                      │ All 13  Agents 7  Questions 0  Steps 3  Writes 1     › │ to you                0
@@ -28,5 +28,5 @@
                            │                                                        │
                            │                                                        │
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
- enter resume   t tell the next turn   esc home   l log and tool calls   f filter   p plan   ? keys
+ enter continue   t tell the next turn   esc home   l log and tool calls   f filter   p plan   ? keys
 

@@ -312,6 +312,20 @@ impl Runtime {
                         },
                     );
                 }
+                Effect::LoadResume(key) => {
+                    let paths = self.paths.clone();
+                    let failed = key.clone();
+                    self.spawn(
+                        move || Msg::Resume {
+                            view: Box::new(load::resume(&paths, &key)),
+                            key,
+                        },
+                        move |e| Msg::Resume {
+                            key: failed.clone(),
+                            view: Box::new(Err(e)),
+                        },
+                    );
+                }
                 Effect::LoadTicket(key) => {
                     let fresh = !self
                         .app

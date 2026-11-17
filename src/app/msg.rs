@@ -6,7 +6,7 @@
 use super::chain::{Check, CheckFacts};
 use super::feed::{Batch, StreamLine};
 use super::live::TicketData;
-use super::model::{Local, Setup, SetupError, StartInfo};
+use super::model::{ContinueView, Local, Setup, SetupError, StartInfo};
 use super::model_table::ModelLine;
 use super::needs::{Draft, NeedItem};
 use super::picture::Picture;
@@ -79,6 +79,11 @@ pub enum Msg {
     StartInfo {
         key: String,
         info: Result<StartInfo, String>,
+    },
+    /// What the continue card shows for a stopped or paused ticket: what the rules found.
+    Resume {
+        key: String,
+        view: Box<Result<ContinueView, String>>,
     },
     /// The data of the live view of a ticket.
     Ticket {
@@ -156,6 +161,8 @@ pub enum Effect {
     LoadLocal,
     LoadQueue,
     LoadStartInfo(String),
+    /// Read what the continue card shows for a ticket: the call of observe of its rules.
+    LoadResume(String),
     /// Load the data of the live view of a ticket.
     LoadTicket(String),
     /// Follow the stream files of a ticket in a thread, or stop that thread with `None`.
@@ -222,6 +229,8 @@ pub enum JobKind {
 pub enum Action {
     /// `vision take KEY`: start a ticket, or start a stopped ticket again.
     Take { key: String },
+    /// `vision take KEY --step STEP`: continue a stopped ticket at a step.
+    TakeAt { key: String, step: String },
     /// `vision off`: the kill switch.
     Off,
     /// `vision on`.
@@ -230,6 +239,8 @@ pub enum Action {
     Stop { key: String },
     /// `vision retry KEY`.
     Retry { key: String },
+    /// `vision retry KEY --step STEP`: continue a paused ticket at a step.
+    RetryAt { key: String, step: String },
     /// `vision tell KEY -- TEXT`.
     Tell { key: String, text: String },
     /// `vision answer ID --choice N | --text=T | --needless WHERE [--why=W]`.
@@ -289,10 +300,16 @@ impl Action {
     pub fn args(&self) -> Vec<String> {
         match self {
             Action::Take { key } => vec!["take".into(), key.clone()],
+            Action::TakeAt { key, step } => {
+                vec!["take".into(), key.clone(), "--step".into(), step.clone()]
+            }
             Action::Off => vec!["off".into()],
             Action::On => vec!["on".into()],
             Action::Stop { key } => vec!["stop".into(), key.clone()],
             Action::Retry { key } => vec!["retry".into(), key.clone()],
+            Action::RetryAt { key, step } => {
+                vec!["retry".into(), key.clone(), "--step".into(), step.clone()]
+            }
             // `--` keeps a text that starts with `-` from looking like an option.
             Action::Tell { key, text } => {
                 vec!["tell".into(), key.clone(), "--".into(), text.clone()]
@@ -353,6 +370,9 @@ impl Action {
     pub fn label(&self) -> String {
         match self {
             Action::Take { key } => format!("The take of {key}"),
+            Action::TakeAt { key, step } | Action::RetryAt { key, step } => {
+                format!("The continue of {key} at {step}")
+            }
             Action::Off => "The kill switch".into(),
             Action::On => "The switch on".into(),
             Action::Stop { key } => format!("The stop of {key}"),

@@ -32,6 +32,14 @@
 # other value, or a longer wait, needs the person. At a commit where CI already ran, ci.run of
 # ci-review is the operation of that commit, so it runs no second time.
 #
+# The [[resume]] rules after the steps find where a stopped or paused ticket is when the person
+# continues it, from one call of observe and the head of the pull request: `bin/world merge`
+# merges the pull request and sets the status Done, `bin/world status` sets a status,
+# `bin/world request-changes` asks for changes, and `bin/world ready` marks the pull request
+# ready. Vision suggests the step of the first rule that applies: its step comes after the
+# stored step, or the rule has back = true. The person takes it or picks another step. The
+# comment block of adapters/jira-github/adapter.toml explains the rules.
+#
 # Each write verb is in the mode auto, so no write waits for the person. `vision demote VERB`
 # moves a verb down the ladder, such as to the mode ask.
 
@@ -156,6 +164,35 @@ every = 60
 [[step]]
 id = "done"
 kind = "end"
+
+# The rules of a continue: the first rule that applies wins, and Vision only suggests its step.
+# The comment block of adapters/jira-github/adapter.toml explains them.
+
+[[resume]]                    # the pull request is merged
+when = { "pr.merged" = true }
+step = "done"
+
+[[resume]]                    # the status of the ticket is Done, such as after a merge by hand
+when = { tracker_status = "Done" }
+step = "done"
+
+[[resume]]                    # a reviewer asks for changes, also after CI of the review
+when = { "pr.changes_requested" = true, "pr.closed" = false }
+step = "comments"
+back = true
+
+[[resume]]                    # a push by hand: CI at the new head
+when = { "head.state" = "forward", "pr.closed" = false }
+step = "ci-review"
+back = true
+
+[[resume]]                    # the pull request is open and ready
+when = { "pr.draft" = false, "pr.closed" = false }
+step = "comments"
+
+[[resume]]                    # the pull request is open and still a draft
+when = { "pr.draft" = true, "pr.closed" = false }
+step = "ci"
 
 [verbs."tracker.describe"]
 mode = "auto"

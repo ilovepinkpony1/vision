@@ -12,14 +12,14 @@
  ○ ready         │                                                                          │Judge          0
  ○ comments      │  You left the session.                                                   │
  ○ ci-review     │                                                                          │
- ○ ready-to-merge│  DEMO-12 stays paused until you continue it. Continue: Vision starts     │       3f2a1b4 ✓
- ○ done          │  the step again, and the next turn resumes your session. Keep it         │               -
-                 │  paused: nothing moves until you press r.                                │               -
- TEAM            │                                                                          │               -
- ✓ scout     fabl│  enter continue    esc keep it paused                                    │
- ✓ builder   opus│                                                                          │
- · reviewer  opus╰──────────────────────────────────────────────────────────────────────────╯━━━━━━ 31% of 60
- · tester    opus-5-5 high │ 14:24:20 says  The export writes each row by hand. I   │    resets at 18:00
+ ○ ready-to-merge│  DEMO-12 stays paused until you continue it. Enter opens the card        │       3f2a1b4 ✓
+ ○ done          │  that continues it at its step, or at a step that you pick. At its       │               -
+                 │  step, the next turn resumes your session. Keep it paused: nothing       │               -
+ TEAM            │  moves until you continue it.                                            │               -
+ ✓ scout     fabl│                                                                          │
+ ✓ builder   opus│  enter continue    esc keep it paused                                    │
+ · reviewer  opus│                                                                          │━━━━━━ 31% of 60
+ · tester    opus╰──────────────────────────────────────────────────────────────────────────╯ts at 18:00
  · shepherd  opus-5-5 high │                add a CSV writer and keep the order of  │ 7d ━━━━━━━━━━ 71% of 85
  · judge     fable-5-2 high│                the columns that the plan names.        │
  · curator   fable-5-2 high│ 14:25:03 says  3 tests pass. I add a test for an empty │ ENGINE

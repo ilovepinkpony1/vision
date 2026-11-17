@@ -5,7 +5,7 @@
 #   review:    a commit of the lead -> review-lanes (a fresh look at the new head)
 #              no commit            -> open-pr
 #   open-pr:   an act step, with no turn: git.push, then pr.open -> ci
-#   ci and the rest: as in the demo
+#   ci and the rest: as in the demo, also the [[resume]] rules of a continue
 #
 # The commits of the build and of the lead stay in the clone until open-pr: nothing leaves the
 # machine before the review ends with no commit.
@@ -191,6 +191,35 @@ every = 60
 [[step]]
 id = "done"
 kind = "end"
+
+# The rules of a continue: the first rule that applies wins, and Vision only suggests its step.
+# The comment block of adapters/jira-github/adapter.toml explains them.
+
+[[resume]]                    # the pull request is merged
+when = { "pr.merged" = true }
+step = "done"
+
+[[resume]]                    # the status of the ticket is Done, such as after a merge by hand
+when = { tracker_status = "Done" }
+step = "done"
+
+[[resume]]                    # a reviewer asks for changes, also after CI of the review
+when = { "pr.changes_requested" = true, "pr.closed" = false }
+step = "comments"
+back = true
+
+[[resume]]                    # a push by hand: CI at the new head
+when = { "head.state" = "forward", "pr.closed" = false }
+step = "ci-review"
+back = true
+
+[[resume]]                    # the pull request is open and ready
+when = { "pr.draft" = false, "pr.closed" = false }
+step = "comments"
+
+[[resume]]                    # the pull request is open and still a draft
+when = { "pr.draft" = true, "pr.closed" = false }
+step = "ci"
 
 [verbs."tracker.describe"]
 mode = "auto"

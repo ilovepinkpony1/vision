@@ -6,20 +6,19 @@
 //! - The first write of a verb in the mode shadow or hold (`mWrite`): `y` sends it and asks
 //!   each time, `a` sends it and never asks again, `n` leaves it as it is.
 //! - A rule that stopped the ticket: `r` tries the step again, `o` opens the session, `x` stops
-//!   the ticket. When the ticket is also stopped, Enter opens the card that starts it again.
-//! - A paused ticket: Enter or `r` continues it; a ticket that is also stopped gets the take
-//!   first.
+//!   the ticket. When the ticket is also stopped, Enter opens the continue card.
+//! - A paused ticket: Enter opens the continue card. On a ticket that is not also stopped, `r`
+//!   continues it at its step with a plain retry, which runs no rule.
 //! - A proposal of the Curator: Enter opens its review in the terminal.
 //! - A notice of a gate: Enter marks it read.
 
-use super::super::chain::Owner;
-use super::super::model::{App, Card, OpenCard, ResumeCard, Run, StopCard, Tone};
-use super::super::msg::Key;
+use super::super::model::{App, Card, OpenCard, Run, StopCard, Tone};
+use super::super::msg::{Effect, Key};
 use super::super::needs::{FlagItem, NeedItem};
 use super::super::recipes;
-use super::{chain, notice};
+use super::{chain, notice, resume};
 
-pub fn on_key(app: &mut App, item: &NeedItem, key: Key) {
+pub fn on_key(app: &mut App, item: &NeedItem, key: Key, fx: &mut Vec<Effect>) {
     let id = app.seq + 1;
     let started = match (item, key) {
         (NeedItem::Plan(plan), Key::Char('a')) => Some(recipes::approve_plan(id, plan)),
@@ -43,7 +42,7 @@ pub fn on_key(app: &mut App, item: &NeedItem, key: Key) {
             None
         }
         (NeedItem::Flag(flag), Key::Enter) if flag.stopped => {
-            resume_card(app, flag);
+            continue_card(app, flag, fx);
             None
         }
         (NeedItem::Flag(flag), Key::Char('r')) if !flag.stopped => {
@@ -57,12 +56,11 @@ pub fn on_key(app: &mut App, item: &NeedItem, key: Key) {
             stop_card(app, &flag.ticket, &flag.step, flag.branch.clone());
             None
         }
-        // A ticket that the person took over is stopped and paused: the take, then the retry.
-        (NeedItem::Paused(flag), Key::Enter | Key::Char('r')) if flag.stopped => {
-            let owner = Owner::Need(item.id());
-            Some(recipes::continue_after(id, &flag.ticket, true, owner))
+        (NeedItem::Paused(flag), Key::Enter) => {
+            continue_card(app, flag, fx);
+            None
         }
-        (NeedItem::Paused(flag), Key::Enter | Key::Char('r')) => {
+        (NeedItem::Paused(flag), Key::Char('r')) if !flag.stopped => {
             Some(recipes::retry(id, flag, true))
         }
         (NeedItem::Proposal(proposal), Key::Enter) => Some(recipes::review(id, proposal)),
@@ -87,23 +85,13 @@ fn stop_card(app: &mut App, key: &str, step: &str, branch: Option<String>) {
     }));
 }
 
-/// The card of part A1 that starts a stopped ticket again.
-fn resume_card(app: &mut App, flag: &FlagItem) {
+/// The continue card of a stopped or paused ticket.
+fn continue_card(app: &mut App, flag: &FlagItem, fx: &mut Vec<Effect>) {
     let title = app
         .held_ticket(&flag.ticket)
         .map(|h| app.title_of(h).to_string())
         .unwrap_or_default();
-    let clone = app
-        .held_ticket(&flag.ticket)
-        .and_then(|h| h.view.clone.clone());
-    app.card = Some(Card::Resume(ResumeCard {
-        key: flag.ticket.clone(),
-        title,
-        step: flag.step.clone(),
-        clone,
-        branch: flag.branch.clone(),
-        run: Run::Idle,
-    }));
+    resume::open(app, &flag.ticket, &title, &flag.step, flag.stopped, fx);
 }
 
 /// The card of part A2 that opens the session of the last turn.

@@ -389,7 +389,7 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             ask_quit(app, fx);
         }
         _ if runs => {}
-        _ => item_key(app, key),
+        _ => item_key(app, key, fx),
     }
 }
 
@@ -412,13 +412,13 @@ pub fn click(app: &mut App, target: Target) {
 }
 
 /// A key for the item that shows.
-fn item_key(app: &mut App, key: Key) {
+fn item_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
     let Some(item) = card(app).and_then(|c| c.item().cloned()) else {
         return;
     };
     match &item {
         NeedItem::Questions(set) => ask::on_key(app, set, key),
-        other => act::on_key(app, other, key),
+        other => act::on_key(app, other, key, fx),
     }
 }
 

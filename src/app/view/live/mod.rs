@@ -78,13 +78,11 @@ fn footer(data: &TicketData, now: &Now, room: i32) -> Vec<(&'static str, String)
     let stopped = now.kind == Kind::Stopped;
     let mut list: Vec<(&'static str, String)> = Vec::new();
     let mut add = |key: &'static str, label: &str| list.push((key, label.to_string()));
-    if stopped {
-        add("enter", "resume");
+    if stopped || has(PAUSED) {
+        add("enter", "continue");
     }
     if has(NEEDS_YOU) {
         add("r", "retry");
-    } else if has(PAUSED) {
-        add("r", "continue");
     }
     if !data.needs.is_empty() {
         add("n", &format!("needs ({})", data.needs.len()));
@@ -229,8 +227,8 @@ mod tests {
             ("?", "keys"),
         ]);
         let stopped = list(&[
-            ("enter", "resume"),
-            ("r", "continue"),
+            ("enter", "continue"),
+            ("r", "retry"),
             ("n", "needs (12)"),
             ("t", "tell the next turn"),
             ("esc", "home"),

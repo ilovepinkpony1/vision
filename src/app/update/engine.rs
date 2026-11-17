@@ -168,11 +168,9 @@ pub fn dispatch(app: &mut App, fx: &mut Vec<Effect>) {
 fn card_run(app: &mut App, job: u64) -> Option<&mut Run> {
     let run = match app.card.as_mut()? {
         Card::Start(card) => &mut card.run,
-        Card::Resume(card) => &mut card.run,
         Card::Kill(card) => &mut card.run,
         Card::Stop(card) => &mut card.run,
         Card::Retry(card) => &mut card.run,
-        Card::Opened(card) => &mut card.run,
         _ => return None,
     };
     (run.job() == Some(job)).then_some(run)
@@ -286,7 +284,7 @@ fn action_done(
         Action::On => notice(app, "Vision is on. The next pass acts again.", Tone::Ok),
         Action::Stop { key } => notice(
             app,
-            format!("Stopped {key}. Its branch stays in its clone. Press Enter to start it again."),
+            format!("Stopped {key}. Its branch stays in its clone. Press Enter to continue it."),
             Tone::Ok,
         ),
         Action::Retry { key } => {
@@ -299,7 +297,9 @@ fn action_done(
         }
         Action::Tell { key, .. } => super::tell::told(app, key, result),
         // A chain runs these and shows their end on its card.
-        Action::Answer { .. }
+        Action::TakeAt { .. }
+        | Action::RetryAt { .. }
+        | Action::Answer { .. }
         | Action::AnswerSet { .. }
         | Action::ApprovePlan { .. }
         | Action::Approve { .. }

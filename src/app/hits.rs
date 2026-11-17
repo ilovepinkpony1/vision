@@ -43,6 +43,9 @@ pub enum Act {
     Agent(usize),
     /// A row of the log, by its index, in the same way.
     Line(usize),
+    /// A step of the continue card, by its index: the first click selects it. The selected
+    /// step is a part that continues the ticket, as Enter does, so it arms first.
+    Pick(usize),
     /// A part of the question form.
     Form(Target),
     /// A tab of the activity.
@@ -74,7 +77,7 @@ pub struct Armed {
 pub fn card_place(card: &Card) -> String {
     match card {
         Card::Start(c) => format!("start {}", c.key),
-        Card::Resume(c) => format!("resume {}", c.key),
+        Card::Continue(c) => format!("continue {}", c.key),
         Card::Kill(c) => format!("kill {}", c.turn_on),
         Card::Quit => "quit".into(),
         Card::Help => "help".into(),

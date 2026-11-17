@@ -70,6 +70,7 @@ fn run(app: &mut App, act: Act, fx: &mut Vec<Effect>) {
         Act::Ticket(key) => super::home::click_row(app, &key, fx),
         Act::Agent(i) => super::models::click_row(app, i),
         Act::Line(i) => super::pager::click_line(app, i, fx),
+        Act::Pick(i) => super::resume::click_pick(app, i),
         Act::Form(target) => super::needs::click(app, target),
         Act::Tab(filter) => super::live::click_tab(app, filter),
     }
@@ -85,7 +86,8 @@ pub fn disarm(app: &mut App) {
 
 /// What the up and down arrows move under a part that scrolls: the selection of Home and of
 /// Models, the end of a chain that Models shows, the scroll of the activity and of the pager on
-/// top, and the scroll and the row of the card of the things that wait.
+/// top, the scroll and the row of the card of the things that wait, and the step of the
+/// continue card.
 #[derive(PartialEq)]
 struct Place {
     home: Option<String>,
@@ -108,6 +110,7 @@ fn place(app: &App) -> Place {
             .map(|p| (p.top, p.cursor)),
         card: match &app.card {
             Some(Card::Need(card)) => Some((card.scroll, card.row)),
+            Some(Card::Continue(card)) => Some((card.selected, 0)),
             _ => None,
         },
     }

@@ -91,11 +91,11 @@ pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     if item.stopped {
         body.para(
             3,
-            &format!("{key} is also stopped. Enter opens the card that starts it again at the same step."),
+            &format!("{key} is also stopped. Enter opens the card that continues it at the step {step}, or at a step that you pick."),
             TEXT,
             ink(T.dim),
         );
-        foot.keys(&[("enter", "start it again"), ("esc", "later")]);
+        foot.keys(&[("enter", "continue"), ("esc", "later")]);
     } else {
         let agent = item.agent.as_deref().unwrap_or("its agent");
         let retry = if item.act {
@@ -135,7 +135,7 @@ pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     }
 }
 
-pub(super) fn paused(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
+pub(super) fn paused(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     let key = &item.ticket;
     let agent = item.agent.as_deref().unwrap_or("the agent");
     let mut body = Rows::default();
@@ -152,17 +152,14 @@ pub(super) fn paused(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
         ink(T.dim),
     );
     let what = if item.stopped {
-        format!("{key} is also stopped. Continue starts it again at the step {}, then clears the pause. The next turn of {agent} resumes the session that you worked in.", item.step)
+        format!("{key} is also stopped. Enter opens the card that continues it at the step {}, or at a step that you pick. At its step, the next turn of {agent} resumes the session that you worked in.", item.step)
     } else {
-        format!("Continue starts the step {} again, and the next turn of {agent} resumes the session that you worked in. It gets a note that you worked there.", item.step)
+        format!("Enter opens the card that continues it at the step {}, or at a step that you pick. At its step, the next turn of {agent} resumes the session that you worked in, with a note that you worked there.", item.step)
     };
     body.para(3, &what, TEXT, ink(T.dim));
     let mut foot = Rows::default();
-    foot.keys_with(
-        &[("enter", "continue"), ("esc", "later")],
-        &[Key::Enter],
-        app.armed_act(),
-    );
+    // Enter only opens the continue card, whose Enter acts, so a click here acts at once.
+    foot.keys(&[("enter", "continue"), ("esc", "later")]);
     Parts {
         title: "you took over its session".into(),
         body,

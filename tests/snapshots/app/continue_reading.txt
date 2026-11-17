@@ -1,0 +1,32 @@
+ ◆ VISION                                                   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  IN PROGRESS                                           1 ticket · Vision moves it while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-3    Rename the setting of the weekly email                                         $2.50   5h 0m │
+ │             ●━●━●━●━◉─○─○─○─○─○─○─○─○  review · stopped · Enter continues it                             │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  READY TO START                                                              from the tracker · 1 can start
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │   DEMO-15 ╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮     To Do │
+ │   DEMO-9  │                                                                                  │ll request │
+ ╰───────────│  Rename the setting of the weekly email                                          │───────────╯
+             │                                                                                  │
+             │  DEMO-3 is stopped at the step review.                                           │
+             │  ⠹ Vision checks the tracker and the pull request                                │
+             │                                                                                  │
+             │  esc cancel    v live view                                                       │
+             │                                                                                  │
+             ╰──────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+

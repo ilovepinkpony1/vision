@@ -74,9 +74,46 @@ pub struct Adapter {
     /// `[agents.<name>]`: the agents that the adapter defines, by name. A step can name one of
     /// them as it names an agent of Vision.
     pub agents: BTreeMap<String, AdapterAgent>,
+    /// `[[resume]]`: the rules that suggest where a ticket that comes back to the person goes
+    /// on, in the order of the file. Empty: the adapter suggests nothing, and a continue makes
+    /// no call of observe.
+    pub resume: Vec<ResumeRule>,
     /// Where [`super::load`] found the folder. `None` for a parsed text.
     pub origin: Option<Origin>,
 }
+
+/// One `[[resume]]` rule: when each fact of `when` holds, a ticket that comes back to the
+/// person can go on at `step`. The search reads the rules in order (see the resume module of
+/// the pipeline).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResumeRule {
+    /// A path into the answer of observe, as `watch` of a wait step reads it, such as
+    /// `pr.draft`, or [`HEAD_STATE`] -> the values that match, as text. A boolean is `true` or
+    /// `false`.
+    pub when: BTreeMap<String, Vec<String>>,
+    /// The step where the ticket goes on, such as `in-review`.
+    pub step: String,
+    /// `back = true`: the rule can also suggest a step that does not come after the stored
+    /// step, a move back. Without it, such a rule does not apply, and the search reads on.
+    pub back: bool,
+}
+
+/// The fact of a `[[resume]]` rule that observe does not give: the head of the open pull
+/// request against the branch of the clone, after a fetch.
+pub const HEAD_STATE: &str = "head.state";
+
+/// The values of [`HEAD_STATE`].
+pub const HEAD_STATES: [&str; 9] = [
+    "none",
+    "same",
+    "forward",
+    "ahead",
+    "behind",
+    "apart",
+    "dirty",
+    "elsewhere",
+    "unread",
+];
 
 /// One agent that the adapter defines in `[agents.<name>]`: its role file, its model, and the
 /// program of its turns. The configuration of the person (`[agents.<name>]` of config.toml)
@@ -404,6 +441,10 @@ pub struct WaitStep {
     /// `from`: a local time of day. The visit does nothing before the first moment with that
     /// time after its entry: no start verb and no look. `None`: it starts at once.
     pub from: Option<LocalTime>,
+    /// `interrupt`: a path of observe -> a value of that path -> the step where the ticket
+    /// goes. Each look reads the interrupts before `watch`, from the same answer, and the
+    /// paths in their sorted order: the first value that names a step moves the ticket there.
+    pub interrupt: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// A time of day in the time zone of the machine, such as `09:00`.
@@ -857,9 +898,9 @@ impl Problems {
     }
 }
 
-const TOP_KEYS: [&str; 11] = [
+const TOP_KEYS: [&str; 12] = [
     "name", "branch", "base", "scripts", "step", "verbs", "jobs", "envs", "kinds", "width",
-    "agents",
+    "agents", "resume",
 ];
 
 fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapter {
@@ -907,6 +948,7 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
     let kinds = parse_kinds(table.remove("kinds"), problems);
     let width = parse_width(table.remove("width"), problems);
     let agents = parse_agents(table.remove("agents"), problems);
+    let resume = parse_resume(table.remove("resume"), problems);
     let steps = parse_steps(table.remove("step"), problems);
     for key in table.keys() {
         problems.add(
@@ -931,13 +973,183 @@ fn parse_table(table: &mut Table, dir: &Path, problems: &mut Problems) -> Adapte
         kinds,
         width,
         agents,
+        resume,
         origin: None,
     };
     check_links(&adapter, problems);
     check_when(&adapter, problems);
     check_teams(&adapter, problems);
     check_agent_uses(&adapter, problems);
+    check_resume(&adapter, problems);
     adapter
+}
+
+/// The name of a `[[resume]]` rule in a problem, such as `resume rule 2`.
+fn resume_at(index: usize) -> String {
+    format!("resume rule {}", index + 1)
+}
+
+/// `[[resume]]`: each rule has a `when` with one fact or more, a `step`, and can have `back`.
+/// The steps are tested in [`check_resume`], after the steps are read.
+fn parse_resume(value: Option<toml::Value>, problems: &mut Problems) -> Vec<ResumeRule> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let toml::Value::Array(items) = value else {
+        problems.add(
+            "[[resume]]",
+            "`resume` must be an array of tables: use [[resume]] with when and step",
+        );
+        return Vec::new();
+    };
+    let mut rules = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        let at = resume_at(index);
+        let toml::Value::Table(mut table) = item else {
+            problems.add(&at, "it must be a table: use [[resume]] with when and step");
+            continue;
+        };
+        let step = string(table.remove("step"), &at, problems);
+        let when = resume_when(table.remove("when"), &at, problems);
+        let back = match table.remove("back") {
+            None => false,
+            Some(toml::Value::Boolean(back)) => back,
+            Some(other) => {
+                problems.add(
+                    &at,
+                    format!("back must be true or false, not `{}`", toml_to_json(&other)),
+                );
+                false
+            }
+        };
+        for key in table.keys() {
+            problems.add(
+                &at,
+                format!("`{key}` is not a key of [[resume]]. The keys: when, step, back"),
+            );
+        }
+        if step.is_none() {
+            problems.add(
+                &at,
+                "it has no step: name the step where the ticket goes on, such as step = \"in-review\"",
+            );
+        }
+        if let (Some(when), Some(step)) = (when, step) {
+            rules.push(ResumeRule { when, step, back });
+        }
+    }
+    rules
+}
+
+/// The `when` of a `[[resume]]` rule: a path of observe -> a string, a boolean, or a list of
+/// them. An empty `when` holds for each ticket, so the loader refuses it.
+fn resume_when(
+    value: Option<toml::Value>,
+    at: &str,
+    problems: &mut Problems,
+) -> Option<BTreeMap<String, Vec<String>>> {
+    let example = "such as when = { \"pr.merged\" = \"true\" }";
+    let Some(value) = value else {
+        problems.add(
+            at,
+            format!("it has no when: name the facts of observe that must hold, {example}"),
+        );
+        return None;
+    };
+    let toml::Value::Table(table) = value else {
+        problems.add(
+            at,
+            format!("when must be a table from a path of observe to a value, {example}"),
+        );
+        return None;
+    };
+    if table.is_empty() {
+        problems.add(
+            at,
+            format!("when is empty, so the rule holds for each ticket. Name one fact or more, {example}"),
+        );
+        return None;
+    }
+    let mut when = BTreeMap::new();
+    let mut valid = true;
+    for (path, value) in table {
+        if !valid_watch(&path) {
+            problems.add(
+                at,
+                format!("when names `{path}`, which is not a path into the answer of observe, such as pr.draft or review.state"),
+            );
+            valid = false;
+            continue;
+        }
+        match resume_values(&value) {
+            Ok(values) if path == HEAD_STATE => {
+                if let Some(bad) = values.iter().find(|v| !HEAD_STATES.contains(&v.as_str())) {
+                    problems.add(
+                        at,
+                        format!(
+                            "when.\"{HEAD_STATE}\" is one of {}, not `{bad}`",
+                            HEAD_STATES.join(", ")
+                        ),
+                    );
+                    valid = false;
+                } else {
+                    when.insert(path, values);
+                }
+            }
+            Ok(values) => {
+                when.insert(path, values);
+            }
+            Err(why) => {
+                problems.add(at, format!("when.\"{path}\" {why}"));
+                valid = false;
+            }
+        }
+    }
+    valid.then_some(when)
+}
+
+/// The values of one fact of `when` as text: a string as it is, and a boolean as `true` or
+/// `false`, as the value of `watch` of a wait step compares them. A list matches each of its
+/// values.
+fn resume_values(value: &toml::Value) -> Result<Vec<String>, String> {
+    let one = |value: &toml::Value| match value {
+        toml::Value::String(text) => Some(text.clone()),
+        toml::Value::Boolean(b) => Some(b.to_string()),
+        _ => None,
+    };
+    let wrong = || {
+        format!(
+            "must be a string, true or false, or a list of them, such as [\"comments\", \"changes\"], not `{}`",
+            toml_to_json(value)
+        )
+    };
+    match value {
+        toml::Value::Array(items) if items.is_empty() => {
+            Err("is an empty list, which matches no value. Name one value or more".to_string())
+        }
+        toml::Value::Array(items) => items
+            .iter()
+            .map(one)
+            .collect::<Option<_>>()
+            .ok_or_else(wrong),
+        other => one(other).map(|text| vec![text]).ok_or_else(wrong),
+    }
+}
+
+/// The step of each `[[resume]]` rule is a step of the adapter. The end step is a valid step:
+/// a merged pull request leaves nothing to do.
+fn check_resume(adapter: &Adapter, problems: &mut Problems) {
+    for (index, rule) in adapter.resume.iter().enumerate() {
+        if adapter.step(&rule.step).is_none() {
+            problems.add(
+                &resume_at(index),
+                format!(
+                    "step names `{}`, which is not a step of the adapter",
+                    rule.step
+                ),
+            );
+        }
+    }
 }
 
 /// The keys of `[agents.<name>]`.
@@ -1712,7 +1924,15 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
         ],
         "human" => &["action", "expects", "after", "start", "next", "cap", "when"],
         "wait" => &[
-            "start", "watch", "on", "every", "wait", "limit", "cap", "from",
+            "start",
+            "watch",
+            "on",
+            "every",
+            "wait",
+            "limit",
+            "cap",
+            "from",
+            "interrupt",
         ],
         "ask" => &["docs", "on", "cap", "when"],
         "check" => &["doc", "line", "stop_line", "next", "fail", "cap", "when"],
@@ -1813,6 +2033,9 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
             ),
             ("job" | "human" | "check" | "end", "on") => format!(
                 "a {kind} step has no on: only a turn step moves by on (its findings, or its commits), and a wait step and an ask step by their values"
+            ),
+            (_, "interrupt") => format!(
+                "a {kind} step has no interrupt: only a wait step looks at the answer of observe, and an interrupt moves it before its watch"
             ),
             _ => format!("the key `{key}` does not belong to a {kind} step"),
         };
@@ -2577,16 +2800,21 @@ fn act_step(table: &mut Table, at: &str, problems: &mut Problems) -> ActStep {
     ActStep { run }
 }
 
-fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
-    let watch = string(table.remove("watch"), at, problems).unwrap_or_default();
-    let valid_watch = !watch.is_empty()
-        && watch.split('.').all(|part| {
+/// A path into the answer of observe, such as `ci.state`: parts of letters, digits, `-`, and
+/// `_`, joined by dots. `watch` of a wait step and `when` of a `[[resume]]` rule both use it.
+fn valid_watch(path: &str) -> bool {
+    !path.is_empty()
+        && path.split('.').all(|part| {
             !part.is_empty()
                 && part
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
-        });
-    if !valid_watch {
+        })
+}
+
+fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
+    let watch = string(table.remove("watch"), at, problems).unwrap_or_default();
+    if !valid_watch(&watch) {
         problems.add(
             at,
             "a wait step names a path into the answer of observe in watch, such as watch = \"ci.state\"",
@@ -2615,13 +2843,83 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
             time
         }
     };
+    let interrupt = interrupt_table(table.remove("interrupt"), at, problems);
     WaitStep {
         watch,
         every,
         wait,
         limit,
         from,
+        interrupt,
     }
+}
+
+/// `interrupt` of a wait step: a path of observe -> a table from a value of that path to a
+/// step. The steps are tested in [`check_links`]. `head.state` is no path of observe: only a
+/// continue finds it.
+fn interrupt_table(
+    value: Option<toml::Value>,
+    at: &str,
+    problems: &mut Problems,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    let mut out = BTreeMap::new();
+    let Some(value) = value else {
+        return out;
+    };
+    let example = "such as interrupt = { \"review.state\" = { comments = \"comments\" } }";
+    let toml::Value::Table(table) = value else {
+        problems.add(
+            at,
+            format!("interrupt must be a table from a path of observe to its values and their steps, {example}"),
+        );
+        return out;
+    };
+    if table.is_empty() {
+        problems.add(
+            at,
+            format!("interrupt is empty, so it moves no ticket. Name one path or more, {example}"),
+        );
+    }
+    for (path, values) in table {
+        if !valid_watch(&path) || path == HEAD_STATE {
+            problems.add(
+                at,
+                format!("interrupt names `{path}`, which is not a path into the answer of observe, such as review.state"),
+            );
+            continue;
+        }
+        let toml::Value::Table(values) = values else {
+            problems.add(
+                at,
+                format!("interrupt.\"{path}\" must be a table from a value to a step, {example}"),
+            );
+            continue;
+        };
+        if values.is_empty() {
+            problems.add(
+                at,
+                format!("interrupt.\"{path}\" is empty, so it moves no ticket, {example}"),
+            );
+            continue;
+        }
+        let mut steps = BTreeMap::new();
+        for (value, target) in values {
+            match target {
+                toml::Value::String(step) => {
+                    steps.insert(value, step);
+                }
+                other => problems.add(
+                    at,
+                    format!(
+                        "interrupt.\"{path}\".{value} must name a step, such as \"comments\", not `{}`",
+                        toml_to_json(&other)
+                    ),
+                ),
+            }
+        }
+        out.insert(path, steps);
+    }
+    out
 }
 
 fn on_table(
@@ -2684,6 +2982,23 @@ fn check_links(adapter: &Adapter, problems: &mut Problems) {
                     &at,
                     format!("on.{value} names the step `{target}`, which does not exist"),
                 );
+            }
+        }
+        if let StepKind::Wait(wait) = &step.kind {
+            for (path, values) in &wait.interrupt {
+                for (value, target) in values {
+                    if !ids.contains(target.as_str()) {
+                        problems.add(
+                            &at,
+                            format!("interrupt.\"{path}\".{value} names the step `{target}`, which does not exist"),
+                        );
+                    } else if *target == step.id {
+                        problems.add(
+                            &at,
+                            format!("interrupt.\"{path}\".{value} names its own step `{target}`, so each look enters it again. Name another step"),
+                        );
+                    }
+                }
             }
         }
         for (fact, target) in &step.fail {
@@ -3096,6 +3411,7 @@ url = "http://localhost:3000"
                 wait: None,
                 limit: None,
                 from: None,
+                interrupt: BTreeMap::new(),
             })
         );
         assert_eq!(ci.on["red"], "build");
@@ -4316,5 +4632,212 @@ url = "http://localhost:3000"
             let err = error(&text);
             assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
         }
+    }
+
+    #[test]
+    fn the_loader_reads_the_interrupts_of_a_wait_step_and_refuses_each_that_cannot_work() {
+        let text = with(
+            "every = 30\n",
+            "every = 30\ninterrupt = { \"review.state\" = { comments = \"build\", changes = \"build\" }, \"pr.merged\" = { \"true\" = \"approve\" } }\n",
+        );
+        let adapter = parse(&text).unwrap();
+        let StepKind::Wait(wait) = &adapter.step("ci").unwrap().kind else {
+            panic!("ci is a wait step");
+        };
+        assert_eq!(
+            wait.interrupt,
+            BTreeMap::from([
+                (
+                    "pr.merged".to_string(),
+                    BTreeMap::from([("true".to_string(), "approve".to_string())])
+                ),
+                (
+                    "review.state".to_string(),
+                    BTreeMap::from([
+                        ("changes".to_string(), "build".to_string()),
+                        ("comments".to_string(), "build".to_string()),
+                    ])
+                ),
+            ])
+        );
+        let cases: Vec<(String, &str)> = vec![
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"review.state\" = { comments = \"nowhere\" } }\n"),
+                "step `ci`: interrupt.\"review.state\".comments names the step `nowhere`, which does not exist",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"review.state\" = { comments = \"ci\" } }\n"),
+                "step `ci`: interrupt.\"review.state\".comments names its own step `ci`, so each look enters it again",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"review..state\" = { comments = \"build\" } }\n"),
+                "step `ci`: interrupt names `review..state`, which is not a path into the answer of observe",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"head.state\" = { forward = \"build\" } }\n"),
+                "step `ci`: interrupt names `head.state`, which is not a path into the answer of observe",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = \"review.state\"\n"),
+                "step `ci`: interrupt must be a table from a path of observe to its values and their steps",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"review.state\" = \"build\" }\n"),
+                "step `ci`: interrupt.\"review.state\" must be a table from a value to a step",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"review.state\" = { comments = 3 } }\n"),
+                "step `ci`: interrupt.\"review.state\".comments must name a step, such as \"comments\", not `3`",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = {}\n"),
+                "step `ci`: interrupt is empty, so it moves no ticket",
+            ),
+            (
+                with("every = 30\n", "every = 30\ninterrupt = { \"review.state\" = {} }\n"),
+                "step `ci`: interrupt.\"review.state\" is empty, so it moves no ticket",
+            ),
+            (
+                with("action = \"approve-merge\"\n", "action = \"approve-merge\"\ninterrupt = { \"review.state\" = { comments = \"build\" } }\n"),
+                "step `approve`: a human step has no interrupt: only a wait step looks at the answer of observe",
+            ),
+        ];
+        for (text, expected) in cases {
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+    }
+
+    /// The good file with `[[resume]]` rules after it.
+    fn with_resume(rules: &str) -> String {
+        format!("{GOOD}\n{rules}")
+    }
+
+    #[test]
+    fn resume_rules_parse_in_their_order_with_their_values_as_text() {
+        let text = with_resume(
+            r#"
+[[resume]]
+when = { "pr.merged" = true }
+step = "done"
+
+[[resume]]
+when = { "review.state" = ["comments", "changes"], "pr.draft" = "false" }
+step = "build"
+back = true
+
+[[resume]]
+when = { "head.state" = ["forward", "same"] }
+step = "ci"
+back = false
+"#,
+        );
+        let adapter = parse(&text).unwrap();
+        assert_eq!(
+            adapter.resume,
+            vec![
+                ResumeRule {
+                    when: BTreeMap::from([("pr.merged".to_string(), vec!["true".to_string()])]),
+                    step: "done".into(),
+                    back: false,
+                },
+                ResumeRule {
+                    when: BTreeMap::from([
+                        ("pr.draft".to_string(), vec!["false".to_string()]),
+                        (
+                            "review.state".to_string(),
+                            vec!["comments".to_string(), "changes".to_string()]
+                        ),
+                    ]),
+                    step: "build".into(),
+                    back: true,
+                },
+                ResumeRule {
+                    when: BTreeMap::from([(
+                        "head.state".to_string(),
+                        vec!["forward".to_string(), "same".to_string()]
+                    )]),
+                    step: "ci".into(),
+                    back: false,
+                },
+            ]
+        );
+        assert!(parse(GOOD).unwrap().resume.is_empty(), "no table, no rule");
+    }
+
+    #[test]
+    fn the_loader_refuses_each_resume_rule_that_cannot_work() {
+        let cases: Vec<(&str, &str)> = vec![
+            (
+                "[[resume]]\nwhen = { \"pr.draft\" = \"false\" }\nstep = \"nowhere\"\n",
+                "resume rule 1: step names `nowhere`, which is not a step of the adapter",
+            ),
+            (
+                "[[resume]]\nwhen = {}\nstep = \"ci\"\n",
+                "resume rule 1: when is empty, so the rule holds for each ticket",
+            ),
+            (
+                "[[resume]]\nstep = \"ci\"\n",
+                "resume rule 1: it has no when",
+            ),
+            (
+                "[[resume]]\nwhen = { \"pr.draft\" = \"true\" }\n",
+                "resume rule 1: it has no step",
+            ),
+            (
+                "[[resume]]\nwhen = { \"pr.comments_waiting\" = 2 }\nstep = \"ci\"\n",
+                "resume rule 1: when.\"pr.comments_waiting\" must be a string, true or false, or a list of them, such as [\"comments\", \"changes\"], not `2`",
+            ),
+            (
+                "[[resume]]\nwhen = { \"review.state\" = [\"comments\", 3] }\nstep = \"ci\"\n",
+                "when.\"review.state\" must be a string, true or false, or a list of them",
+            ),
+            (
+                "[[resume]]\nwhen = { \"review.state\" = [[\"comments\"]] }\nstep = \"ci\"\n",
+                "when.\"review.state\" must be a string, true or false, or a list of them",
+            ),
+            (
+                "[[resume]]\nwhen = { \"review.state\" = { a = \"b\" } }\nstep = \"ci\"\n",
+                "when.\"review.state\" must be a string, true or false, or a list of them",
+            ),
+            (
+                "[[resume]]\nwhen = { \"review.state\" = [] }\nstep = \"ci\"\n",
+                "when.\"review.state\" is an empty list, which matches no value",
+            ),
+            (
+                "[[resume]]\nwhen = { \"pr..draft\" = \"true\" }\nstep = \"ci\"\n",
+                "when names `pr..draft`, which is not a path into the answer of observe",
+            ),
+            (
+                "[[resume]]\nwhen = \"pr.draft\"\nstep = \"ci\"\n",
+                "resume rule 1: when must be a table from a path of observe to a value",
+            ),
+            (
+                "[[resume]]\nwhen = { \"pr.draft\" = \"true\" }\nstep = \"ci\"\nnext = \"build\"\n",
+                "resume rule 1: `next` is not a key of [[resume]]. The keys: when, step, back",
+            ),
+            (
+                "[[resume]]\nwhen = { \"pr.draft\" = \"true\" }\nstep = \"ci\"\nback = \"yes\"\n",
+                "resume rule 1: back must be true or false, not `\"yes\"`",
+            ),
+            (
+                "[[resume]]\nwhen = { \"head.state\" = \"fowrard\" }\nstep = \"ci\"\n",
+                "resume rule 1: when.\"head.state\" is one of none, same, forward, ahead, behind, apart, dirty, elsewhere, unread, not `fowrard`",
+            ),
+            (
+                "[[resume]]\nwhen = { \"pr.draft\" = \"true\" }\nstep = \"ci\"\n\n[[resume]]\nwhen = { \"pr.draft\" = \"false\" }\nstep = \"later\"\n",
+                "resume rule 2: step names `later`, which is not a step of the adapter",
+            ),
+        ];
+        for (rules, expected) in cases {
+            let err = error(&with_resume(rules));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        // A key of the top level goes before the first table of the file.
+        let err = error(&format!("resume = \"ci\"\n{GOOD}"));
+        assert!(
+            err.contains("[[resume]]: `resume` must be an array of tables"),
+            "{err}"
+        );
     }
 }

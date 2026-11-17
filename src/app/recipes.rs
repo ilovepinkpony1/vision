@@ -8,6 +8,7 @@
 //! the card showed.
 
 use super::chain::{commit_text, Chain, Check, Owner, Step, Work};
+use super::model::ContinueView;
 use super::msg::{Action, Handoff};
 use super::needs::{Draft, FlagItem, PlanItem, ProposalItem, QuestionSet, WriteItem};
 use crate::config::Mode;
@@ -413,48 +414,61 @@ pub fn take_over(id: u64, key: &str, agent: &str) -> Chain {
     )
 }
 
-/// The card after a session that the person took over: start the ticket again with the take,
-/// then continue it with the retry. When the session opened, the ticket is paused, so the next
-/// turn resumes the session that the person worked in.
-pub fn continue_after(id: u64, key: &str, opened: bool, owner: Owner) -> Chain {
-    let (taken, done) = if opened {
-        (
-            format!("{key} is no longer stopped, and it is still paused. Press n to continue it."),
-            format!("{key} goes on. Its next turn resumes the session that you worked in."),
-        )
-    } else {
-        (
-            format!("{key} is no longer stopped. Press n to see what waits for it."),
-            format!("{key} goes on at its step."),
-        )
+/// The continue card: the ticket goes on at the step that the person picked. A stopped ticket
+/// runs `vision take KEY --step STEP`, which clears the stop. At the stored step, that take
+/// keeps the flags paused and needs-you, as a plain take does, so a plain `vision retry KEY`
+/// follows it when the ticket has one of them: the next turn of a paused ticket then resumes
+/// the session of the person. A paused ticket runs `vision retry KEY --step STEP`. The command
+/// runs the rules again and tests the head of the pull request before anything moves.
+pub fn resume(id: u64, view: &ContinueView, step: &str) -> Chain {
+    let key = &view.key;
+    let stored = step == view.stored;
+    let state = match (view.stopped, view.paused) {
+        (true, true) => "stopped and paused",
+        (true, false) => "stopped",
+        _ => "paused",
     };
-    let label = if opened {
-        format!("continue {key}: its next turn resumes the session")
+    let before = format!("{key} is still {state} at the step {}.", view.stored);
+    let done = if view.paused && stored {
+        format!("{key} goes on at the step {step}. Its next turn resumes the session that you worked in.")
     } else {
-        format!("continue {key} at its step")
+        format!("{key} goes on at the step {step}.")
     };
-    let steps = vec![
-        Step::new(
-            Work::Act(Action::Take {
-                key: key.to_string(),
-            }),
-            format!("start {key} again at its step"),
-            taken,
-        ),
-        Step::new(
-            Work::Act(Action::Retry {
-                key: key.to_string(),
-            }),
-            label,
-            done.clone(),
-        ),
-    ];
-    let before = if opened {
-        format!("{key} is stopped and paused.")
+    let label = format!("continue {key} at the step {step}");
+    let mut steps = Vec::new();
+    if view.stopped {
+        let retry = stored && (view.paused || view.needs_you);
+        let taken = match (retry, view.paused) {
+            (false, _) => done.clone(),
+            (true, true) => format!("{key} is no longer stopped, and it is still paused."),
+            (true, false) => {
+                format!(
+                    "{key} is no longer stopped, and it still waits for you at the step {step}."
+                )
+            }
+        };
+        let take = Action::TakeAt {
+            key: key.clone(),
+            step: step.to_string(),
+        };
+        steps.push(Step::new(Work::Act(take), label, taken));
+        if retry {
+            let label = if view.paused {
+                format!("clear the pause of {key}: its next turn resumes the session")
+            } else {
+                format!("start the step {step} of {key} again")
+            };
+            let retry = Action::Retry { key: key.clone() };
+            steps.push(Step::new(Work::Act(retry), label, done.clone()));
+        }
     } else {
-        format!("{key} is stopped.")
-    };
-    Chain::new(id, owner, steps, before, done)
+        let retry = Action::RetryAt {
+            key: key.clone(),
+            step: step.to_string(),
+        };
+        steps.push(Step::new(Work::Act(retry), label, done.clone()));
+    }
+    Chain::new(id, Owner::Resume(key.clone()), steps, before, done)
 }
 
 /// Models: Enter pins the values that show, with `vision model set`.

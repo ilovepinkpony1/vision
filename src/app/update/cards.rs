@@ -1,19 +1,19 @@
-//! The keys of the cards: the start card, the resume card, the kill switch card, the quit card,
-//! the keys card, the card of a long error, and the cards of the live view (stop, retry, open
-//! the session, and the card after the session). Enter runs the action of a card through the
-//! queue of the worker; while the action waits or runs, a second Enter does nothing. Esc closes
-//! a card. The card of the things that wait has its own module.
+//! The keys of the cards: the start card, the kill switch card, the quit card, the keys card,
+//! the card of a long error, and the cards of the live view (stop, retry, open the session,
+//! and the card after the session). Enter runs the action of a card through the queue of the
+//! worker; while the action waits or runs, a second Enter does nothing. Esc closes a card. The
+//! card of the things that wait and the continue card have their own modules.
 //!
 //! The open card of a running turn also offers `o`: stop the turn of its agent and open its
-//! session, as one chain. The card after such a session continues the ticket with the take
-//! and then the retry, or keeps it stopped.
+//! session, as one chain. Enter on the card after a session opens the continue card, and Esc
+//! keeps the ticket stopped or paused.
 
 use super::super::chain::Owner;
 use super::super::model::{App, Card, OpenedCard, Run, StartInfo};
 use super::super::msg::{Action, ChildResult, Effect, Key};
 use super::super::recipes;
 use super::super::text::error_line;
-use super::{ask_quit, chain, engine, leave, needs, tell};
+use super::{ask_quit, chain, engine, leave, needs, resume, tell};
 
 /// The session of `vision open` ended: the card asks whether the ticket goes on.
 pub fn on_session_ended(app: &mut App, key: &str, result: &ChildResult) {
@@ -27,7 +27,6 @@ pub fn on_session_ended(app: &mut App, key: &str, result: &ChildResult) {
         key: key.to_string(),
         code: result.code,
         error: error.filter(|e| !e.is_empty()),
-        run: Run::Idle,
         took_over: None,
     }));
 }
@@ -75,16 +74,7 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             Key::Esc => app.card = None,
             _ => {}
         },
-        Card::Resume(card) => match key {
-            Key::Enter if card.run.job().is_none() => {
-                let action = Action::Take {
-                    key: card.key.clone(),
-                };
-                run(app, action);
-            }
-            Key::Esc => app.card = None,
-            _ => {}
-        },
+        Card::Continue(_) => resume::on_key(app, key, fx),
         Card::Stop(card) => match key {
             Key::Enter if card.run.job().is_none() => {
                 let action = Action::Stop {
@@ -105,29 +95,18 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             Key::Esc => app.card = None,
             _ => {}
         },
-        Card::Opened(card) if card.took_over.is_some() => match key {
+        // After a session: the ticket is paused, or stopped and paused after a take over.
+        Card::Opened(card) => match key {
             Key::Enter => {
                 let key = card.key.clone();
-                let opened = card.error.is_none();
-                // One chain for this card: after a failure, its card says what is true now.
-                if chain::of(app, &Owner::Continue(key.clone())).is_none() {
-                    let id = app.next_seq();
-                    let owner = Owner::Continue(key.clone());
-                    chain::start(app, recipes::continue_after(id, &key, opened, owner));
-                }
-            }
-            Key::Esc => {
-                app.card = None;
-                chain::drop_ended(app);
-            }
-            _ => {}
-        },
-        Card::Opened(card) => match key {
-            Key::Enter if card.run.job().is_none() => {
-                let action = Action::Retry {
-                    key: card.key.clone(),
-                };
-                run(app, action);
+                let stopped = card.took_over.is_some();
+                let (title, stored) = app.held_ticket(&key).map_or_else(Default::default, |h| {
+                    (
+                        app.title_of(h).to_string(),
+                        h.view.step.clone().unwrap_or_default(),
+                    )
+                });
+                resume::open(app, &key, &title, &stored, stopped, fx);
             }
             Key::Esc => app.card = None,
             _ => {}
@@ -185,11 +164,9 @@ fn run(app: &mut App, action: Action) {
     let state = Run::Waiting { job };
     match app.card.as_mut() {
         Some(Card::Start(card)) => card.run = state,
-        Some(Card::Resume(card)) => card.run = state,
         Some(Card::Kill(card)) => card.run = state,
         Some(Card::Stop(card)) => card.run = state,
         Some(Card::Retry(card)) => card.run = state,
-        Some(Card::Opened(card)) => card.run = state,
         _ => {}
     }
 }

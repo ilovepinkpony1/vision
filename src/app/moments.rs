@@ -275,6 +275,11 @@ fn event(entry: &LogEntry, d: &Value) -> Moment {
             Hue::Primary,
             "took over the session, so the ticket is paused".to_string(),
         ),
+        crate::pipeline::resume::RESUMED => (
+            "you",
+            Hue::Primary,
+            crate::pipeline::resume::resumed_words(d),
+        ),
         "human" => match s(d, "action") {
             Some("approve-plan") => ("you", Hue::Primary, "approved the plan".to_string()),
             Some(action) => ("you", Hue::Primary, format!("did {action}")),
@@ -487,5 +492,40 @@ mod tests {
         assert_eq!(m.filter, Filter::You);
         let retry = moment(&event("retry", "user", json!({"step": "build"})));
         assert_eq!(retry.text, "started the step build again");
+    }
+
+    #[test]
+    fn a_continue_names_the_step_and_the_suggestion_in_the_tab_you() {
+        let took = moment(&event(
+            "resumed",
+            "user",
+            json!({"from": "self-review", "step": "in-review", "suggestion": "in-review",
+                   "head": {"from": "aaaaaaaaaaaa1", "to": "bbbbbbbbbbbb2"}}),
+        ));
+        assert_eq!((took.who.as_str(), took.word.as_str()), ("you", "you"));
+        assert_eq!(took.what, "resumed");
+        assert_eq!(
+            took.text,
+            "resumed the ticket at in-review, as Vision suggested, and took the head bbbbbbbbbbbb of the pull request"
+        );
+        assert_eq!(took.filter, Filter::You);
+        let other = moment(&event(
+            "resumed",
+            "user",
+            json!({"from": "self-review", "step": "self-review", "suggestion": "in-review"}),
+        ));
+        assert_eq!(
+            other.text,
+            "resumed the ticket at self-review; Vision suggested in-review"
+        );
+        let failed = moment(&event(
+            "resumed",
+            "user",
+            json!({"step": "self-review", "suggestion": null, "failed": true}),
+        ));
+        assert_eq!(
+            failed.text,
+            "resumed the ticket at self-review; Vision could not check where it is"
+        );
     }
 }

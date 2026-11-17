@@ -14,12 +14,12 @@
          │                                                                                          │
   READY T│  the proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change             │n start
  ╭───────│                                                                                          │───────╮
- │   DEMO│  DEMO-12 is also stopped. Enter opens the card that starts it again at the same step.    │ To Do │
- │   DEMO│                                                                                          │equest │
- ╰───────│  enter start it again    esc later                                                       │───────╯
+ │   DEMO│  DEMO-12 is also stopped. Enter opens the card that continues it at the step build, or   │ To Do │
+ │   DEMO│  at a step that you pick.                                                                │equest │
+ ╰───────│                                                                                          │───────╯
+         │  enter continue    esc later                                                             │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

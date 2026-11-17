@@ -4,7 +4,7 @@
 //! person, `t` opens the line to tell the agent something,
 //! `o` opens the session, `l` the log, `p` the plan, `d` the commits that the forge does not
 //! have, `x` stops the ticket, and `r` retries it when it waits for the person with a flag or
-//! is paused. Enter on a stopped ticket opens the resume card. The arrows, `k`, `j`, PageUp,
+//! is paused. Enter on a stopped or paused ticket opens the continue card. The arrows, `k`, `j`, PageUp,
 //! and PageDown scroll the activity; `G` and End go back to its end. `f` shows the next kind of
 //! activity, `F` the kind before, and the digits 1 to 7 pick a tab; a change of the tab goes to
 //! the end of its list. `?` shows the keys, and `q` quits as on Home.
@@ -16,15 +16,13 @@ use std::time::Duration;
 
 use super::super::feed::{Filter, FILTERS, KEEP_LEDGER};
 use super::super::live::{Live, TicketData};
-use super::super::model::{
-    App, Card, OpenCard, ResumeCard, RetryCard, Run, Screen, StopCard, Tone,
-};
+use super::super::model::{App, Card, OpenCard, RetryCard, Run, Screen, StopCard, Tone};
 use super::super::moments::{in_feed, moment};
 use super::super::msg::{Effect, Key};
 use super::super::now::Kind;
 use super::super::pager::{Pager, PagerKind};
 use super::super::view::live::layout::Layout;
-use super::{ask_quit, notice, pager, tell};
+use super::{ask_quit, notice, pager, resume, tell};
 use crate::pipeline::state::{NEEDS_YOU, PAUSED, STOPPED};
 use crate::util::time as vtime;
 
@@ -215,7 +213,7 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         Key::Char('d') => diff(app, fx),
         Key::Char('x') => stop_card(app),
         Key::Char('r') => retry_card(app),
-        Key::Enter => resume_card(app),
+        Key::Enter => continue_card(app, fx),
         Key::Char('?') => app.card = Some(Card::Help),
         Key::Char('q') => ask_quit(app, fx),
         _ => {}
@@ -295,7 +293,7 @@ fn stop_card(app: &mut App) {
         let text = if data.facts.finished {
             format!("{key} is done, so there is nothing to stop.")
         } else {
-            format!("{key} is already stopped. Press Enter to start it again.")
+            format!("{key} is already stopped. Press Enter to continue it.")
         };
         notice(app, text, Tone::Info);
         return;
@@ -379,23 +377,19 @@ fn open_card(app: &mut App) {
     app.card = Some(Card::Open(card));
 }
 
-/// Enter on a stopped ticket: the resume card of Home.
-fn resume_card(app: &mut App) {
+/// Enter on a stopped or paused ticket: the continue card, as on Home.
+fn continue_card(app: &mut App, fx: &mut Vec<Effect>) {
     let Some(data) = data(app) else {
         return;
     };
-    if !has_flag(data, STOPPED) {
+    if data.facts.finished || !resume::continues(&data.view.flags) {
         return;
     }
-    let card = ResumeCard {
-        key: data.view.key.clone(),
-        title: data.view.title.clone().unwrap_or_default(),
-        step: data.view.step.clone().unwrap_or_default(),
-        clone: data.view.clone.clone(),
-        branch: data.view.branch.clone(),
-        run: Run::Idle,
-    };
-    app.card = Some(Card::Resume(card));
+    let key = data.view.key.clone();
+    let title = data.view.title.clone().unwrap_or_default();
+    let stored = data.view.step.clone().unwrap_or_default();
+    let stopped = has_flag(data, STOPPED);
+    resume::open(app, &key, &title, &stored, stopped, fx);
 }
 
 /// The state of the ticket of the live view, when its data has loaded.

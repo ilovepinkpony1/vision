@@ -185,6 +185,58 @@
 # commit. The read verbs say in `about` what they give; each turn finds them in its facts file.
 #
 # ---------------------------------------------------------------------------------------------
+# The rules of a continue: the [[resume]] table after the steps. While a ticket is stopped or
+# paused, the person can do steps by hand, such as the QA, the pull request, or a round of
+# comments. A continue first reads each fact of the ticket: one call of observe (the tracker,
+# the pull request, the review, CI, and each env), and the head of the pull request against
+# the clone. Then it reads the rules in order, and it suggests the step of the first rule that
+# applies. Vision only suggests that step, and the card of the app and the output of a plain
+# `vision take KEY` list each fact that it read. The person takes the suggestion or picks
+# another step in the continue card (Enter on a stopped or paused ticket), or runs
+# `vision take KEY --step STEP`. A plain `vision take KEY` prints the suggestion and exits
+# with code 1 when it names another step. A plain `vision retry KEY`, a tick, and a turn run
+# no rule.
+#
+# `when` maps a path to a value or a list of values. Each path must give one of its values. A
+# value is a string, true, or false; write a number as a string, such as "0". A path that the
+# answer does not have, and a null, give "none", so no rule on pr holds before a pull request
+# exists. The paths are those of the answer of observe, as for `watch`: tracker_status (the
+# status name of the Jira issue, such as "In Review"), pr.draft, pr.merged, pr.closed (closed
+# and not merged), pr.conflict, pr.changes_requested, pr.comments_waiting, review.state,
+# ci.state, and envs.<name>.holds and envs.<name>.deployed. One more path comes from Vision:
+# head.state, the head of the open pull request against the branch of the clone, after a
+# fetch. Its values: none (no open pull request), same, forward (the pull request has later
+# commits, such as a push by hand), ahead (the clone has commits that the pull request does
+# not have), behind (the commit is not in the clone, also after the fetch), apart, dirty (the
+# work tree has changes), elsewhere (the clone is on another branch), and unread.
+#
+# The search reads the rules in order. A rule that holds and names the stored step ends the
+# search: the facts confirm the step where the ticket is. A rule that holds and names a step
+# after the stored step applies: the step list has its step later, and the links of the steps
+# lead there (in a loop, such as in-review, comments, ci-review, and rerequest, the step list
+# decides). A rule that holds and names another step applies only with `back = true`: a move
+# back, such as from ready-to-merge to comments for a late comment. Without `back`, the search
+# skips the rule and reads the next one. When no rule applies, Vision suggests nothing and
+# names the rules that held. The move is a new visit that does not count for the cap of its
+# step.
+#
+# The rules below find the code review. A ticket that stopped at review or qa while the person
+# opened the pull request goes on at in-review, or at comments when a comment or a change
+# request waits, not at its review again. A late comment takes a ticket back to comments, also
+# after the approval or a deploy. A push by hand takes it to ci-review: CI at the new head,
+# then a new review. A merged pull request goes to done.
+#
+# When the pull request is open, a continue also compares its head with the branch in the
+# clone. When the clone does not have the head, such as after a push of the person from another
+# checkout, the continue fetches first. When the head is a later commit of the branch, the
+# branch of the clone moves forward to it, and the ticket row takes it as its head, and the
+# number of the pull request when the row names none. When the commit is still missing after
+# the fetch, or the branch went another way, nothing moves: the ticket gets the flag needs-you
+# with the reason and the fix.
+#
+# With no [[resume]] table, a continue starts the stored step again and runs no observe.
+#
+# ---------------------------------------------------------------------------------------------
 # A project with staging envs writes its own adapter.toml in $VISION_HOME/adapters/<name>/,
 # with `scripts = "builtin:jira-github"`, so that the vision binary answers its calls. Its
 # folder needs no other file. It copies the steps below and adds three steps for each env, such
@@ -199,6 +251,7 @@
 #   watch = "envs.staging.holds"
 #   on = { "true" = "deployed-staging" }
 #   wait = ["false", "none"]
+#   interrupt = { "review.state" = { comments = "comments", changes = "comments" } }
 #   limit = 3600
 #
 #   [[step]]                      # the env runs the head: its newest deployment holds it
@@ -207,6 +260,7 @@
 #   watch = "envs.staging.deployed"
 #   on = { "true" = "qa-staging" }
 #   wait = ["false"]
+#   interrupt = { "review.state" = { comments = "comments", changes = "comments" } }
 #   limit = 3600
 #
 #   [[step]]
@@ -225,11 +279,32 @@
 # push of open-pr, CI, a new deploy of the new commit, and QA on the env again. The deploy needs
 # the branch on GitHub, so the steps of an env come after open-pr.
 #
+# A wait step can have `interrupt`: a path of observe -> a value of that path -> the step where
+# the ticket goes. Each look of the step reads the interrupts first, from the same answer of
+# observe, and then `watch`. So a late comment during a deploy takes the ticket to comments at
+# that tick, and it does not wait for a later step that watches review.state. The move counts
+# as an entry of its step, as a move of `on` does, and its event names the interrupt. With
+# several paths, the paths are read in their sorted order, and the first value that names a
+# step wins. The answer of observe of this adapter always holds review.state, so an interrupt
+# on it costs no call.
+#
 # `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
 # merge happened, not that the env already runs the new code. `envs.staging.deployed` says
 # that: the newest deployment of the GitHub environment of the env holds the head. A project
 # whose env records no deployment leaves out the key `deployment` and the step deployed-staging,
 # and its deploy-staging step moves to qa-staging.
+#
+# The rules of a continue read the order of the step list, so such a project puts the three
+# steps after fix-ci and before ready. It can add two rules for them before the rule with
+# "pr.draft" = true:
+#
+#   [[resume]]                    # the env runs the head: the QA on the env is next
+#   when = { "envs.staging.deployed" = true, "pr.draft" = true, "pr.closed" = false }
+#   step = "qa-staging"
+#
+#   [[resume]]                    # the staging branch holds the head: the deploy is next
+#   when = { "envs.staging.holds" = true, "pr.draft" = true, "pr.closed" = false }
+#   step = "deployed-staging"
 
 name = "jira-github"
 branch = "vision/{key}"
@@ -419,6 +494,30 @@ every = 120
 [[step]]
 id = "done"
 kind = "end"
+
+# The rules of a continue (see the comment block at the top). The first rule that applies wins.
+
+[[resume]]                    # the pull request is merged
+when = { "pr.merged" = true }
+step = "done"
+
+[[resume]]                    # a comment or a change request waits, also after the approval
+when = { "review.state" = ["comments", "changes"] }
+step = "comments"
+back = true
+
+[[resume]]                    # a push by hand: CI at the new head, then a new review
+when = { "head.state" = "forward", "pr.closed" = false }
+step = "ci-review"
+back = true
+
+[[resume]]                    # the pull request is open and ready
+when = { "pr.draft" = false, "pr.closed" = false }
+step = "in-review"
+
+[[resume]]                    # the pull request is open and still a draft
+when = { "pr.draft" = true, "pr.closed" = false }
+step = "ci"
 
 # The verbs. A verb with `leaves` sends text or code out, so the gates of the core run first.
 # Each write verb starts in the mode auto: Vision asks for no approval. `vision demote VERB`

@@ -312,8 +312,8 @@ pub enum Owner {
     Need(String),
     /// The open card of a running turn: stop the turn, then open its session.
     TakeOver { key: String, agent: String },
-    /// The card after a session that the person took over: start the ticket again.
-    Continue(String),
+    /// The continue card of a stopped or paused ticket.
+    Resume(String),
     /// The screen Models: the pin or the reset of the model of this agent.
     Models(String),
 }

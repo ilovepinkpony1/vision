@@ -9,11 +9,11 @@
 //! run.
 
 use super::super::chain::{judge, Chain, CheckFacts, End, Mark, Owner, Verdict, Work, MAX_PASSES};
-use super::super::model::{App, Card, OpenedCard, Run, Screen, Tone};
+use super::super::model::{App, Card, OpenedCard, Screen, Tone};
 use super::super::msg::{Action, ChildResult, Effect, Handoff, JobDone, JobKind};
 use super::super::needs::Draft;
 use super::super::text::{error_line, tidy};
-use super::{engine, models, needs, notice};
+use super::{engine, models, needs, notice, resume};
 
 /// Starts a chain, unless one still runs. Gives true when it started.
 pub fn start(app: &mut App, chain: Chain) -> bool {
@@ -234,8 +234,8 @@ fn finish(app: &mut App, fx: &mut Vec<Effect>) {
             needs::done(app, item, &chain.done, Tone::Ok, fx)
         }
         Owner::TakeOver { .. } => {}
-        Owner::Continue(key) => {
-            if matches!(&app.card, Some(Card::Opened(card)) if card.key == *key) {
+        Owner::Resume(key) => {
+            if matches!(&app.card, Some(Card::Continue(card)) if card.key == *key) {
                 app.card = None;
             }
             notice(app, chain.done.clone(), Tone::Ok);
@@ -294,8 +294,10 @@ fn fail(app: &mut App, text: String, fx: &mut Vec<Effect>) {
         app.chain = None;
         engine::show_error(app, "It did not work", &format!("{text}\n\nNow: {state}"));
     }
-    if let Owner::Need(_) = owner {
-        needs::reload_if_open(app, fx);
+    match &owner {
+        Owner::Need(_) => needs::reload_if_open(app, fx),
+        Owner::Resume(key) => resume::reload(app, key, fx),
+        _ => {}
     }
 }
 
@@ -304,7 +306,7 @@ pub fn shown(app: &App, owner: &Owner) -> bool {
     match (owner, &app.card) {
         (Owner::Need(item), Some(Card::Need(card))) => card.item().is_some_and(|i| i.id() == *item),
         (Owner::TakeOver { key, .. }, Some(Card::Open(card))) => card.key == *key,
-        (Owner::Continue(key), Some(Card::Opened(card))) => card.key == *key,
+        (Owner::Resume(key), Some(Card::Continue(card))) => card.key == *key,
         (Owner::Models(_), None) => app.screen == Screen::Models,
         _ => false,
     }
@@ -347,7 +349,6 @@ pub fn on_session_ended(app: &mut App, key: &str, result: &ChildResult) -> bool 
         key: key.to_string(),
         code: result.code,
         error,
-        run: Run::Idle,
         took_over: Some(agent),
     }));
     app.dirty = true;

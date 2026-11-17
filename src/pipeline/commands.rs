@@ -11,8 +11,9 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::machine::{dirty_lines, head_of, human_mark, in_tx, span, visit_turns, Ticket};
-use super::state::{flags_text, Counts, FlagReason, NEEDS_YOU, PAUSED, STOPPED};
+use super::machine::{dirty_lines, head_of, human_mark, in_tx, save, span, visit_turns, Ticket};
+use super::resume::{self, Checked, Head, Resumed, RESUMED};
+use super::state::{flags_text, Counts, FlagReason, Visit, NEEDS_YOU, PAUSED, RESUME, STOPPED};
 use super::view::{plan_hash, SHORT_HASH};
 use crate::adapter::{self, Adapter, Step, StepKind};
 use crate::config::Config;
@@ -159,9 +160,13 @@ pub fn render_table<const N: usize>(rows: &[[String; N]]) -> String {
 
 // ----- take ------------------------------------------------------------------------------
 
-/// `vision take KEY...`.
-pub fn take(ctx: &Ctx, keys: &[TicketKey]) -> Result<()> {
+/// `vision take KEY...`, and `vision take KEY --step STEP`, which continues one stopped ticket
+/// at STEP (see [`restart`]).
+pub fn take(ctx: &Ctx, keys: &[TicketKey], step: Option<&str>) -> Result<()> {
     ctx.require_setup()?;
+    if step.is_some() && keys.len() != 1 {
+        bail!("`--step` continues one stopped ticket: name one key, such as `vision take DEMO-12 --step in-review`");
+    }
     let _lock = wait_for_lock(ctx)?;
     let ledger = ctx.ledger()?;
     let config = ctx.config()?;
@@ -169,10 +174,14 @@ pub fn take(ctx: &Ctx, keys: &[TicketKey]) -> Result<()> {
     let mut queue: Option<Vec<QueueTicket>> = None;
     let mut failed = Vec::new();
     for key in keys {
-        match take_one(ctx, &ledger, config, &adapter, &mut queue, key) {
+        match take_one(ctx, &ledger, config, &adapter, &mut queue, key, step) {
             Ok(line) => println!("{line}"),
             Err(e) => {
-                eprintln!("error: {key}: {e:#}");
+                // A suggestion of the rules is the answer of the command, not an error.
+                match e.downcast_ref::<resume::Suggests>() {
+                    Some(resume::Suggests(text)) => println!("{text}"),
+                    None => eprintln!("error: {key}: {e:#}"),
+                }
                 failed.push(key.to_string());
             }
         }
@@ -190,6 +199,7 @@ fn take_one(
     adapter: &Adapter,
     queue: &mut Option<Vec<QueueTicket>>,
     key: &TicketKey,
+    step: Option<&str>,
 ) -> Result<String> {
     if key.is_reserved() {
         bail!("{key} is a reserved key: Vision uses it for turns with no ticket. Take a ticket of the tracker");
@@ -198,13 +208,23 @@ fn take_one(
         let ticket = Ticket::of(row)?;
         if !ticket.state().is_empty() && ticket.counts.finished.is_none() {
             if ticket.flags.iter().any(|f| f == STOPPED) {
-                return restart(ctx, ledger, adapter, ticket);
+                return restart(ctx, ledger, adapter, ticket, step);
+            }
+            if let Some(step) = step {
+                bail!(
+                    "{key} is not stopped, so `vision take --step` has nothing to continue. To move it to another step, run `vision retry {key} --step {step}`"
+                );
             }
             bail!(
                 "Vision already holds {key}: it is at the step {}. `vision status` shows it",
                 ticket.state()
             );
         }
+    }
+    if step.is_some() {
+        bail!(
+            "`vision take --step` continues a stopped ticket, and Vision holds no ticket {key} in progress. Run `vision take {key}` to start it"
+        );
     }
     if queue.is_none() {
         *queue = Some(executor::observe_queue(ctx)?);
@@ -369,9 +389,21 @@ fn free_clone(ledger: &Ledger, config: &Config) -> Result<PathBuf> {
     )
 }
 
-/// `vision take` of a stopped ticket: it starts again at the same step, in the clone that holds
-/// its kept branch.
-fn restart(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, mut ticket: Ticket) -> Result<String> {
+/// `vision take` of a stopped ticket: it starts again in the clone that holds its kept branch.
+///
+/// With no STEP, it starts again at the same step. When a `[[resume]]` rule suggests another
+/// step, it does not start: it prints the suggestion and the two commands, and nothing
+/// changes. With a STEP, the ticket continues there: at its stored step as a plain take, and
+/// at another step as the move of `vision retry --step`, which also clears the flags of a
+/// retry. When the rules ran, the continue takes the head of the pull request that someone
+/// pushed by hand, and its event is `resumed`.
+fn restart(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    mut ticket: Ticket,
+    to: Option<&str>,
+) -> Result<String> {
     let key = ticket.key.clone();
     let clone = ticket.clone_dir().with_context(|| {
         format!("{key} is stopped, but its row names no clone that holds its branch")
@@ -390,6 +422,39 @@ fn restart(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, mut ticket: Ticket) ->
         .branch
         .clone()
         .unwrap_or_else(|| adapter.branch_for(&key));
+    let Some(step) = adapter.step(ticket.state()).cloned() else {
+        bail!(
+            "{key} stopped at the step {}, which is not in the adapter {} now",
+            ticket.state(),
+            adapter.name
+        );
+    };
+    let target = to.map(|name| known_step(adapter, name)).transpose()?;
+    if target.as_ref().is_some_and(|t| t.id != step.id) {
+        refuse_busy(ctx, ledger, &key)?;
+    }
+    // The facts and the rules of [[resume]]: one call of observe and the head of the pull
+    // request, before anything changes. The take switches the clone to the branch first.
+    let checked = resume::check(ctx, ledger, adapter, &ticket, true);
+    let suggested = checked
+        .as_ref()
+        .and_then(Checked::suggested)
+        .map(str::to_string);
+    let target = match target {
+        Some(target) => {
+            refuse_end(adapter, &key, &target, suggested.as_deref())?;
+            target
+        }
+        None => {
+            if let (Some(checked), Some(other)) = (&checked, &suggested) {
+                if *other != step.id {
+                    let text = resume::suggest_text(&key, &step.id, checked);
+                    return Err(resume::Suggests(text).into());
+                }
+            }
+            step.clone()
+        }
+    };
     let current = git::run(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     if current != branch {
         let dirty = dirty_lines(&clone)?;
@@ -406,16 +471,27 @@ fn restart(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, mut ticket: Ticket) ->
             )
         })?;
     }
-    let Some(step) = adapter.step(ticket.state()).cloned() else {
-        bail!(
-            "{key} stopped at the step {}, which is not in the adapter {} now",
-            ticket.state(),
-            adapter.name
-        );
+    let resumed = match &checked {
+        Some(checked) => {
+            let again = match to {
+                Some(name) => format!("run `vision take {key} --step {name}` again"),
+                None => format!("run `vision take {key}` again"),
+            };
+            Some(head_for_continue(ctx, ledger, &ticket, checked, &again)?)
+        }
+        None => None,
     };
+    if target.id != step.id {
+        return move_ticket(ctx, ledger, ticket, &target, resumed.as_ref());
+    }
     let now = time::now_rfc3339();
-    ticket.flags.retain(|f| f != STOPPED);
-    ticket.counts.reasons.remove(STOPPED);
+    // A flag needs-you that the test of the head of a continue set goes with the stop: this
+    // continue tested the head again.
+    let mut drop = vec![STOPPED];
+    if resume::resume_flag(&ticket) {
+        drop.push(NEEDS_YOU);
+    }
+    let cleared = clear(&mut ticket, &drop);
     let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &step.id)?.len())?;
     let head = head_of(&clone).ok();
     let visit = ticket
@@ -429,21 +505,170 @@ fn restart(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, mut ticket: Ticket) ->
             &ticket.counts.text(),
             &now,
         )?;
+        record_pr(ledger, &key, resumed.as_ref(), &now)?;
         ledger.close_spans(key.as_str(), &now)?;
         ledger.open_span(&span(&ticket, &step, "restart", &now))?;
-        ledger.add_event(
-            &Event::now("user", "take")
-                .ticket(key.as_str())
-                .detail(json!({"restart": true, "step": step.id, "seq": visit.seq})),
-        )?;
+        match &resumed {
+            Some(resumed) => {
+                ledger.add_human(&resume_row(&key, &step.id, &cleared, &now))?;
+                ledger.add_event(&Event::now("user", RESUMED).ticket(key.as_str()).detail(
+                    resumed_detail(
+                        resumed,
+                        &step.id,
+                        &step.id,
+                        "restart",
+                        &cleared,
+                        0,
+                        Some(&visit),
+                    ),
+                ))?;
+            }
+            None => {
+                ledger.add_event(
+                    &Event::now("user", "take")
+                        .ticket(key.as_str())
+                        .detail(json!({"restart": true, "step": step.id, "seq": visit.seq})),
+                )?;
+            }
+        }
         Ok(())
     })?;
     ctx.log(&format!("take: {key} starts again at the step {}", step.id));
-    Ok(format!(
+    let mut text = format!(
         "{key} starts again at the step {} in the clone {} on the branch {branch}.",
         step.id,
         clone.display()
-    ))
+    );
+    if let Some(resumed) = &resumed {
+        for line in resumed.lines(&step.id) {
+            text.push_str(&format!(" {line}."));
+        }
+    }
+    Ok(text)
+}
+
+/// The head of the pull request for a continue that ran the rules. When the clone has the head
+/// one fast-forward ahead of the branch, the branch moves forward to it. When the clone cannot
+/// take it, the ticket gets the flag needs-you with the reason and the fix, and nothing moves.
+/// Gives what the event `resumed` records.
+fn head_for_continue(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    checked: &Checked,
+    again: &str,
+) -> Result<Resumed> {
+    let head = &checked.head;
+    let clone = ticket.clone_dir()?;
+    if let Some(problem) = head.problem(checked.pr(), &clone.display().to_string()) {
+        let reason = format!("{}. {}, then {again}", problem.what, problem.fix);
+        flag_resume(ctx, ledger, ticket, &reason)?;
+        bail!(
+            "{reason}. Nothing moved, and {} has the flag needs-you until a continue takes the head",
+            ticket.key
+        );
+    }
+    if let Head::Forward { to, .. } = head {
+        resume::take_head(&clone, to)?;
+        ctx.log(&format!(
+            "resume: {} took the head {} of the pull request",
+            ticket.key,
+            short(to)
+        ));
+    }
+    Ok(Resumed::of(checked, ticket.state(), ticket.row.pr))
+}
+
+/// Writes in the ticket row what a continue found of the open pull request: its number when the
+/// row names none, and its head when the branch of the clone holds it after the continue. A
+/// number that the row names already stays.
+fn record_pr(ledger: &Ledger, key: &TicketKey, resumed: Option<&Resumed>, now: &str) -> Result<()> {
+    let Some(resumed) = resumed else {
+        return Ok(());
+    };
+    if resumed.pr_written.is_some() || resumed.pr_head.is_some() {
+        ledger.set_ticket_values(
+            key.as_str(),
+            resumed.pr_written,
+            resumed.pr_head.as_deref(),
+            now,
+        )?;
+    }
+    Ok(())
+}
+
+/// Sets the flag needs-you of a continue that cannot take the head, marked as set by the
+/// resume, so that the next continue clears it. A flag needs-you of a rule keeps its reason.
+fn flag_resume(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, reason: &str) -> Result<()> {
+    let mut ticket = ticket.clone();
+    let now = time::now_rfc3339();
+    let ours = ticket
+        .counts
+        .reasons
+        .get(NEEDS_YOU)
+        .is_none_or(|r| r.by.as_deref() == Some(RESUME));
+    if !ticket.flags.iter().any(|f| f == NEEDS_YOU) {
+        ticket.flags.push(NEEDS_YOU.into());
+    }
+    if ours {
+        ticket.counts.reasons.insert(
+            NEEDS_YOU.into(),
+            FlagReason {
+                reason: reason.to_string(),
+                at: now.clone(),
+                by: Some(RESUME.into()),
+            },
+        );
+    }
+    save(
+        ledger,
+        &ticket,
+        &now,
+        Some(
+            Event::now("vision", "flag")
+                .ticket(ticket.key.as_str())
+                .detail(json!({"flag": NEEDS_YOU, "reason": reason, "step": ticket.state(), "by": RESUME})),
+        ),
+    )?;
+    ctx.log(&format!(
+        "resume: {} got the flag needs-you: {reason}",
+        ticket.key
+    ));
+    Ok(())
+}
+
+/// The `human` row of a continue that ran the rules.
+fn resume_row(key: &TicketKey, step: &str, cleared: &Cleared, now: &str) -> HumanRow {
+    HumanRow {
+        at: now.to_string(),
+        ticket: Some(key.to_string()),
+        kind: resume::HUMAN.into(),
+        object: key.to_string(),
+        value: Some(step.to_string()),
+        reason: cleared.reason.clone(),
+        seconds: cleared.seconds,
+    }
+}
+
+/// The detail of the event `resumed`: what the rules found and the head, with the flags that
+/// the continue cleared, the failed operations that it released, and the new visit.
+fn resumed_detail(
+    resumed: &Resumed,
+    from: &str,
+    step: &str,
+    how: &str,
+    cleared: &Cleared,
+    released: usize,
+    visit: Option<&Visit>,
+) -> Value {
+    let mut detail = resumed.detail(from, step, how);
+    if let Value::Object(fields) = &mut detail {
+        fields.insert("cleared".into(), json!(cleared.flags));
+        fields.insert("released".into(), json!(released));
+        fields.insert("n".into(), json!(visit.map(|v| v.n)));
+        fields.insert("seq".into(), json!(visit.map(|v| v.seq)));
+    }
+    detail
 }
 
 // ----- plan and approve-plan -------------------------------------------------------------
@@ -612,6 +837,7 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
         FlagReason {
             reason: "you stopped it with vision stop".into(),
             at: now.clone(),
+            by: None,
         },
     );
     in_tx(&ledger, |ledger| {
@@ -656,34 +882,39 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
 /// the reason of its span, and the kind of its event and of its `human` row.
 pub const MOVE: &str = "move";
 
-/// The flags that a retry clears, with the reason of `needs-you`, and the seconds since the
-/// older of the two flags was set.
+/// The flags that a retry, a move, or a continue clears, with the reason of `needs-you`, and
+/// the seconds since the older of the flags was set.
 struct Cleared {
     flags: Vec<String>,
     reason: Option<String>,
     seconds: Option<i64>,
 }
 
-/// Clears the flags `needs-you` and `paused` of a ticket and their reasons. A plain retry and a
-/// move clear the same flags.
-fn clear_flags(ticket: &mut Ticket) -> Cleared {
+/// Clears the flags of `names` that the ticket has, and their reasons. A plain retry and a
+/// move clear `needs-you` and `paused`, and a continue of a stopped ticket clears the stop too.
+fn clear(ticket: &mut Ticket, names: &[&str]) -> Cleared {
     let flags: Vec<String> = ticket
         .flags
         .iter()
-        .filter(|f| *f == NEEDS_YOU || *f == PAUSED)
+        .filter(|f| names.contains(&f.as_str()))
         .cloned()
         .collect();
-    let reason = ticket
-        .counts
-        .reasons
-        .get(NEEDS_YOU)
-        .map(|r| r.reason.clone());
+    let reason = names
+        .contains(&NEEDS_YOU)
+        .then(|| {
+            ticket
+                .counts
+                .reasons
+                .get(NEEDS_YOU)
+                .map(|r| r.reason.clone())
+        })
+        .flatten();
     let seconds = flags
         .iter()
         .filter_map(|f| ticket.counts.reasons.get(f))
         .filter_map(|r| seconds_since(&r.at))
         .max();
-    ticket.flags.retain(|f| f != NEEDS_YOU && f != PAUSED);
+    ticket.flags.retain(|f| !names.contains(&f.as_str()));
     for flag in &flags {
         ticket.counts.reasons.remove(flag);
     }
@@ -694,9 +925,8 @@ fn clear_flags(ticket: &mut Ticket) -> Cleared {
     }
 }
 
-/// The step that `vision retry KEY --step STEP` moves a ticket to: a step of the adapter, and
-/// not its end step, because only the pipeline ends a ticket.
-fn move_target(adapter: &Adapter, key: &TicketKey, name: &str) -> Result<Step> {
+/// The step STEP of `--step`: a step of the adapter.
+fn known_step(adapter: &Adapter, name: &str) -> Result<Step> {
     let Some(step) = adapter.step(name) else {
         let steps: Vec<&str> = adapter
             .steps
@@ -710,17 +940,58 @@ fn move_target(adapter: &Adapter, key: &TicketKey, name: &str) -> Result<Step> {
             steps.join(", ")
         );
     };
-    if matches!(step.kind, StepKind::End) {
-        bail!(
-            "`{name}` is the end step of the adapter {}, and only the pipeline moves a ticket there. To stop the ticket, run `vision stop {key}`",
-            adapter.name
-        );
-    }
     Ok(step.clone())
 }
 
+/// Only the pipeline moves a ticket to the end step: the path itself, or a `[[resume]]` rule
+/// that suggests it now, such as for a merged pull request.
+fn refuse_end(
+    adapter: &Adapter,
+    key: &TicketKey,
+    step: &Step,
+    suggested: Option<&str>,
+) -> Result<()> {
+    if matches!(step.kind, StepKind::End) && suggested != Some(step.id.as_str()) {
+        bail!(
+            "`{}` is the end step of the adapter {}, and only the pipeline moves a ticket there. To stop the ticket, run `vision stop {key}`",
+            step.id,
+            adapter.name
+        );
+    }
+    Ok(())
+}
+
+/// The refusals of a retry and of a move: an operation that the reconcile step of the tick
+/// must settle first, a turn that runs, and cards that wait for an answer.
+fn refuse_busy(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<()> {
+    for op in executor::operations_of(ledger, key)? {
+        if matches!(op.state, OpState::Uncertain | OpState::Executing) {
+            bail!(
+                "the operation {} ({} at {}) is {}: the reconcile step of the tick must settle it first. Run `vision tick`, then retry",
+                op.id,
+                op.verb,
+                short(&op.head),
+                op.state.as_str()
+            );
+        }
+    }
+    if let Some(running) = crate::turn::running_turn_of(ctx, ledger, key)? {
+        bail!(
+            "the turn {} of {key} runs now. Wait for it, or run `vision stop {key}`",
+            running.id
+        );
+    }
+    let open = ledger.open_cards(key.as_str())?;
+    if open > 0 {
+        bail!("{open} card(s) of {key} wait for an answer. Answer them with `vision needs` first");
+    }
+    Ok(())
+}
+
 /// `vision retry KEY [--step STEP]`. With a STEP that is not the current step, the ticket moves
-/// to that step (see [`move_ticket`]). A STEP that is the current step is a plain retry.
+/// to that step (see [`move_ticket`]). A STEP that is the current step is a plain retry. A
+/// paused ticket that the person continues with a STEP runs the `[[resume]]` rules first: the
+/// head of the pull request, and the event `resumed`. A plain retry runs no rule.
 pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
     ctx.require_setup()?;
     let _lock = wait_for_lock(ctx)?;
@@ -734,30 +1005,8 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
     if ticket.flags.iter().any(|f| f == STOPPED) {
         bail!("{key} is stopped. Run `vision take {key}` to start it again");
     }
-    let target = to
-        .map(|name| move_target(&adapter, key, name))
-        .transpose()?;
-    for op in executor::operations_of(&ledger, key)? {
-        if matches!(op.state, OpState::Uncertain | OpState::Executing) {
-            bail!(
-                "the operation {} ({} at {}) is {}: the reconcile step of the tick must settle it first. Run `vision tick`, then retry",
-                op.id,
-                op.verb,
-                short(&op.head),
-                op.state.as_str()
-            );
-        }
-    }
-    if let Some(running) = crate::turn::running_turn_of(ctx, &ledger, key)? {
-        bail!(
-            "the turn {} of {key} runs now. Wait for it, or run `vision stop {key}`",
-            running.id
-        );
-    }
-    let open = ledger.open_cards(key.as_str())?;
-    if open > 0 {
-        bail!("{open} card(s) of {key} wait for an answer. Answer them with `vision needs` first");
-    }
+    let target = to.map(|name| known_step(&adapter, name)).transpose()?;
+    refuse_busy(ctx, &ledger, key)?;
     let Some(step) = adapter.step(ticket.state()).cloned() else {
         bail!(
             "{key} is at the step {}, which is not in the adapter {}. Fix adapter.toml, or run `vision stop {key}`",
@@ -765,16 +1014,38 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
             adapter.name
         );
     };
+    let paused = ticket.flags.iter().any(|f| f == PAUSED);
+    // The person continues a paused ticket at a named step: the rules run, with one call of
+    // observe, before anything changes.
+    let checked = match (&target, paused) {
+        (Some(_), true) => resume::check(ctx, &ledger, &adapter, &ticket, false),
+        _ => None,
+    };
+    if let Some(target) = &target {
+        refuse_end(
+            &adapter,
+            key,
+            target,
+            checked.as_ref().and_then(Checked::suggested),
+        )?;
+    }
+    let resumed = match &checked {
+        Some(checked) => {
+            let again = format!(
+                "run `vision retry {key} --step {}` again",
+                to.unwrap_or(&step.id)
+            );
+            Some(head_for_continue(ctx, &ledger, &ticket, checked, &again)?)
+        }
+        None => None,
+    };
     if let Some(target) = target.filter(|t| t.id != step.id) {
-        return move_ticket(ctx, &ledger, ticket, &target);
+        let text = move_ticket(ctx, &ledger, ticket, &target, resumed.as_ref())?;
+        println!("{text}");
+        return Ok(());
     }
     let released = executor::release_failed(&ledger, key)?;
-    let paused = ticket.flags.iter().any(|f| f == PAUSED);
-    let Cleared {
-        flags: cleared,
-        reason,
-        seconds,
-    } = clear_flags(&mut ticket);
+    let cleared = clear(&mut ticket, &[NEEDS_YOU, PAUSED]);
     // A step whose turn result held and that stopped at an operation goes on with its `after`
     // verbs: a new turn would redo work that is done.
     let visit = ticket.visit();
@@ -829,7 +1100,7 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
                 }
                 next.message = Some(BY_HAND.to_string());
                 next.resume = session;
-            } else if let Some(reason) = &reason {
+            } else if let Some(reason) = &cleared.reason {
                 next.message = Some(format!(
                     "This step starts again after it stopped: {reason}. The person ran `vision retry`. Read the state of the clone first, then do the step."
                 ));
@@ -846,33 +1117,50 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
             &ticket.counts.text(),
             &now,
         )?;
+        record_pr(ledger, key, resumed.as_ref(), &now)?;
         if new_visit.is_some() {
             ledger.close_spans(key.as_str(), &now)?;
             ledger.open_span(&span(&ticket, &step, "retry", &now))?;
         }
-        ledger.add_human(&HumanRow {
-            at: now.clone(),
-            ticket: Some(key.to_string()),
-            kind: "retry".into(),
-            object: key.to_string(),
-            value: Some(step.id.clone()),
-            reason: reason.clone(),
-            seconds,
-        })?;
-        ledger.add_event(
-            &Event::now("user", "retry")
-                .ticket(key.as_str())
-                .detail(json!({
-                    "step": step.id, "cleared": cleared, "released": released,
-                    "new_visit": new_visit.as_ref().map(|v| v.seq),
-                })),
-        )?;
+        match &resumed {
+            Some(resumed) => {
+                ledger.add_human(&resume_row(key, &step.id, &cleared, &now))?;
+                ledger.add_event(&Event::now("user", RESUMED).ticket(key.as_str()).detail(
+                    resumed_detail(
+                        resumed,
+                        &step.id,
+                        &step.id,
+                        "retry",
+                        &cleared,
+                        released,
+                        new_visit.as_ref(),
+                    ),
+                ))?;
+            }
+            None => {
+                ledger.add_human(&HumanRow {
+                    at: now.clone(),
+                    ticket: Some(key.to_string()),
+                    kind: "retry".into(),
+                    object: key.to_string(),
+                    value: Some(step.id.clone()),
+                    reason: cleared.reason.clone(),
+                    seconds: cleared.seconds,
+                })?;
+                ledger.add_event(&Event::now("user", "retry").ticket(key.as_str()).detail(
+                    json!({
+                        "step": step.id, "cleared": cleared.flags, "released": released,
+                        "new_visit": new_visit.as_ref().map(|v| v.seq),
+                    }),
+                ))?;
+            }
+        }
         Ok(())
     })?;
     ctx.log(&format!("retry: {key} at the step {}", step.id));
     let mut text = format!("{key} goes on at the step {}", step.id);
-    if !cleared.is_empty() {
-        text.push_str(&format!(" (cleared: {})", cleared.join(", ")));
+    if !cleared.flags.is_empty() {
+        text.push_str(&format!(" (cleared: {})", cleared.flags.join(", ")));
     }
     if released > 0 {
         text.push_str(&format!(". {released} failed operation(s) can run again"));
@@ -890,6 +1178,11 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
     } else {
         text.push_str(". The next tick enters the step again");
     }
+    if let Some(resumed) = &resumed {
+        for line in resumed.lines(&step.id) {
+            text.push_str(&format!(". {line}"));
+        }
+    }
     println!("{text}.");
     Ok(())
 }
@@ -901,17 +1194,25 @@ fn moved_message(from: &str) -> String {
     )
 }
 
-/// The move of `vision retry KEY --step STEP` to a step that is not the current step. It has
-/// the rules of a plain retry: the failed operations of the ticket can run again, the flags
-/// `needs-you` and `paused` clear, and the new visit does not count as an entry for the cap of
-/// its step. The visit resumes no session, and no turn or team member of an earlier visit
+/// The move of `vision retry KEY --step STEP`, and of `vision take KEY --step STEP` of a stopped
+/// ticket, to a step that is not the current step. It has the rules of a plain retry: the
+/// failed operations of the ticket can run again, the flags `needs-you` and `paused` clear,
+/// and the new visit does not count as an entry for the cap of its step. A take also clears
+/// the stop. The visit resumes no session, and no turn or team member of an earlier visit
 /// counts for it, so the next tick acts on the step as after a move of the pipeline into it.
-/// The new state, the spans, the `human` row, and the event `move` are one transaction.
-fn move_ticket(ctx: &Ctx, ledger: &Ledger, mut ticket: Ticket, target: &Step) -> Result<()> {
+/// The new state, the spans, the `human` row, and the event are one transaction: the event
+/// `move`, or `resumed` when the rules ran. Gives the text for the person.
+fn move_ticket(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    mut ticket: Ticket,
+    target: &Step,
+    resumed: Option<&Resumed>,
+) -> Result<String> {
     let key = ticket.key.clone();
     let from = ticket.state().to_string();
     let released = executor::release_failed(ledger, &key)?;
-    let cleared = clear_flags(&mut ticket);
+    let cleared = clear(&mut ticket, &[STOPPED, NEEDS_YOU, PAUSED]);
     let now = time::now_rfc3339();
     let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &target.id)?.len())?;
     let head = ticket.clone_dir().ok().and_then(|c| head_of(&c).ok());
@@ -929,23 +1230,40 @@ fn move_ticket(ctx: &Ctx, ledger: &Ledger, mut ticket: Ticket, target: &Step) ->
             &ticket.counts.text(),
             &now,
         )?;
+        record_pr(ledger, &key, resumed, &now)?;
         ledger.close_spans(key.as_str(), &now)?;
         ledger.open_span(&span(&ticket, target, MOVE, &now))?;
-        ledger.add_human(&HumanRow {
-            at: now.clone(),
-            ticket: Some(key.to_string()),
-            kind: MOVE.into(),
-            object: key.to_string(),
-            value: Some(target.id.clone()),
-            reason: cleared.reason.clone(),
-            seconds: cleared.seconds,
-        })?;
-        ledger.add_event(
-            &Event::now("user", MOVE).ticket(key.as_str()).detail(json!({
-                "from": from, "to": target.id, "cleared": cleared.flags, "released": released,
-                "n": visit.n, "seq": visit.seq,
-            })),
-        )?;
+        match resumed {
+            Some(resumed) => {
+                ledger.add_human(&resume_row(&key, &target.id, &cleared, &now))?;
+                ledger.add_event(&Event::now("user", RESUMED).ticket(key.as_str()).detail(
+                    resumed_detail(
+                        resumed,
+                        &from,
+                        &target.id,
+                        MOVE,
+                        &cleared,
+                        released,
+                        Some(&visit),
+                    ),
+                ))?;
+            }
+            None => {
+                ledger.add_human(&HumanRow {
+                    at: now.clone(),
+                    ticket: Some(key.to_string()),
+                    kind: MOVE.into(),
+                    object: key.to_string(),
+                    value: Some(target.id.clone()),
+                    reason: cleared.reason.clone(),
+                    seconds: cleared.seconds,
+                })?;
+                ledger.add_event(&Event::now("user", MOVE).ticket(key.as_str()).detail(json!({
+                    "from": from, "to": target.id, "cleared": cleared.flags, "released": released,
+                    "n": visit.n, "seq": visit.seq,
+                })))?;
+            }
+        }
         Ok(())
     })?;
     ctx.log(&format!("retry: {key} moved from {from} to {}", target.id));
@@ -956,6 +1274,11 @@ fn move_ticket(ctx: &Ctx, ledger: &Ledger, mut ticket: Ticket, target: &Step) ->
     if released > 0 {
         text.push_str(&format!(". {released} failed operation(s) can run again"));
     }
+    if let Some(resumed) = resumed {
+        for line in resumed.lines(&target.id) {
+            text.push_str(&format!(". {line}"));
+        }
+    }
     if target.cap.is_some() {
         text.push_str(&format!(
             ". The move does not count for the cap of {}",
@@ -963,8 +1286,7 @@ fn move_ticket(ctx: &Ctx, ledger: &Ledger, mut ticket: Ticket, target: &Step) ->
         ));
     }
     text.push_str(&format!(". The next tick enters the step {}", target.id));
-    println!("{text}.");
-    Ok(())
+    Ok(format!("{text}."))
 }
 
 // ----- log -------------------------------------------------------------------------------
@@ -1045,6 +1367,7 @@ pub fn event_entry(e: &EventRow) -> Option<LogEntry> {
             field("from"),
             field("to")
         ),
+        RESUMED => format!("{} {}", e.actor, resume::resumed_words(&detail)),
         "told" => format!(
             "{} told {}: {}",
             e.actor,

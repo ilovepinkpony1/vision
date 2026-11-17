@@ -9,7 +9,7 @@
  │             ●━◉─○─○─○─○─○─○─○─○─○─○─○  plan · needs you: 1 question                                      │
  │                                                                                                          │
  │   DEMO-3    Rename the setting of the weekly email                                         $2.50   5h 0m │
- │             ●━●━●━●━◉─○─○─○─○─○─○─○─○  review · stopped · Enter starts it again                          │
+ │             ●━●━●━●━◉─○─○─○─○─○─○─○─○  review · stopped · Enter continues it                             │
  │                                                                                                          │
  │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │

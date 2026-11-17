@@ -274,7 +274,7 @@ fn the_start_card_after_a_failed_take() {
 }
 
 #[test]
-fn the_resume_card() {
+fn the_continue_card_reads_then_shows_the_suggestion_or_why_there_is_none() {
     let tickets = vec![stopped(
         "DEMO-3",
         "Rename the setting of the weekly email",
@@ -282,8 +282,61 @@ fn the_resume_card() {
     )];
     let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
     send(&mut app, 2.0, Msg::Key(Key::Enter));
-    assert!(matches!(app.card, Some(Card::Resume(_))));
-    check("resume", &app);
+    assert!(matches!(app.card, Some(Card::Continue(_))));
+    check("continue_reading", &app);
+    read_resume(
+        &mut app,
+        2.1,
+        "DEMO-3",
+        Ok(continue_view("DEMO-3", "review", Some("comments"), true)),
+    );
+    check("continue_suggests", &app);
+    let nothing = continue_view("DEMO-3", "review", None, true);
+    read_resume(&mut app, 2.2, "DEMO-3", Ok(nothing));
+    check("continue_nothing", &app);
+    let mut failed = continue_view("DEMO-3", "review", None, true);
+    failed.found = Some(vision::pipeline::resume::Found::Failed(
+        "bin/observe failed: the forge did not answer in 30 s".into(),
+    ));
+    // A call of observe that fails gives no facts.
+    failed.facts.clear();
+    read_resume(&mut app, 2.3, "DEMO-3", Ok(failed));
+    check("continue_failed", &app);
+    let mut behind = continue_view("DEMO-3", "review", Some("comments"), true);
+    behind.head = vision::pipeline::resume::Head::Behind {
+        forge: "4be0c2d9a1f3e5b7".into(),
+        fetch: None,
+    };
+    read_resume(&mut app, 2.4, "DEMO-3", Ok(behind));
+    check("continue_behind", &app);
+}
+
+/// A ticket stopped at ready-to-merge gets a late comment: the suggestion goes back to
+/// comments, and the card says so plainly, with each fact that Vision read.
+#[test]
+fn the_continue_card_says_plainly_when_its_suggestion_goes_back() {
+    let tickets = vec![stopped(
+        "DEMO-3",
+        "Rename the setting of the weekly email",
+        "ready-to-merge",
+    )];
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    send(&mut app, 2.0, Msg::Key(Key::Enter));
+    let mut back = continue_view("DEMO-3", "ready-to-merge", None, true);
+    let why = "2 review comments wait, and the head runs on void";
+    back.found = Some(vision::pipeline::resume::Found::Step {
+        rule: 2,
+        step: "comments".into(),
+        reason: REASON.into(),
+        back: Some(why.into()),
+    });
+    back.back = Some(vision::pipeline::resume::back_sentence(
+        "ready-to-merge",
+        why,
+    ));
+    back.facts.insert(4, "the head runs on void".into());
+    read_resume(&mut app, 2.1, "DEMO-3", Ok(back));
+    check("continue_back", &app);
 }
 
 #[test]

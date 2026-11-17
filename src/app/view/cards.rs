@@ -1,6 +1,6 @@
 //! The cards over a screen (`modal`, `mStart`, `mQuit`, and `mHelp` of the design): the start
-//! card, the resume card, the kill switch card, the quit card, the keys card of each screen,
-//! and the card of a long error. A card keeps its width and stays in the center; the screen
+//! card, the kill switch card, the quit card, the keys card of each screen, and the card of a
+//! long error. The continue card has its own module. A card keeps its width and stays in the center; the screen
 //! behind it dims. Each card is a list of rows, so that its height follows its text. The card
 //! of the things that wait has its own modules.
 //!
@@ -11,7 +11,7 @@ use super::canvas::{ink, Canvas, Ink};
 use super::header::spinner;
 use super::theme::{agent_color, Rgb, T};
 use crate::app::hits::{hint, Act};
-use crate::app::model::{App, Card, KillCard, ResumeCard, Run, StartCard};
+use crate::app::model::{App, Card, KillCard, Run, StartCard};
 use crate::app::msg::Key;
 use crate::app::text::{cut, width, wrap};
 
@@ -128,12 +128,23 @@ impl Rows {
     /// decision: a click on such a key arms it, and while `armed` is its part, its label says
     /// to click again.
     pub(super) fn keys_with(&mut self, list: &[(&str, &str)], decide: &[Key], armed: Option<&Act>) {
+        self.keys_within(list, decide, armed, 89);
+    }
+
+    /// The keys of [`Rows::keys_with`] in rows that end before the column `right`.
+    pub(super) fn keys_within(
+        &mut self,
+        list: &[(&str, &str)],
+        decide: &[Key],
+        armed: Option<&Act>,
+        right: i32,
+    ) {
         let mut row = Vec::new();
         let mut x = 3;
         for (key, label) in list {
             let label = hint(0, key, label, decide, armed).label;
             let wide = (width(key) + 1 + width(&label)) as i32;
-            if x > 3 && x + wide > 89 {
+            if x > 3 && x + wide > right {
                 self.rows.push(std::mem::take(&mut row));
                 x = 3;
             }
@@ -165,13 +176,18 @@ fn lines_of(text: &str, w: usize) -> Vec<String> {
     text.lines().flat_map(|line| wrap(line, w)).collect()
 }
 
+/// Where a card of width `w` with `rows` rows goes in the window: its column, its row, its
+/// width, and its height. [`show`] puts each card there.
+pub(super) fn card_rect(c: &Canvas, w: i32, rows: usize) -> (i32, i32, i32, i32) {
+    let w = w.min(c.w - 2);
+    let h = (rows as i32 + 4).min(c.h - 2);
+    ((c.w - w) / 2, (c.h - h) / 2, w, h)
+}
+
 /// Dims the screen, and draws an empty card of width `w` in the center with its rows and their
 /// parts.
 pub(super) fn show(c: &mut Canvas, w: i32, title: &str, color: Rgb, rows: Rows) {
-    let w = w.min(c.w - 2);
-    let h = (rows.rows.len() as i32 + 4).min(c.h - 2);
-    let x = (c.w - w) / 2;
-    let y = (c.h - h) / 2;
+    let (x, y, w, h) = card_rect(c, w, rows.rows.len());
     c.dim_all();
     c.wipe(x, y, w, h, T.panel);
     c.frame(x, y, w, h, color);
@@ -215,7 +231,7 @@ pub(super) fn keys_card(c: &mut Canvas, list: &[(&str, &str)]) {
 pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
     match card {
         Card::Start(card) => start(app, card, c),
-        Card::Resume(card) => resume(app, card, c),
+        Card::Continue(card) => super::continue_card::draw(app, card, c),
         Card::Kill(card) => kill(app, card, c),
         Card::Quit => quit(app, c),
         Card::Help => match app.screen {
@@ -229,7 +245,7 @@ pub fn draw(app: &App, card: &Card, c: &mut Canvas) {
         Card::Stop(card) => super::live_cards::stop(app, card, c),
         Card::Retry(card) => super::live_cards::retry(app, card, c),
         Card::Open(card) => super::live_cards::open(app, card, c),
-        Card::Opened(card) => super::live_cards::opened(app, card, c),
+        Card::Opened(card) => super::live_cards::opened(card, c),
     }
 }
 
@@ -328,44 +344,6 @@ fn start(app: &App, card: &StartCard, c: &mut Canvas) {
         &format!("runs vision take {}", card.key),
     );
     show(c, 80, &format!("Start {}", card.key), T.primary, rows);
-}
-
-fn resume(app: &App, card: &ResumeCard, c: &mut Canvas) {
-    let mut rows = Rows::default();
-    if !card.title.is_empty() {
-        rows.text(3, card.title.clone(), ink(T.fg).bold());
-        rows.blank();
-    }
-    rows.para(
-        3,
-        &format!("{} is stopped at the step {}.", card.key, card.step),
-        72,
-        ink(T.fg),
-    );
-    let place = match (&card.branch, &card.clone) {
-        (Some(branch), Some(clone)) => {
-            format!("Its branch {branch} stays in the clone {clone}.")
-        }
-        (Some(branch), None) => format!("Its branch {branch} stays in its clone."),
-        _ => "Its branch stays in its clone.".to_string(),
-    };
-    rows.para(3, &place, 72, ink(T.dim));
-    rows.blank();
-    rows.para(
-        3,
-        "Press Enter to start it again at the same step.",
-        72,
-        ink(T.dim),
-    );
-    rows.blank();
-    action_rows(
-        app,
-        &mut rows,
-        &card.run,
-        "resume",
-        &format!("runs vision take {}", card.key),
-    );
-    show(c, 80, &format!("Resume {}", card.key), T.primary, rows);
 }
 
 fn kill(app: &App, card: &KillCard, c: &mut Canvas) {

@@ -24,6 +24,20 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<String> {
     stdout_or_error(dir, args, output)
 }
 
+/// Fetches each remote of a clone with `git fetch --quiet --all --prune`, the fetch of the take
+/// of a new ticket. A remote that asks for a login fails at once and asks nothing, because a
+/// thread of the app can run the fetch while the app holds the terminal. A fetch changes no
+/// branch and no work tree.
+pub fn fetch_all(dir: &Path) -> Result<String> {
+    let args = ["fetch", "--quiet", "--all", "--prune"];
+    let output = command(dir, None)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .args(args)
+        .output()
+        .context("could not run git. Install git and make sure that it is in PATH")?;
+    stdout_or_error(dir, &args, output)
+}
+
 /// Runs `git -C <dir> <args>` with `author` as the author and the committer, such as a commit
 /// of only some paths, and gives its standard output without the last newline.
 pub fn run_as(dir: &Path, args: &[&str], author: Author<'_>) -> Result<String> {
