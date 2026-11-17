@@ -253,8 +253,15 @@ fn send(
                 .is_some_and(|spec| spec.alone)
     });
     let turn = work.as_ref().map(|running| running.id.clone());
-    // The row and its line in the timeline are one write.
-    let message_id = ledger.in_transaction(|ledger| {
+    let inbox = match &work {
+        Some(running) => ctx.paths.turn(key, &running.turn_id()?).inbox,
+        None => inbox::ticket_inbox(&ctx.paths, key),
+    };
+    // The row, its line in the timeline, and the message file are one write: a message file
+    // that cannot be written leaves no row and no line. The file is written before the commit,
+    // and a commit that fails removes it again.
+    let mut written = None;
+    let stored = ledger.in_transaction(|ledger| {
         let id = ledger.add_message(turn.as_deref(), &at, source, text)?;
         if told {
             let detail = json!({
@@ -270,25 +277,25 @@ fn send(
                     .detail(detail)
             })?;
         }
-        Ok(id)
-    })?;
-    let message = MessageFile {
-        text: text.to_string(),
-        source: source.to_string(),
-        at,
-        id: Some(message_id),
-    };
-    match work {
-        Some(running) => {
-            let id = running.turn_id()?;
-            inbox::write(&ctx.paths.turn(key, &id).inbox, &message)?;
-            Ok(Told::Running(running.id))
+        let message = MessageFile {
+            text: text.to_string(),
+            source: source.to_string(),
+            at: at.clone(),
+            id: Some(id),
+        };
+        written = Some(inbox::write(&inbox, &message)?);
+        Ok(())
+    });
+    if let Err(e) = stored {
+        if let Some(path) = written {
+            let _ = fs::remove_file(path);
         }
-        None => {
-            inbox::write(&inbox::ticket_inbox(&ctx.paths, key), &message)?;
-            Ok(Told::Stored)
-        }
+        return Err(e);
     }
+    Ok(match work {
+        Some(running) => Told::Running(running.id),
+        None => Told::Stored,
+    })
 }
 
 /// `vision tell KEY "TEXT"`.

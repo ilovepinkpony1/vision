@@ -125,6 +125,36 @@ fn tell_with_no_running_turn_waits_for_the_next_turn() {
 }
 
 #[test]
+fn a_message_that_cannot_be_stored_for_delivery_gets_no_row_and_no_line() {
+    let home = TestHome::new();
+    // A file stands where the inbox of the next turn goes, so the message file cannot be
+    // written there.
+    let ticket = home.vision.join("tickets/DEMO-12");
+    std::fs::create_dir_all(&ticket).unwrap();
+    std::fs::write(ticket.join("inbox"), "not a folder").unwrap();
+    let run = home.run(&["tell", "DEMO-12", "remember the old export"]);
+    run.expect_code(1);
+    assert!(run.stderr.contains("inbox"), "{run:?}");
+    assert_eq!(
+        told_lines(&home, "DEMO-12"),
+        Vec::<String>::new(),
+        "no line for a message that never arrives"
+    );
+    assert_eq!(
+        home.ledger().message(1).unwrap(),
+        None,
+        "no row in messages"
+    );
+    // When the inbox can take it, the message goes, with one row and one line.
+    std::fs::remove_file(ticket.join("inbox")).unwrap();
+    let run = home.run(&["tell", "DEMO-12", "remember the old export"]);
+    run.expect_code(0);
+    assert!(ticket.join("inbox/m-000000000001.json").is_file());
+    assert_eq!(told_lines(&home, "DEMO-12").len(), 1);
+    assert!(home.ledger().message(1).unwrap().is_some());
+}
+
+#[test]
 fn logs_shows_short_readable_lines() {
     let home = TestHome::new();
     let none = home.run(&["logs"]);
