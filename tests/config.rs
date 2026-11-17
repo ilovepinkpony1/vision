@@ -73,3 +73,56 @@ fn config_before_init_says_what_to_do() {
     run.expect_code(1);
     assert!(run.stderr.contains("vision init"), "{run:?}");
 }
+
+#[test]
+fn config_prints_the_clones_with_their_values_and_a_list_of_paths_as_before() {
+    let home = Home::init();
+    let set_clones = |text: &str| {
+        let config = home.read("config.toml");
+        assert!(config.contains("\nclones = []"), "{config}");
+        std::fs::write(
+            home.path("config.toml"),
+            config.replacen("\nclones = []", &format!("\n{text}"), 1),
+        )
+        .unwrap();
+    };
+    set_clones("clones = [\"/work/app\", \"/work/app-c\"]");
+    let run = home.run(&["config"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout
+            .contains("clones = [\n    \"/work/app\",\n    \"/work/app-c\",\n]"),
+        "{run:?}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(&home.run(&["config", "--json"]).stdout).unwrap();
+    assert_eq!(
+        json["clones"],
+        serde_json::json!(["/work/app", "/work/app-c"])
+    );
+
+    let home = Home::init();
+    let config = home.read("config.toml").replacen(
+        "\nclones = []",
+        "\nclones = [\"/work/app\", { path = \"/work/app-b\", env = { WORKSPACE = \"app-b\" }, adapter = { app_url = \"http://localhost:3500/\", port = 3500 } }]",
+        1,
+    );
+    std::fs::write(home.path("config.toml"), config).unwrap();
+    let run = home.run(&["config"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout.contains(
+            "    { path = \"/work/app-b\", env = { WORKSPACE = \"app-b\" }, adapter = { app_url = \"http://localhost:3500/\", port = 3500 } },"
+        ),
+        "{run:?}"
+    );
+    let printed = Config::parse(&run.stdout).expect("the output is a valid configuration");
+    assert_eq!(printed, Config::parse(&home.read("config.toml")).unwrap());
+    let json: serde_json::Value =
+        serde_json::from_str(&home.run(&["config", "--json"]).stdout).unwrap();
+    assert_eq!(
+        json["clones"][1],
+        serde_json::json!({"path": "/work/app-b", "env": {"WORKSPACE": "app-b"},
+            "adapter": {"app_url": "http://localhost:3500/", "port": 3500}})
+    );
+}

@@ -698,8 +698,9 @@ pub enum JobEnv {
     /// `secrets = true`. A turn never gets it.
     Full,
     /// The environment of a work session (section 7.3): the names of its allow list,
-    /// `claude.env_pass`, and the values of `claude.env`, with no secret. A job that runs the
-    /// commands of the project as a session does, such as the precheck, gets it.
+    /// `claude.env_pass`, and the values of `claude.env` with the `env` of the clone of the
+    /// ticket over them, with no secret. A job that runs the commands of the project as a
+    /// session does, such as the precheck, gets it.
     Session,
 }
 

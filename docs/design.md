@@ -120,7 +120,7 @@ docs/design.md
 ```toml
 project = "demo"              # the name of the adapter
 user = "user"                 # the writer name of the person in the memory
-clones = []                   # absolute paths of the clones that Vision owns
+clones = []                   # the clones that Vision owns: absolute paths, or tables with path, env, and adapter
 
 [codex]                       # the Codex CLI, for reader agents whose runner is codex
 bin = "codex"
@@ -228,6 +228,12 @@ Rules:
 - A missing key takes its default. An unknown key is an error that names the key.
 - `vision` edits the file with `toml_edit`, so that comments and order stay.
 - `~` at the start of a path means the home folder.
+
+An entry of `clones` is a path or a table. A table has `path`, and it can have `env` and `adapter`, such as `{ path = "~/work/app-b", env = { WORKSPACE = "app-b" }, adapter = { app_url = "http://localhost:3500/" } }`. The form `[[clones]]`, one table for each clone after the root keys, gives the same list, and it needs no line `clones = []`. The `env` of a clone follows each rule of `claude.env`. The `adapter` table of a clone holds any values except `dir`, because one adapter serves each clone. The loader refuses a table with another key, a table with no path, and two entries with the same real path. Its message names the entry. An entry with no values prints as a path in `vision config`.
+
+The values of a clone apply to each ticket whose row names that clone. A session of such a ticket gets `claude.env`, then the `env` of the clone over it, then the values of the runner. Each job of the ticket with `env = "session"` gets the same. Each call of a script for such a ticket gets the `[adapter]` table with the `adapter` keys of the clone over it. A key of the clone wins. A call with no ticket, such as the queue, and a ticket with no clone get both tables as they are.
+
+`vision doctor` has one line `clone` for each entry of `clones`. It fails a folder that does not exist and a folder that is not the top folder of a git work tree. It also fails a worktree whose git folder is gone. The line names the path and, for a worktree, "worktree of <main checkout>". It also names the keys of the `env` and of the `adapter` of the clone. A name can be in the `env` of one clone and missing from another clone and from `claude.env`. Then the line of that other clone has a warning, because a session there runs without the name.
 
 `escapes.priority` is a regular expression of a small syntax: characters, `.`, `\d`, `\w`, `\s` and their opposites, classes such as `[0-3]`, groups `( )` and `(?: )`, `|`, `*`, `+`, `?`, `{n,m}`, `^`, `$`, and `(?i)` at the start. It must have a group. A search that takes too many steps finds nothing.
 
@@ -403,6 +409,8 @@ A worker and a tester get the file `worker.gitconfig` of the home as `GIT_CONFIG
 Claude Code asks for an approval for some commands also in the sandbox. Two examples are a git command with the option `-c` and a command with a variable in front of it. A turn has nobody who can approve, so Claude Code denies such a command. So the `settings.json` of a worker and of a tester also has a rule that allows each Bash command. The sandbox stays the limit, because that file refuses each run outside it.
 
 A real test in `tests/real_claude.rs` shows both facts. Each of its calls asks for a run with no sandbox. The session still cannot read the home folder, write there, or reach an outside site. `agents/common.md` tells each agent the plain form of a commit, and the message after a failed fact `clean` or `commits` says it again.
+
+In a git worktree, `.git` is a file. Git keeps the index, the objects, and the refs in the common git folder of the main checkout. The working folder of a worker or a tester can be a worktree. Then the rendered `settings.json` lists that common folder in `allowRead` and `allowWrite` of the sandbox. It lists the `config` and the `hooks` of that folder in `denyWrite`. Git runs what these two name outside the sandbox, so Claude Code keeps them closed in the `.git` folder of a working folder too. A normal clone and a file `sandbox/<kind>.json` of the home get no such entries. The probe of `tests/real_claude.rs` showed it in a worktree. `git status`, `git add`, and `git commit` work. A write to the work tree of the main checkout, to a hook, or to the configuration is denied.
 
 Each entry of `claude.plugins` is a Claude Code plugin folder, which has `.claude-plugin/plugin.json`, or a folder of such folders. If the list names a folder, each work turn (a reader, a worker, or a tester of a step) gets one `--plugin-dir` for each folder, and its tool list ends with `Skill`. The contract of 7.4 names `Skill` too. The Judge and the Curator get no plugin.
 
@@ -821,6 +829,7 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
           "checks": [{"kind": "spec", "result": "pass", "command": "...", "seconds": 12, "cause": ""}]}
 ```
 
+- The call object always has `config`: the `[adapter]` table of the configuration, with the `adapter` keys of the clone of the ticket over it.
 - `state` of an `act` answer is `confirmed`, `failed`, or `uncertain`.
 - `set` can give new values for the ticket row: `pr`, `head`.
 - `documents` of a job go to the ticket folder. The documents of an `act` answer with the state `confirmed` go there too. A later turn can read them. The runner masks each secret value in them. A script cannot write a document that the person or the pipeline owns, such as `plan.md` or `issue.json`.
@@ -946,7 +955,7 @@ A turn step with a gate can have `fail`, a table from a gate to a step. A key is
 
 A turn step with a gate can have `extra_rounds`, from 0 to 10, with a default of 0. `rounds + extra_rounds` is at most 20. The loader refuses `extra_rounds` on a step with no gate.
 
-A job can have `env = "session"`: the environment of a work session. It holds the names of section 7.3, the names of `claude.env_pass`, and the values of `claude.env`, and no variable that has the name or the value of a secret. Such a job cannot have `secrets = true`.
+A job can have `env = "session"`: the environment of a work session. It holds the names of section 7.3, the names of `claude.env_pass`, and the values of `claude.env` with the `env` of the clone of the ticket over them, and no variable that has the name or the value of a secret. Such a job cannot have `secrets = true`.
 
 A job that a built-in adapter knows by its name can have keys of its own, such as the commands of the precheck (section 11.5). The loader tests them. The call of `bin/job` gets them in `table`, with `timeout`.
 
@@ -1130,7 +1139,7 @@ A continue that read the rules writes the event `resumed` and a row of `human` w
 
 A `failed` operation is final for its key. `vision retry KEY` frees the key, so that the verb can run again at the same commit. If an operation of the ticket is `uncertain`, `vision retry KEY` refuses, because the reconcile step must settle it first.
 
-`vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time.
+`vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time. A clone can be a git worktree, and the take uses the clones in their order. Git lets one worktree hold a branch at a time. If another worktree holds the branch of the ticket, the take stops, names that worktree, and says how to free the branch. A continue of a stopped ticket does the same.
 
 The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. Any new commit voids the proof.
 

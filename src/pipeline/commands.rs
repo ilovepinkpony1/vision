@@ -271,8 +271,14 @@ fn take_one(
         &clone,
         &["switch", "--quiet", "--no-track", "-C", &branch, base],
     )
-    .with_context(|| {
-        format!("could not make the branch {branch} from {base} in the clone {clone_text}")
+    .map_err(|e| {
+        switch_error(
+            e,
+            &clone,
+            &branch,
+            &format!("vision take {key}"),
+            format!("could not make the branch {branch} from {base} in the clone {clone_text}"),
+        )
     })?;
     let head = head_of(&clone)?;
     let entry = adapter.entry().clone();
@@ -331,6 +337,38 @@ fn clone_holders(ledger: &Ledger) -> Result<Vec<(PathBuf, String, String)>> {
         }
     }
     Ok(out)
+}
+
+/// The error of a `git switch` to `branch` in `clone` that git refused. Git lets one worktree
+/// hold a branch at a time: when another worktree of the repo holds the branch, the error names
+/// that worktree and says what to do, and `again` is the command to run after the fix. Else
+/// `what` says what failed.
+fn switch_error(
+    e: anyhow::Error,
+    clone: &Path,
+    branch: &str,
+    again: &str,
+    what: String,
+) -> anyhow::Error {
+    let Some(holder) = git::worktree_holding(clone, branch) else {
+        return e.context(what);
+    };
+    let fix = if holder.is_dir() {
+        format!(
+            "Switch that worktree to another branch, such as with `git -C {} switch --detach`, or remove that worktree",
+            holder.display()
+        )
+    } else {
+        format!(
+            "Its folder is gone, so remove its record with `git -C {} worktree prune`",
+            clone.display()
+        )
+    };
+    e.context(format!(
+        "the worktree {} holds the branch {branch}, and git lets one worktree hold a branch at a time, so the clone {} cannot switch to it. {fix}, then run `{again}` again",
+        holder.display(),
+        clone.display()
+    ))
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -464,10 +502,20 @@ fn restart(
                 clone.display()
             );
         }
-        git::run(&clone, &["switch", "--quiet", &branch]).with_context(|| {
-            format!(
-                "the branch {branch} of {key} is gone from the clone {}",
-                clone.display()
+        let again = match to {
+            Some(name) => format!("vision take {key} --step {name}"),
+            None => format!("vision take {key}"),
+        };
+        git::run(&clone, &["switch", "--quiet", &branch]).map_err(|e| {
+            switch_error(
+                e,
+                &clone,
+                &branch,
+                &again,
+                format!(
+                    "the branch {branch} of {key} is gone from the clone {}",
+                    clone.display()
+                ),
             )
         })?;
     }

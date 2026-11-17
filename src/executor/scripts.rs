@@ -3,8 +3,9 @@
 //! this binary as `vision adapter-script <name> <observe|act|job>`, with the same contract.
 //!
 //! A call writes one JSON object to standard input (always with `config`, the `[adapter]` table
-//! of the configuration, and `base_ref`, the `base` of `adapter.toml`) and reads one JSON object
-//! from standard output. The environment holds
+//! of the configuration with the `adapter` keys of the clone of the ticket over it, and
+//! `base_ref`, the `base` of `adapter.toml`) and reads one JSON object from standard output.
+//! The environment holds
 //! only `PATH`, `HOME`, `LANG`, `TMPDIR`, and each secret of `[secrets]`. A job with
 //! `env = "full"` gets the environment of the tick instead, with no variable that holds the
 //! value of a secret unless the job has `secrets = true`. Exit code 0 is done,
@@ -216,7 +217,8 @@ fn secret_command(name: &str, cmd: &str) -> Result<String> {
 }
 
 /// The environment of a work session (section 7.3), for a job with `env = "session"`: the
-/// names of `claude.env_pass` and the values of `claude.env`.
+/// names of `claude.env_pass`, and the values of `claude.env` with the `env` of the clone of
+/// the ticket over them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionEnv {
     pub pass: Vec<String>,
@@ -227,7 +229,7 @@ pub struct SessionEnv {
 /// only the names of [`PASSED_ENV`]. The full one has each variable, but a variable with the
 /// name or the value of a secret stays out unless the call gets the secrets. With the secrets,
 /// each one comes under its own name. The one of a session has the names that a work session
-/// gets and the values of `claude.env`, and never a secret.
+/// gets and the fixed values of [`SessionEnv`], and never a secret.
 fn script_env(
     vars: Vec<(OsString, OsString)>,
     secrets: &Secrets,
@@ -350,7 +352,8 @@ pub struct Runner<'a> {
     pub scripts: PathBuf,
     /// A built-in adapter: the calls go to this binary, and `bin/` takes no part.
     pub builtin: Option<Builtin>,
-    /// The `[adapter]` table of the configuration, as JSON.
+    /// The `[adapter]` table of the configuration, as JSON, with the `adapter` keys of the
+    /// clone of the call over it.
     pub config: Value,
     /// The `base` of `adapter.toml`, such as `origin/main`: the one place of the base branch.
     pub base_ref: String,
@@ -360,16 +363,25 @@ pub struct Runner<'a> {
 }
 
 impl<'a> Runner<'a> {
-    pub fn new(adapter: &Adapter, config: &Config, secrets: &'a Secrets) -> Runner<'a> {
+    /// The runner of the calls for a ticket in `clone`. The values of that entry of `clones`
+    /// apply: its `adapter` keys win over `[adapter]` in `config`, and its `env` wins over
+    /// `claude.env` in the environment of a session. `None`, for a call with no ticket or a
+    /// ticket with no clone, gives `[adapter]` and `claude.env` as they are.
+    pub fn new(
+        adapter: &Adapter,
+        config: &Config,
+        secrets: &'a Secrets,
+        clone: Option<&Path>,
+    ) -> Runner<'a> {
         Runner {
             scripts: adapter.scripts.clone(),
             builtin: adapter.builtin.as_deref().map(Builtin::new),
-            config: Value::Object(table_to_json(&config.adapter)),
+            config: Value::Object(table_to_json(&config.adapter_for(clone))),
             base_ref: adapter.base.clone(),
             secrets,
             session: SessionEnv {
                 pass: config.claude.env_pass.clone(),
-                set: config.claude.env.clone(),
+                set: config.env_for(clone),
             },
         }
     }

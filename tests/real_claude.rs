@@ -403,6 +403,10 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
     let state = wait_for(Duration::from_secs(900), "the real turn to end", || {
         home.state(&ticket, &id).filter(TurnState::is_ended)
     });
+    eprintln!(
+        "settings.json:\n{}",
+        home.turn_file(&launched, "settings.json")
+    );
     print_bash_calls(&home.turn_file(&launched, "stream.jsonl"), 1500);
     // The view of the turn in the folder of the project goes away again.
     let _ = std::fs::remove_dir_all(dir.join(".vision").join("turns").join(&id));
@@ -414,6 +418,10 @@ fn a_real_worker_turn_runs_the_commands_of_a_probe() {
             .result
             .as_ref()
             .map_or(Value::Null, |r| r["summary"].clone())
+    );
+    eprintln!(
+        "cost: {:?} dollars, tokens {:?}",
+        outcome.cost_usd, outcome.usage
     );
     assert_eq!(state.reason, Some(Reason::Result), "{state:?}");
     if !plugins.is_empty() {

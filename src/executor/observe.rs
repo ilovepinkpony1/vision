@@ -1,6 +1,8 @@
 //! `bin/observe` (section 11.1): the facts of the queue and of one ticket, read as untrusted
 //! data into typed values.
 
+use std::path::Path;
+
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -87,9 +89,10 @@ impl TicketFacts {
     }
 }
 
-/// `observe {"what": "queue"}`: the tickets of the tracker with their eligibility.
+/// `observe {"what": "queue"}`: the tickets of the tracker with their eligibility. The call
+/// has no ticket, so it gets the `[adapter]` table as it is.
 pub fn observe_queue(ctx: &Ctx) -> Result<Vec<QueueTicket>> {
-    let answer = call(ctx, json!({"what": "queue"}))?;
+    let answer = call(ctx, json!({"what": "queue"}), None)?;
     let items = answer
         .get("tickets")
         .and_then(Value::as_array)
@@ -118,7 +121,8 @@ pub fn observe_queue(ctx: &Ctx) -> Result<Vec<QueueTicket>> {
 }
 
 /// `observe {"what": "ticket", ...}` with the branch, the pull request, and the clone of the
-/// ticket row (or the branch pattern of the adapter for a ticket with no row).
+/// ticket row (or the branch pattern of the adapter for a ticket with no row). The values of
+/// that clone apply.
 pub fn observe_ticket(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<TicketFacts> {
     let adapter = adapter::load(ctx)?;
     let ticket = TicketContext::load(ledger, &adapter, key)?;
@@ -129,7 +133,7 @@ pub fn observe_ticket(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<Tic
         "pr": ticket.pr,
         "clone": ticket.clone_text(),
     });
-    let answer = call(ctx, input)?;
+    let answer = call(ctx, input, ticket.clone.as_deref())?;
     let wrong = |what: &str| format!("bin/observe answered {key} with a wrong {what}");
     let pr = match answer.get("pr") {
         None | Some(Value::Null) => None,
@@ -158,11 +162,11 @@ pub fn observe_ticket(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<Tic
     })
 }
 
-fn call(ctx: &Ctx, input: Value) -> Result<Map<String, Value>> {
+fn call(ctx: &Ctx, input: Value, clone: Option<&Path>) -> Result<Map<String, Value>> {
     let config = ctx.config()?;
     let adapter = adapter::load_with(config, &ctx.paths)?;
     let secrets = Secrets::read(config)?;
-    match Runner::new(&adapter, config, &secrets).observe(input) {
+    match Runner::new(&adapter, config, &secrets, clone).observe(input) {
         Ok(Answer::Done(map)) => Ok(map),
         Ok(Answer::Refused(map)) => Err(anyhow!(
             "bin/observe refused the call: {}",

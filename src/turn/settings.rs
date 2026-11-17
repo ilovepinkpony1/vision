@@ -154,6 +154,55 @@ pub fn render(
     Ok(value)
 }
 
+/// The files of a common git folder that a session never writes: git runs what they name
+/// outside the sandbox, such as a hook or a command of the configuration. Claude Code keeps the
+/// same two closed in the `.git` folder of the working folder of a session.
+pub const GIT_DIR_CLOSED: [&str; 2] = ["config", "hooks"];
+
+/// Opens the common git folder of a worktree to the sandbox of a rendered settings object. In a
+/// git worktree, `.git` is a file, and git keeps the index, the objects, the refs, and the
+/// configuration in the git folder of the main checkout. So the folder goes into the read list
+/// (`allowRead`) and the write list (`allowWrite`) of the sandbox, and its `config` and
+/// `hooks` into `denyWrite`. Each path comes as git gives it and as its real path. A value with
+/// no sandbox stays as it is.
+pub fn open_git_dir(value: &mut Value, git_dir: &Path) {
+    let Some(filesystem) = value
+        .pointer_mut("/sandbox/filesystem")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let mut dirs = vec![git_dir.to_path_buf()];
+    if let Ok(real) = git_dir.canonicalize() {
+        if real != git_dir {
+            dirs.push(real);
+        }
+    }
+    for dir in &dirs {
+        let text = dir.display().to_string();
+        for key in ["allowRead", "allowWrite"] {
+            push_once(filesystem, key, &text);
+        }
+        for name in GIT_DIR_CLOSED {
+            push_once(
+                filesystem,
+                "denyWrite",
+                &dir.join(name).display().to_string(),
+            );
+        }
+    }
+}
+
+/// Adds `text` to the list `key` of an object, once. A key that is not a list stays as it is.
+fn push_once(object: &mut serde_json::Map<String, Value>, key: &str, text: &str) {
+    let list = object.entry(key).or_insert_with(|| json!([]));
+    if let Some(list) = list.as_array_mut() {
+        if !list.iter().any(|item| item.as_str() == Some(text)) {
+            list.push(json!(text));
+        }
+    }
+}
+
 /// Adds the rules of [`protect_rules`] to `permissions.deny` of a settings object, each one
 /// once. A value that is not an object stays as it is.
 fn add_deny_rules(value: &mut Value, rules: &[String]) {
@@ -542,6 +591,68 @@ mod tests {
         let text = settings_text(&paths, TurnKind::Worker, &worker, true, &protect).unwrap();
         let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["permissions"]["deny"], json!(rules));
+    }
+
+    #[test]
+    fn the_common_git_folder_of_a_worktree_is_readable_and_writable_but_its_hooks_are_not() {
+        let worker = |workdir: &str| {
+            render(
+                TurnKind::Worker,
+                Path::new(workdir),
+                &[],
+                &Sandbox::default(),
+                Path::new("/v/worker.gitconfig"),
+                &[],
+            )
+            .unwrap()
+        };
+        let mut value = worker("/clones/app-b");
+        open_git_dir(&mut value, Path::new("/clones/app/.git"));
+        assert_eq!(
+            value["sandbox"]["filesystem"],
+            json!({"denyRead": ["~/"],
+                "allowRead": ["/clones/app-b", "/v/worker.gitconfig", "/clones/app/.git"],
+                "allowWrite": ["/clones/app/.git"],
+                "denyWrite": ["/clones/app/.git/config", "/clones/app/.git/hooks"]})
+        );
+        // A second call adds nothing, and the rest of the file stays.
+        let once = value.clone();
+        open_git_dir(&mut value, Path::new("/clones/app/.git"));
+        assert_eq!(value, once);
+        assert_eq!(value["permissions"], worker("/x")["permissions"]);
+        assert_eq!(
+            value["sandbox"]["network"],
+            worker("/x")["sandbox"]["network"]
+        );
+        // A normal clone gets neither list.
+        let plain = worker("/clones/app");
+        assert!(plain["sandbox"]["filesystem"].get("allowWrite").is_none());
+        assert!(plain["sandbox"]["filesystem"].get("denyWrite").is_none());
+        // A reader has no sandbox, so nothing changes.
+        let mut reader = json!({"permissions": {"deny": ["Bash"]}});
+        open_git_dir(&mut reader, Path::new("/clones/app/.git"));
+        assert_eq!(reader, json!({"permissions": {"deny": ["Bash"]}}));
+        // A folder that git gives through a link comes with its real path too.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("app/.git");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(dir.path().join("app"), &link).unwrap();
+        let mut value = worker("/clones/app-b");
+        open_git_dir(&mut value, &link.join(".git"));
+        let real = real.canonicalize().unwrap();
+        let writes = &value["sandbox"]["filesystem"]["allowWrite"];
+        assert_eq!(
+            writes,
+            &json!([
+                link.join(".git").display().to_string(),
+                real.display().to_string()
+            ])
+        );
+        assert!(value["sandbox"]["filesystem"]["denyWrite"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(real.join("hooks").display().to_string())));
     }
 
     #[test]

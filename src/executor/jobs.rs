@@ -77,7 +77,7 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
     let base = ticket.base(&adapter)?;
     let head = ticket.head_text();
     let secrets = Secrets::read(config)?;
-    let runner = Runner::new(&adapter, config, &secrets);
+    let runner = Runner::new(&adapter, config, &secrets, ticket.clone.as_deref());
     if !runner.has(Script::Job) {
         bail!(
             "{} does not exist or is not executable, so the job {} cannot run. Fix the adapter",
@@ -274,7 +274,7 @@ pub fn read(
     let args = object_args(args)?;
     let ticket = TicketContext::load(ledger, &adapter, key)?;
     let secrets = Secrets::read(config)?;
-    let runner = Runner::new(&adapter, config, &secrets);
+    let runner = Runner::new(&adapter, config, &secrets, ticket.clone.as_deref());
     let input = json!({
         "verb": verb,
         "read": true,

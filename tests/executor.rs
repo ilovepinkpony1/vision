@@ -1821,3 +1821,121 @@ timeout = 1
     std::thread::sleep(std::time::Duration::from_secs(3));
     assert!(!marker.exists(), "the time limit kills the command too");
 }
+
+/// Sets `clones` to one entry: the clone of the demo with these `env` and `adapter` values.
+fn clone_with_values(demo: &Demo, env: &[(&str, &str)], adapter: toml_edit::InlineTable) {
+    let clone = demo.clone.display().to_string();
+    demo.edit_config(|doc| {
+        let mut table = toml_edit::InlineTable::new();
+        for (name, value) in env {
+            table.insert(*name, (*value).into());
+        }
+        let mut entry = toml_edit::InlineTable::new();
+        entry.insert("path", clone.as_str().into());
+        entry.insert("env", toml_edit::Value::InlineTable(table));
+        entry.insert("adapter", toml_edit::Value::InlineTable(adapter));
+        let mut clones = toml_edit::Array::new();
+        clones.push(toml_edit::Value::InlineTable(entry));
+        doc["clones"] = toml_edit::value(clones);
+    });
+}
+
+#[test]
+fn each_call_for_a_ticket_in_a_clone_gets_the_adapter_keys_of_that_clone() {
+    let demo = Demo::new();
+    let calls = probe_adapter(&demo);
+    demo.edit_config(|doc| {
+        doc["adapter"]["board"] = toml_edit::value("DEMO");
+        doc["adapter"]["app_url"] = toml_edit::value("http://localhost:3000/");
+    });
+    let mut adapter = toml_edit::InlineTable::new();
+    adapter.insert("app_url", "http://localhost:3500/".into());
+    adapter.insert("port", 3500.into());
+    clone_with_values(&demo, &[("WORKSPACE", "slot-b")], adapter);
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    demo.commit(&[("notes.txt", "one\n")], "One");
+    // An act call, its reconcile, a job, the facts of the ticket, and the queue.
+    let later = executor::request(&ctx, &ledger, &op("x.later", json!({}))).unwrap();
+    assert_eq!(later.outcome, Outcome::Uncertain);
+    executor::reconcile(&ctx, &ledger).unwrap();
+    executor::job(&ctx, &ledger, &job("look", json!({}))).unwrap();
+    executor::observe_ticket(&ctx, &ledger, &key()).unwrap();
+    executor::observe_queue(&ctx).unwrap();
+
+    let recorded = probe_calls(&calls);
+    let clone = demo.clone.display().to_string();
+    let mut kinds = Vec::new();
+    for call in &recorded {
+        let config = &call["config"];
+        assert_eq!(config["board"], "DEMO", "{call}");
+        if call["what"] == "queue" {
+            // A call with no ticket gets the [adapter] table as it is.
+            assert_eq!(config["app_url"], "http://localhost:3000/", "{call}");
+            assert!(config.get("port").is_none(), "{call}");
+            kinds.push("queue");
+            continue;
+        }
+        // A key of the clone wins, and the clone adds its own keys.
+        assert_eq!(call["clone"], clone.as_str(), "{call}");
+        assert_eq!(config["app_url"], "http://localhost:3500/", "{call}");
+        assert_eq!(config["port"], 3500, "{call}");
+        kinds.push(if call["reconcile"] == true {
+            "reconcile"
+        } else if call["verb"] == "x.later" {
+            "act"
+        } else if call["job"] == "look" {
+            "job"
+        } else if call["what"] == "ticket" {
+            "ticket"
+        } else {
+            "other"
+        });
+    }
+    kinds.sort_unstable();
+    assert_eq!(kinds, ["act", "job", "queue", "reconcile", "ticket"]);
+}
+
+#[test]
+fn a_job_with_the_environment_of_a_session_gets_the_env_of_the_clone_of_its_ticket() {
+    let demo = Demo::new();
+    command_adapter(
+        &demo,
+        r#"[jobs.session]
+command = "env | sort"
+doc = "session.txt"
+env = "session"
+
+[jobs.plain]
+command = "env | sort"
+doc = "plain.txt"
+"#,
+    );
+    demo.edit_config(|doc| {
+        doc["claude"]["env"]["WORKSPACE"] = toml_edit::value("primary");
+        doc["claude"]["env"]["SHARED"] = toml_edit::value("from claude.env");
+    });
+    clone_with_values(
+        &demo,
+        &[("WORKSPACE", "slot-b"), ("ONLY_HERE", "1")],
+        toml_edit::InlineTable::new(),
+    );
+    demo.commit(&[("notes.txt", "a change\n")], "Change the notes");
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let result = executor::job(&ctx, &ledger, &job("session", json!({}))).unwrap();
+    assert!(result.ok, "{result:?}");
+    let session = ticket_doc(&demo, "session.txt");
+    assert!(
+        session.contains("WORKSPACE=slot-b\n"),
+        "the clone wins: {session}"
+    );
+    assert!(session.contains("SHARED=from claude.env\n"), "{session}");
+    assert!(session.contains("ONLY_HERE=1\n"), "{session}");
+    assert!(!session.contains(COMMAND_SECRET), "{session}");
+    // A plain job gets no value of claude.env and none of the clone.
+    let result = executor::job(&ctx, &ledger, &job("plain", json!({}))).unwrap();
+    assert!(result.ok, "{result:?}");
+    let plain = ticket_doc(&demo, "plain.txt");
+    assert!(!plain.contains("WORKSPACE="), "{plain}");
+}

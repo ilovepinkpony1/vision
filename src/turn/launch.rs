@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::adapter::AdapterAgent;
-use crate::config::{CodexPrice, Effort, Runner};
+use crate::config::{CodexPrice, Config, Effort, Runner};
 use crate::ctx::Ctx;
 use crate::ledger::turns::{NewTurn, Window};
 use crate::ledger::{Event, Ledger};
@@ -172,8 +172,9 @@ pub struct Plan {
     pub workdir: PathBuf,
     /// The names of `claude.env_pass`.
     pub env_pass: Vec<String>,
-    /// The fixed values of `claude.env`, and the values that the runner sets:
-    /// `CLAUDE_CONFIG_DIR`, and `GIT_CONFIG_GLOBAL` of a worker.
+    /// The fixed values of `claude.env` with the `env` of the clone of the ticket over them,
+    /// and the values that the runner sets: `CLAUDE_CONFIG_DIR`, and `GIT_CONFIG_GLOBAL` of a
+    /// worker.
     pub env_set: BTreeMap<String, String>,
     pub first_message: String,
     pub time_limit_secs: u64,
@@ -454,6 +455,8 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
     };
     let program = crate::util::process::find_program(&program)
         .map_or(program, |path| path.display().to_string());
+    // The entry of `clones` of the clone of the ticket gives the session its own values.
+    let clone = ticket_clone(ledger, &request.ticket)?;
     let session = request.resumes.clone().unwrap_or_else(ids::new_session_id);
     let now = time::now();
     let first_n = ledger.count_turns(request.ticket.as_str(), &request.step)? + 1;
@@ -461,7 +464,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
 
     let written = (|| -> Result<Plan> {
         let gitconfig = settings::write_gitconfig(paths, &config.user, &config.git)?;
-        let rendered = settings::render(
+        let mut rendered = settings::render(
             request.kind,
             &workdir,
             &add_dirs,
@@ -469,6 +472,13 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             &gitconfig,
             &protect,
         )?;
+        // In a git worktree, git keeps the index, the objects, and the refs in the common git
+        // folder of the main checkout, so git in the sandbox needs that folder too.
+        if settings::sandboxed(request.kind) {
+            if let Some(git_dir) = git::worktree_common_dir(&workdir) {
+                settings::open_git_dir(&mut rendered, &git_dir);
+            }
+        }
         atomic_write(
             &turn.settings,
             settings::settings_text(
@@ -493,16 +503,16 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         copy_view(&workdir, &id, &request.view)?;
         exclude_view(ctx, &workdir);
 
-        // The fixed values of `claude.env` come first, so that a value of the runner wins.
-        let mut env_set = config.claude.env.clone();
+        let mut own = Vec::new();
         if runner == Runner::Claude {
             if let Some(dir) = config.claude_config_dir(paths)? {
-                env_set.insert("CLAUDE_CONFIG_DIR".into(), dir.display().to_string());
+                own.push(("CLAUDE_CONFIG_DIR", dir.display().to_string()));
             }
             if settings::sandboxed(request.kind) {
-                env_set.insert("GIT_CONFIG_GLOBAL".into(), gitconfig.display().to_string());
+                own.push(("GIT_CONFIG_GLOBAL", gitconfig.display().to_string()));
             }
         }
+        let env_set = fixed_env(config, clone.as_deref(), &own);
         let tools = settings::tools(request.kind, skills);
         let mode = settings::permission_mode(request.kind);
         let mut args: Vec<String> = vec![
@@ -789,6 +799,38 @@ fn allocate(
     bail!("could not find a free turn id for {key} {step}")
 }
 
+/// The variables with a fixed value of a session (section 7.3): `claude.env`, the `env` of the
+/// entry of `clones` of the clone of the ticket over it, and the values that the runner sets
+/// (`own`) over both, so that a value of the runner wins.
+fn fixed_env(
+    config: &Config,
+    clone: Option<&Path>,
+    own: &[(&str, String)],
+) -> BTreeMap<String, String> {
+    let mut env = config.env_for(clone);
+    for (name, value) in own {
+        env.insert((*name).to_string(), value.clone());
+    }
+    env
+}
+
+/// The clone of a ticket from its row: the clone whose entry of `clones` gives the values of
+/// its sessions. `None` for a reserved key and for a ticket with no clone.
+fn ticket_clone(ledger: &Ledger, key: &TicketKey) -> Result<Option<PathBuf>> {
+    if key.is_reserved() {
+        return Ok(None);
+    }
+    let Some(row) = ledger.ticket(key.as_str())? else {
+        return Ok(None);
+    };
+    row.clone
+        .as_deref()
+        .map(str::trim)
+        .filter(|clone| !clone.is_empty())
+        .map(crate::paths::expand_tilde)
+        .transpose()
+}
+
 /// The facts of section 7.2, with the values that the runner owns.
 fn build_facts(request: &LaunchRequest, id: &TurnId) -> Result<Value> {
     let mut facts = match &request.facts {
@@ -1016,6 +1058,48 @@ mod tests {
         assert!(text.contains("\"ticket\":\"DEMO-12\""), "{text}");
         let back: LaunchRequest = serde_json::from_str(&text).unwrap();
         assert_eq!(back, request);
+    }
+
+    #[test]
+    fn a_session_gets_claude_env_then_the_env_of_its_clone_then_the_values_of_the_runner() {
+        use crate::config::CloneEntry;
+        let mut config = Config::default();
+        config.claude.env = BTreeMap::from([
+            ("WORKSPACE".to_string(), "app".to_string()),
+            ("SHARED".to_string(), "yes".to_string()),
+        ]);
+        // The loader refuses a name of the runner in an env. Even so, the value of the runner
+        // wins: it comes last.
+        config.clones = vec![
+            CloneEntry {
+                path: "/work/app".into(),
+                ..CloneEntry::default()
+            },
+            CloneEntry {
+                path: "/work/app-b".into(),
+                env: BTreeMap::from([
+                    ("WORKSPACE".to_string(), "app-b".to_string()),
+                    ("CLAUDE_CONFIG_DIR".to_string(), "/not/this".to_string()),
+                ]),
+                ..CloneEntry::default()
+            },
+        ];
+        let own = [("CLAUDE_CONFIG_DIR", "/v/claude".to_string())];
+        let b = fixed_env(&config, Some(Path::new("/work/app-b")), &own);
+        assert_eq!(
+            b,
+            BTreeMap::from([
+                ("CLAUDE_CONFIG_DIR".to_string(), "/v/claude".to_string()),
+                ("SHARED".to_string(), "yes".to_string()),
+                ("WORKSPACE".to_string(), "app-b".to_string()),
+            ])
+        );
+        // A clone with no values, and a ticket with no clone: claude.env and the runner.
+        for clone in [Some(Path::new("/work/app")), None] {
+            let env = fixed_env(&config, clone, &own);
+            assert_eq!(env["WORKSPACE"], "app", "{clone:?}");
+            assert_eq!(env["CLAUDE_CONFIG_DIR"], "/v/claude", "{clone:?}");
+        }
     }
 
     #[test]

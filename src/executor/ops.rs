@@ -8,6 +8,7 @@
 //! The callers must hold the lock of the tick, so that a reconcile never meets a running call.
 
 use std::fmt;
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -651,7 +652,13 @@ fn reconcile_one(
         }
         Ok(verb) => {
             let secrets = Secrets::read(config)?;
-            let runner = Runner::new(adapter, config, &secrets);
+            // The call names the clone of the first call, and the values of that clone apply.
+            let runner = Runner::new(
+                adapter,
+                config,
+                &secrets,
+                call.clone.as_deref().map(Path::new),
+            );
             let pr = ledger.ticket(&row.ticket)?.and_then(|r| r.pr);
             let input = act_input(row, &call, pr, true);
             let record = crate::running::start(&ctx.paths, "reconcile", &row.verb, &row.ticket);
@@ -965,7 +972,13 @@ fn execute(
     mode: Mode,
     mut stored: Stored,
 ) -> Result<OperationResult> {
-    let runner = Runner::new(adapter, config, secrets);
+    // The call names the clone of the ticket, and the values of that clone apply.
+    let runner = Runner::new(
+        adapter,
+        config,
+        secrets,
+        call.clone.as_deref().map(Path::new),
+    );
     if !runner.has(Script::Act) {
         bail!(
             "{} does not exist or is not executable, so {} of {} cannot run. Fix the adapter; the operation waits",

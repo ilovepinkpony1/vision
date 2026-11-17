@@ -75,6 +75,9 @@ The journal keeps what each earlier turn learned: its notes, the errors it met a
 - Commit with `git add <files>` and `git commit -m "<message>"`.
 - The runner gave the session its name and its address for commits. Never set a user name or an address.
 - Nobody can approve a command in a turn. If a command is denied, run a plain form of it, and go on. One denied command does not mean that each later command is denied.
+- Your clone can be a git worktree. Then `.git` is a file, and git keeps the data of the repo in the folder of the main clone. Git works as in a normal clone.
+- Work only in your working folder. This holds for a worktree too. Never move to the main clone or to another worktree, and run git only in your working folder.
+- Change only the branch of your ticket. Do not run `git config`, `git worktree`, `git update-ref`, or `git branch` on another branch. Another ticket can work in another worktree of the same repo at the same time.
 
 ## Limits
 

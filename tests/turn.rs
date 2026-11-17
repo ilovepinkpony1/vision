@@ -280,6 +280,145 @@ fn attribution_false_turns_off_the_lines_of_claude_code_in_each_turn() {
     }
 }
 
+/// Runs git in `dir` with a neutral author, and gives its standard output.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn a_worker_in_a_git_worktree_reads_and_writes_the_common_git_folder_of_its_repo() {
+    let home = TestHome::new();
+    // The working folder of each turn is a worktree of the repo of a main checkout.
+    let main = home.work.parent().unwrap().join("main repo");
+    std::fs::create_dir_all(&main).unwrap();
+    git_in(&main, &["init", "-q", "-b", "main"]);
+    git_in(&main, &["commit", "-q", "--allow-empty", "-m", "Start"]);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            home.work.to_str().unwrap(),
+        ],
+    );
+    let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap();
+    let common = real(&main.join(".git"));
+    let text = |path: &std::path::Path| json!(path.display().to_string());
+    let scenario = home.scenario(
+        "work",
+        json!([[{"do": "init"}, {"do": "result", "structured_output": result_object("ok")}]]),
+    );
+    for (agent, kind) in [("builder", TurnKind::Worker), ("tester", TurnKind::Tester)] {
+        let launched = home.launch(&home.request("DEMO-12", agent, "work", kind, &scenario));
+        home.wait_ended(&launched);
+        let settings: Value =
+            serde_json::from_str(&home.turn_file(&launched, "settings.json")).unwrap();
+        let filesystem = &settings["sandbox"]["filesystem"];
+        let list = |key: &str| filesystem[key].as_array().cloned().unwrap_or_default();
+        assert!(list("allowRead").contains(&text(&common)), "{settings}");
+        assert!(list("allowWrite").contains(&text(&common)), "{settings}");
+        // Git runs what the configuration and the hooks name outside the sandbox, so they
+        // stay closed to writes.
+        for name in ["config", "hooks"] {
+            assert!(
+                list("denyWrite").contains(&text(&common.join(name))),
+                "{settings}"
+            );
+        }
+        // The work tree of the main checkout stays closed: only its git folder opens.
+        for key in ["allowRead", "allowWrite"] {
+            assert!(
+                !list(key).contains(&text(&main)) && !list(key).contains(&text(&real(&main))),
+                "{key}: {settings}"
+            );
+        }
+        assert_eq!(settings["sandbox"]["enabled"], true);
+        home.collect();
+    }
+    // A reader has no Bash and no sandbox, also in a worktree.
+    let launched =
+        home.launch(&home.request("DEMO-12", "scout", "refine", TurnKind::Reader, &scenario));
+    home.wait_ended(&launched);
+    let settings: Value =
+        serde_json::from_str(&home.turn_file(&launched, "settings.json")).unwrap();
+    assert!(settings.get("sandbox").is_none(), "{settings}");
+    // The view of the turn is listed in the exclude file of the common git folder, so the
+    // worktree stays clean.
+    assert_eq!(git_in(&home.work, &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_session_of_a_ticket_gets_the_env_of_its_clone_over_claude_env() {
+    let home = TestHome::new();
+    let work = home.work.display().to_string();
+    home.edit_config(|doc| {
+        doc["claude"]["env"]["WORKSPACE"] = toml_edit::value("primary");
+        doc["claude"]["env"]["SHARED"] = toml_edit::value("from claude.env");
+        let mut env = toml_edit::InlineTable::new();
+        env.insert("WORKSPACE", "slot-b".into());
+        env.insert("ONLY_HERE", "1".into());
+        let mut entry = toml_edit::InlineTable::new();
+        entry.insert("path", work.as_str().into());
+        entry.insert("env", toml_edit::Value::InlineTable(env));
+        let mut clones = toml_edit::Array::new();
+        clones.push(toml_edit::Value::InlineTable(entry));
+        doc["clones"] = toml_edit::value(clones);
+    });
+    // DEMO-12 holds the clone. DEMO-13 has no row, so it has no clone.
+    home.ledger()
+        .put_ticket(&vision::ledger::TicketRow {
+            key: "DEMO-12".into(),
+            state: Some("build".into()),
+            clone: Some(work.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let scenario = home.scenario(
+        "env",
+        json!([[{"do": "init"},
+                {"do": "env", "show": ["WORKSPACE", "SHARED", "ONLY_HERE", "CLAUDE_CONFIG_DIR"]},
+                {"do": "result", "structured_output": result_object("ok")}]]),
+    );
+    let values = |ticket: &str| {
+        let launched =
+            home.launch(&home.request(ticket, "scout", "refine", TurnKind::Reader, &scenario));
+        home.wait_ended(&launched);
+        home.collect();
+        home.events(&launched, "system", Some("fake_env"))[0]["values"].clone()
+    };
+    let in_clone = values("DEMO-12");
+    assert_eq!(
+        in_clone["WORKSPACE"], "slot-b",
+        "the clone wins: {in_clone}"
+    );
+    assert_eq!(in_clone["SHARED"], "from claude.env", "{in_clone}");
+    assert_eq!(in_clone["ONLY_HERE"], "1", "{in_clone}");
+    // The runner sets its own values after both.
+    assert_eq!(
+        in_clone["CLAUDE_CONFIG_DIR"],
+        home.vision.join("claude").display().to_string()
+    );
+    let no_clone = values("DEMO-13");
+    assert_eq!(no_clone["WORKSPACE"], "primary", "{no_clone}");
+    assert_eq!(no_clone["SHARED"], "from claude.env", "{no_clone}");
+    assert!(no_clone["ONLY_HERE"].is_null(), "{no_clone}");
+}
+
 #[test]
 fn a_reader_gets_no_sandbox_and_a_judge_gets_only_its_role_file() {
     let home = TestHome::new();

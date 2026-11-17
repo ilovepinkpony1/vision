@@ -2326,3 +2326,208 @@ fn the_resume_after_a_failed_job_names_its_documents() {
     );
     assert_eq!(facts["documents"]["proof.txt"], ".vision/proof.txt");
 }
+
+/// The `turn.json` of the first turn of a ticket at a step, and its folder.
+fn turn_of(
+    world: &World,
+    ticket: &str,
+    step: &str,
+) -> Option<(vision::turn::TurnState, std::path::PathBuf)> {
+    let row = world
+        .ledger()
+        .turns_of_ticket(ticket)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.step.as_deref() == Some(step))?;
+    let turn = world.ctx().paths.turn(
+        &TicketKey::parse(ticket).unwrap(),
+        &TurnId::parse(&row.id).unwrap(),
+    );
+    let state = vision::turn::TurnState::read(&turn.status).unwrap()?;
+    Some((state, turn.dir))
+}
+
+/// The first event of the fake with this subtype in the stream of a turn folder.
+fn fake_event(dir: &std::path::Path, subtype: &str) -> Value {
+    std::fs::read_to_string(dir.join("stream.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| event["type"] == "system" && event["subtype"] == subtype)
+        .unwrap_or(Value::Null)
+}
+
+#[test]
+fn two_worktree_clones_take_one_ticket_each_and_both_turns_run_at_once() {
+    let world = World::new();
+    // Two worktrees of the clone of the demo world are the clones, each with its own value.
+    let root = world.clone().parent().unwrap().to_path_buf();
+    let slots = [root.join("slot-a"), root.join("slot-b")];
+    for slot in &slots {
+        git(
+            world.clone(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                slot.to_str().unwrap(),
+                "origin/main",
+            ],
+        );
+    }
+    let texts: Vec<String> = slots.iter().map(|s| s.display().to_string()).collect();
+    world.edit_config(|doc| {
+        let mut clones = toml_edit::Array::new();
+        for (text, name) in texts.iter().zip(["a", "b"]) {
+            let mut env = toml_edit::InlineTable::new();
+            env.insert("WORKSPACE", name.into());
+            let mut entry = toml_edit::InlineTable::new();
+            entry.insert("path", text.as_str().into());
+            entry.insert("env", toml_edit::Value::InlineTable(env));
+            clones.push(toml_edit::Value::InlineTable(entry));
+        }
+        doc["clones"] = toml_edit::value(clones);
+    });
+    world.scenario(
+        "scout",
+        "refine",
+        json!([[
+            {"do": "init"},
+            {"do": "args"},
+            {"do": "env", "show": ["WORKSPACE"]},
+            {"do": "sleep", "seconds": 4},
+            {"do": "result", "structured_output": result("Refined.", &[("refine.md", "R."), ("description.md", "D.")])}
+        ]]),
+    );
+    // The take uses the clones in their order: each ticket gets its own worktree.
+    let first = world.run(&["take", KEY]);
+    first.expect_code(0);
+    assert!(
+        first
+            .stdout
+            .contains(&format!("in the clone {} ", texts[0])),
+        "{first:?}"
+    );
+    let second = world.run(&["take", "DEMO-13"]);
+    second.expect_code(0);
+    assert!(
+        second
+            .stdout
+            .contains(&format!("in the clone {} ", texts[1])),
+        "{second:?}"
+    );
+    for (slot, key) in slots.iter().zip([KEY, "DEMO-13"]) {
+        assert_eq!(
+            git(slot, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            format!("vision/{key}")
+        );
+    }
+    // One tick starts both turns, and both sessions run at the same time.
+    world.tick();
+    let running = |ticket: &str| {
+        turn_of(&world, ticket, "refine")
+            .is_some_and(|(state, _)| state.state == vision::turn::Phase::Running)
+    };
+    let until = Instant::now() + Duration::from_secs(20);
+    while !(running(KEY) && running("DEMO-13")) {
+        assert!(
+            Instant::now() < until,
+            "the two turns never ran at the same time:\n{}",
+            world.log_text()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let refined = |w: &World| {
+        [KEY, "DEMO-13"].iter().all(|ticket| {
+            w.ledger()
+                .ticket(ticket)
+                .unwrap()
+                .and_then(|r| r.state)
+                .as_deref()
+                != Some("refine")
+        })
+    };
+    world.tick_until("both refine steps", LONG, refined);
+    // Each session ran in its own worktree, with the value of its clone.
+    for ((slot, key), name) in slots.iter().zip([KEY, "DEMO-13"]).zip(["a", "b"]) {
+        let (state, dir) = turn_of(&world, key, "refine").unwrap();
+        assert!(state.is_ended(), "{key}: {state:?}");
+        let args = fake_event(&dir, "fake_args");
+        let cwd = std::fs::canonicalize(args["cwd"].as_str().unwrap()).unwrap();
+        assert_eq!(cwd, std::fs::canonicalize(slot).unwrap(), "{key}");
+        assert_eq!(
+            fake_event(&dir, "fake_env")["values"]["WORKSPACE"],
+            name,
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn a_branch_that_another_worktree_holds_stops_the_take_with_the_name_of_that_worktree() {
+    let world = World::new();
+    // The person keeps the branch of DEMO-12 in a worktree of the clone.
+    let person = world.clone().parent().unwrap().join("person");
+    git(
+        world.clone(),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "vision/DEMO-12",
+            person.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    let named = |run: &pipeline_support::Run| {
+        let text = &run.stderr;
+        assert!(
+            text.contains("holds the branch vision/DEMO-12, and git lets one worktree hold a branch at a time"),
+            "{run:?}"
+        );
+        assert!(
+            text.contains("person switch --detach`"),
+            "the fix names the worktree: {run:?}"
+        );
+        assert!(
+            text.contains("then run `vision take DEMO-12` again"),
+            "{run:?}"
+        );
+        assert!(
+            text.contains("is already used by worktree at"),
+            "git names the worktree too: {run:?}"
+        );
+    };
+    let refused = world.run(&["take", KEY]);
+    refused.expect_code(1);
+    named(&refused);
+    assert!(world.row().is_none(), "nothing changed");
+    git(&person, &["switch", "--quiet", "--detach"]);
+    world.run(&["take", KEY]).expect_code(0);
+
+    // A stopped ticket: its clone left the branch, and the worktree of the person holds it.
+    world.run(&["stop", KEY]).expect_code(0);
+    git(world.clone(), &["switch", "--quiet", "--detach"]);
+    git(&person, &["switch", "--quiet", "vision/DEMO-12"]);
+    let again = world.run(&["take", KEY]);
+    again.expect_code(1);
+    named(&again);
+    assert!(
+        !again.stderr.contains("is gone from the clone"),
+        "{again:?}"
+    );
+    assert!(has_flag(&world, "stopped"));
+    git(&person, &["switch", "--quiet", "--detach"]);
+    let back = world.run(&["take", KEY]);
+    back.expect_code(0);
+    assert!(
+        back.stdout.contains("starts again at the step refine"),
+        "{back:?}"
+    );
+    assert_eq!(
+        git(world.clone(), &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "vision/DEMO-12"
+    );
+}

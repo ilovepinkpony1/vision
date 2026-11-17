@@ -99,6 +99,7 @@ pub fn run_checks(ctx: &Ctx) -> (Vec<Check>, Option<Ledger>) {
     checks.extend(check_plugins(ctx));
     checks.push(check_memory(ctx));
     checks.push(check_adapter(ctx));
+    checks.extend(check_clones(ctx));
     checks.push(check_journal(ctx, ledger.as_ref()));
     checks.push(check_archive(ctx));
     checks.push(check_sessions(ctx, ledger.as_ref()));
@@ -271,6 +272,143 @@ fn check_plugins(ctx: &Ctx) -> Option<Check> {
             ),
         )
     })
+}
+
+/// One line `clone` for each entry of `clones`: its path, "worktree of <main checkout>" for a
+/// git worktree, and the names of its `env` keys and its `adapter` keys. The folder must exist
+/// and be the top folder of a git work tree, and the common git folder of a worktree must
+/// exist. A name that the `env` of one clone sets, and that another clone and `claude.env` do
+/// not set, is a warning on the line of that other clone: a session there runs without it,
+/// and a project that separates its clones by such a name uses the values of its primary
+/// clone. With no clone, there is no line.
+fn check_clones(ctx: &Ctx) -> Vec<Check> {
+    let Ok(config) = ctx.config() else {
+        return Vec::new();
+    };
+    let mut checks = Vec::new();
+    for (at, entry) in config.clones.iter().enumerate() {
+        let dir = match crate::paths::expand_tilde(&entry.path) {
+            Ok(dir) => dir,
+            Err(e) => {
+                checks.push(Check::new("clone", Level::Fail, format!("{e:#}")));
+                continue;
+            }
+        };
+        let shown = crate::paths::tilde_display(&dir);
+        if !dir.is_dir() {
+            checks.push(Check::new(
+                "clone",
+                Level::Fail,
+                format!("{shown} does not exist. Make the clone there, or remove it from clones in config.toml"),
+            ));
+            continue;
+        }
+        if !git::is_repo_root(&dir) {
+            checks.push(Check::new(
+                "clone",
+                Level::Fail,
+                not_a_work_tree(&dir, &shown),
+            ));
+            continue;
+        }
+        let mut detail = shown.clone();
+        if git::worktree_common_dir(&dir).is_some() {
+            match git::worktrees(&dir)
+                .ok()
+                .and_then(|trees| trees.into_iter().next())
+            {
+                Some(main) if main.bare => detail.push_str(&format!(
+                    ", worktree of the bare repo {}",
+                    real_display(&main.path)
+                )),
+                Some(main) => {
+                    detail.push_str(&format!(", worktree of {}", real_display(&main.path)))
+                }
+                None => detail.push_str(", a worktree"),
+            }
+        }
+        if !entry.env.is_empty() {
+            let names: Vec<&str> = entry.env.keys().map(String::as_str).collect();
+            detail.push_str(&format!("; env {}", names.join(", ")));
+        }
+        if !entry.adapter.is_empty() {
+            let keys: Vec<&str> = entry.adapter.keys().map(String::as_str).collect();
+            detail.push_str(&format!("; adapter {}", keys.join(", ")));
+        }
+        // Each name that another clone sets, and that neither this clone nor claude.env sets,
+        // with the first clone that sets it.
+        let mut lacks: std::collections::BTreeMap<&str, String> = Default::default();
+        for (other_at, other) in config.clones.iter().enumerate() {
+            for name in other.env.keys() {
+                if other_at == at
+                    || entry.env.contains_key(name)
+                    || config.claude.env.contains_key(name)
+                {
+                    continue;
+                }
+                lacks.entry(name.as_str()).or_insert_with(|| {
+                    crate::paths::expand_tilde(&other.path)
+                        .map(|path| crate::paths::tilde_display(&path))
+                        .unwrap_or_else(|_| other.path.clone())
+                });
+            }
+        }
+        if lacks.is_empty() {
+            checks.push(Check::new("clone", Level::Ok, detail));
+        } else {
+            let names: Vec<String> = lacks
+                .iter()
+                .map(|(name, by)| format!("{name} (set by {by})"))
+                .collect();
+            let it = if names.len() == 1 { "it" } else { "them" };
+            checks.push(Check::new(
+                "clone",
+                Level::Warn,
+                format!(
+                    "{detail}. Its env lacks {}, and claude.env does not set {it}, so a session in this clone runs without {it}. Set {it} in the env of this clone or in claude.env",
+                    names.join(", ")
+                ),
+            ));
+        }
+    }
+    checks
+}
+
+/// A path that git gives, for people: git gives a real path, so the path shows with `~` when
+/// its real path is in the real path of the home folder, such as when the home is a link.
+fn real_display(path: &std::path::Path) -> String {
+    let plain = crate::paths::tilde_display(path);
+    if plain.starts_with('~') {
+        return plain;
+    }
+    let home = crate::paths::user_home().and_then(|home| Ok(home.canonicalize()?));
+    match (path.canonicalize(), home) {
+        (Ok(real), Ok(home)) if real == home => "~".to_string(),
+        (Ok(real), Ok(home)) => match real.strip_prefix(&home) {
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => plain,
+        },
+        _ => plain,
+    }
+}
+
+/// Why a folder is not the top folder of a git work tree. A worktree whose git folder is gone,
+/// such as after a move of the main checkout, names that folder.
+fn not_a_work_tree(dir: &std::path::Path, shown: &str) -> String {
+    let dot_git = dir.join(".git");
+    if dot_git.is_file() {
+        let text = std::fs::read_to_string(&dot_git).unwrap_or_default();
+        if let Some(git_dir) = text.lines().find_map(|l| l.strip_prefix("gitdir:")) {
+            let git_dir = dir.join(git_dir.trim());
+            if !git_dir.is_dir() {
+                return format!(
+                    "{shown} is a git worktree, but its git folder {} is gone, so git does not work there. Run `git worktree repair` in the main checkout, or make the worktree again",
+                    git_dir.display()
+                );
+            }
+        }
+    }
+    format!("{shown} is not the top folder of a git work tree. Make a clone or a worktree there, or fix the path in clones")
 }
 
 /// The adapter of the key `project` loads, and its scripts are executable.

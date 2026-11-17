@@ -1991,6 +1991,56 @@ step = "open-pr"
     }
 
     #[test]
+    fn the_fetch_and_the_head_of_a_continue_work_in_a_clone_that_is_a_git_worktree() {
+        let repos = Repos::new();
+        // The clone of the ticket is a worktree of the clone of Vision: the main checkout goes
+        // to main, and the worktree holds the branch of the ticket.
+        git_in(&repos.clone, &["switch", "--quiet", "main"]);
+        let slot = repos.clone.parent().unwrap().join("slot");
+        git_in(
+            &repos.clone,
+            &["worktree", "add", "--quiet", slot.to_str().unwrap(), BRANCH],
+        );
+        assert!(git::worktree_common_dir(&slot).is_some());
+        let mut ticket = repos.ticket(BRANCH);
+        ticket.row.clone = Some(slot.display().to_string());
+        let head_at = |forge: &str| head(&ticket, BRANCH, &pr_at(forge), false);
+        assert_eq!(
+            head_at(&repos.base),
+            Head::Same {
+                forge: repos.base.clone()
+            }
+        );
+        // The person pushes from another checkout: the worktree fetches the head into the
+        // common repo, and its branch moves forward to it.
+        let pushed = repos.pushed("b.txt");
+        assert_eq!(
+            head_at(&pushed),
+            Head::Forward {
+                from: repos.base.clone(),
+                to: pushed.clone()
+            }
+        );
+        take_head(&slot, &pushed).unwrap();
+        assert_eq!(git_in(&slot, &["rev-parse", "HEAD"]), pushed);
+        assert!(slot.join("b.txt").is_file());
+        assert!(
+            !repos.clone.join("b.txt").exists(),
+            "the main checkout stays on main"
+        );
+        // A change in the work tree of the worktree stops the next fast-forward.
+        let next = repos.pushed("c.txt");
+        Repos::write(&slot, "a.txt", "changed by hand");
+        assert_eq!(
+            head_at(&next),
+            Head::Dirty {
+                forge: next.clone(),
+                changes: 1
+            }
+        );
+    }
+
+    #[test]
     fn a_continue_writes_the_number_of_the_pull_request_only_in_an_empty_row() {
         let checked = Checked {
             found: Found::Nothing("no rule holds".into()),

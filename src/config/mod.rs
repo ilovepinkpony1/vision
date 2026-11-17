@@ -1,13 +1,14 @@
 //! The configuration (section 4): typed values with defaults, loading, and `vision config`.
 //!
 //! A missing key takes its default. An unknown key is an error that names the key. The free
-//! tables `[modes]`, `[secrets]`, `[adapter]`, and `[agents.<name>]` accept any names.
+//! tables `[modes]`, `[secrets]`, `[adapter]`, `[agents.<name>]`, and the `adapter` table of an
+//! entry of `clones` accept any names.
 
 mod edit;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -28,8 +29,10 @@ pub struct Config {
     pub project: String,
     /// The writer name of the person in the memory.
     pub user: String,
-    /// Absolute paths of the clones that Vision owns. `~` is allowed.
-    pub clones: Vec<String>,
+    /// The clones that Vision owns, in the order of `vision take`: a path, or a table with the
+    /// path and the values of that clone.
+    #[serde(deserialize_with = "clone_entries")]
+    pub clones: Vec<CloneEntry>,
     pub claude: Claude,
     /// The Codex CLI of the agents whose runner is `codex` (section 7.3).
     pub codex: Codex,
@@ -87,6 +90,141 @@ impl Default for Config {
             agents: BTreeMap::new(),
         }
     }
+}
+
+/// One entry of `clones`: the folder of a clone, and the values of each ticket in that clone.
+/// In `config.toml` it is a path, such as `"~/work/app"`, or a table with `path`, `env`, and
+/// `adapter`. An entry with no values prints as a path again.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CloneEntry {
+    /// The folder of the clone. `~` is allowed.
+    pub path: String,
+    /// More variables with a fixed value for each session of a ticket in this clone, and for
+    /// each job of it with `env = "session"`. They win over `claude.env`, and a value of the
+    /// runner wins over them. The rules of `claude.env` apply.
+    pub env: BTreeMap<String, String>,
+    /// Keys that win over the same keys of `[adapter]` in each call of a ticket in this clone.
+    pub adapter: toml::Table,
+}
+
+impl CloneEntry {
+    /// True when the entry has values of its own, so it is a table in `config.toml`.
+    pub fn has_values(&self) -> bool {
+        !self.env.is_empty() || !self.adapter.is_empty()
+    }
+}
+
+impl Serialize for CloneEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        if !self.has_values() {
+            return serializer.serialize_str(&self.path);
+        }
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("path", &self.path)?;
+        if !self.env.is_empty() {
+            map.serialize_entry("env", &self.env)?;
+        }
+        if !self.adapter.is_empty() {
+            map.serialize_entry("adapter", &self.adapter)?;
+        }
+        map.end()
+    }
+}
+
+/// The name of an entry of `clones` in a message: its number from 1, and its path when it has
+/// one, such as `clones entry 2 (~/work/app-b)`.
+fn entry_name(number: usize, path: Option<&str>) -> String {
+    match path {
+        Some(path) => format!("clones entry {number} ({path})"),
+        None => format!("clones entry {number}"),
+    }
+}
+
+/// Reads `clones`: each entry is a path, or a table with `path`, `env`, and `adapter`. A table
+/// with another key or with no path is an error that names the entry. The form
+/// `[[clones]]`, one table for each clone, gives the same list.
+fn clone_entries<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<CloneEntry>, D::Error> {
+    use serde::de::Error;
+    let raw = Vec::<toml::Value>::deserialize(deserializer)?;
+    let mut entries = Vec::new();
+    for (at, value) in raw.into_iter().enumerate() {
+        let number = at + 1;
+        let mut table = match value {
+            toml::Value::String(path) => {
+                entries.push(CloneEntry {
+                    path,
+                    ..CloneEntry::default()
+                });
+                continue;
+            }
+            toml::Value::Table(table) => table,
+            _ => {
+                return Err(D::Error::custom(format!(
+                    "{} is neither a path nor a table. Write the folder of the clone, such as \"~/work/app\", or a table such as {{ path = \"~/work/app-b\", env = {{ WORKSPACE = \"app-b\" }} }}",
+                    entry_name(number, None)
+                )))
+            }
+        };
+        let path = match table.remove("path") {
+            Some(toml::Value::String(path)) if !path.trim().is_empty() => path,
+            Some(toml::Value::String(_)) | None => {
+                return Err(D::Error::custom(format!(
+                    "{} has no path. A table of clones needs path, the folder of the clone, such as {{ path = \"~/work/app-b\" }}",
+                    entry_name(number, None)
+                )))
+            }
+            Some(_) => {
+                return Err(D::Error::custom(format!(
+                    "{}: path must be the folder of the clone as text, such as path = \"~/work/app-b\"",
+                    entry_name(number, None)
+                )))
+            }
+        };
+        let name = entry_name(number, Some(&path));
+        if let Some(key) = table
+            .keys()
+            .find(|key| !matches!(key.as_str(), "env" | "adapter"))
+        {
+            return Err(D::Error::custom(format!(
+                "{name} has the unknown key `{key}`. A table of clones has path, env, and adapter"
+            )));
+        }
+        let env = match table.remove("env") {
+            None => BTreeMap::new(),
+            Some(toml::Value::Table(env)) => {
+                let mut texts = BTreeMap::new();
+                for (key, value) in env {
+                    let toml::Value::String(text) = value else {
+                        return Err(D::Error::custom(format!(
+                            "{name}: env.{key} must be text, such as env = {{ {key} = \"app-b\" }}"
+                        )));
+                    };
+                    texts.insert(key, text);
+                }
+                texts
+            }
+            Some(_) => {
+                let text = format!(
+                    "{name}: env must be a table of texts, such as env = {{ WORKSPACE = \"app-b\" }}"
+                );
+                return Err(D::Error::custom(text));
+            }
+        };
+        let adapter = match table.remove("adapter") {
+            None => toml::Table::new(),
+            Some(toml::Value::Table(adapter)) => adapter,
+            Some(_) => {
+                return Err(D::Error::custom(format!(
+                    "{name}: adapter must be a table, such as adapter = {{ app_url = \"http://localhost:3500/\" }}"
+                )))
+            }
+        };
+        entries.push(CloneEntry { path, env, adapter });
+    }
+    Ok(entries)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -693,7 +831,44 @@ impl Config {
 
     /// The clones with `~` expanded.
     pub fn clone_paths(&self) -> Result<Vec<PathBuf>> {
-        self.clones.iter().map(|c| expand_tilde(c)).collect()
+        self.clones.iter().map(|c| expand_tilde(&c.path)).collect()
+    }
+
+    /// The entry of `clones` for the folder of a clone, such as the clone of a ticket row: the
+    /// same path, or the same real path.
+    pub fn clone_entry(&self, clone: &Path) -> Option<&CloneEntry> {
+        let real = clone.canonicalize().ok();
+        self.clones.iter().find(|entry| {
+            let Ok(path) = expand_tilde(&entry.path) else {
+                return false;
+            };
+            path == clone || (real.is_some() && path.canonicalize().ok() == real)
+        })
+    }
+
+    /// The `[adapter]` table of a call for a ticket in `clone`: the keys of the `adapter` table
+    /// of that clone win over the same keys (a shallow merge). A call with no clone, and a clone
+    /// with no entry, get the table as it is.
+    pub fn adapter_for(&self, clone: Option<&Path>) -> toml::Table {
+        let mut table = self.adapter.clone();
+        if let Some(entry) = clone.and_then(|clone| self.clone_entry(clone)) {
+            for (key, value) in &entry.adapter {
+                table.insert(key.clone(), value.clone());
+            }
+        }
+        table
+    }
+
+    /// The variables with a fixed value of a session of a ticket in `clone`: `claude.env`, and
+    /// the `env` of that clone over it. The runner sets its own values after these.
+    pub fn env_for(&self, clone: Option<&Path>) -> BTreeMap<String, String> {
+        let mut env = self.claude.env.clone();
+        if let Some(entry) = clone.and_then(|clone| self.clone_entry(clone)) {
+            for (name, value) in &entry.env {
+                env.insert(name.clone(), value.clone());
+            }
+        }
+        env
     }
 
     /// The folder that `adapter.dir` of the free `[adapter]` table names, or `None` when the key
@@ -722,23 +897,8 @@ impl Config {
                 bail!("{key} is {value}, but it must be a part between 0 and 1, such as 0.60");
             }
         }
-        for (name, value) in &self.claude.env {
-            let valid = !name.is_empty()
-                && name.chars().enumerate().all(|(at, c)| {
-                    c == '_' || c.is_ascii_alphabetic() || (at > 0 && c.is_ascii_digit())
-                });
-            if !valid {
-                bail!(
-                    "claude.env has the name `{name}`, but the name of a variable has only letters, digits, and `_`, and it starts with no digit"
-                );
-            }
-            if RUNNER_ENV.contains(&name.as_str()) {
-                bail!("claude.env cannot set {name}, because the runner sets it for each session");
-            }
-            if value.contains(['\0', '\n', '\r']) {
-                bail!("claude.env.{name} must be one line of text");
-            }
-        }
+        check_env("claude.env", &self.claude.env)?;
+        self.check_clones()?;
         for entry in &self.claude.plugins {
             if entry.trim().is_empty() || entry.contains(['\0', '\n', '\r']) {
                 bail!("claude.plugins has an empty or broken entry. Each entry is the path of a plugin folder, such as \"~/plugins/mine\"");
@@ -784,7 +944,54 @@ impl Config {
     }
 }
 
+/// The rules of `claude.env` and of the `env` of a clone (section 7.3): the name of a variable,
+/// no name that the runner sets, and one line of text. `key` names the table in a message.
+fn check_env(key: &str, env: &BTreeMap<String, String>) -> Result<()> {
+    for (name, value) in env {
+        let valid = !name.is_empty()
+            && name.chars().enumerate().all(|(at, c)| {
+                c == '_' || c.is_ascii_alphabetic() || (at > 0 && c.is_ascii_digit())
+            });
+        if !valid {
+            bail!(
+                "{key} has the name `{name}`, but the name of a variable has only letters, digits, and `_`, and it starts with no digit"
+            );
+        }
+        if RUNNER_ENV.contains(&name.as_str()) {
+            bail!("{key} cannot set {name}, because the runner sets it for each session");
+        }
+        if value.contains(['\0', '\n', '\r']) {
+            bail!("{key}.{name} must be one line of text");
+        }
+    }
+    Ok(())
+}
+
 impl Config {
+    /// The values of each entry of `clones` follow their rules, and no two entries name the
+    /// same clone. Two paths name the same clone when their real paths are equal. A path that
+    /// does not exist, or whose `~` cannot expand, compares as it is written.
+    fn check_clones(&self) -> Result<()> {
+        let mut seen: Vec<(PathBuf, String)> = Vec::new();
+        for (at, entry) in self.clones.iter().enumerate() {
+            let name = entry_name(at + 1, Some(&entry.path));
+            check_env(&format!("{name}: env"), &entry.env)?;
+            if entry.adapter.contains_key("dir") {
+                bail!("{name}: adapter.dir names the folder of the adapter, and one adapter serves each clone. Set it in [adapter]");
+            }
+            let path = expand_tilde(&entry.path).unwrap_or_else(|_| PathBuf::from(&entry.path));
+            let real = path.canonicalize().unwrap_or(path);
+            if let Some((_, first)) = seen.iter().find(|(other, _)| *other == real) {
+                bail!(
+                    "{first} and {name} name the same clone {}. Keep one of them",
+                    real.display()
+                );
+            }
+            seen.push((real, name));
+        }
+        Ok(())
+    }
+
     fn check_escapes(&self) -> Result<()> {
         let escapes = &self.escapes;
         for login in &escapes.reviewers {
@@ -1029,6 +1236,208 @@ mod tests {
         let off = Config::parse("[claude]\nattribution = false\n").unwrap();
         assert!(!off.claude.attribution);
         assert!(Config::parse("[claude]\nattribution = \"no\"\n").is_err());
+    }
+
+    /// The text of an error of the loader, with its causes.
+    fn refusal(text: &str) -> String {
+        format!("{:#}", Config::parse(text).unwrap_err())
+    }
+
+    #[test]
+    fn an_entry_of_clones_is_a_path_or_a_table_and_the_array_of_tables_gives_the_same() {
+        let strings = Config::parse("clones = [\"/work/app\", \"~/work/b\"]\n").unwrap();
+        assert_eq!(
+            strings.clones,
+            [
+                CloneEntry {
+                    path: "/work/app".into(),
+                    ..CloneEntry::default()
+                },
+                CloneEntry {
+                    path: "~/work/b".into(),
+                    ..CloneEntry::default()
+                }
+            ]
+        );
+        assert!(!strings.clones[0].has_values());
+        let mixed = Config::parse(
+            r#"clones = [
+  "/work/app",
+  { path = "/work/app-b", env = { WORKSPACE = "app-b" }, adapter = { app_url = "http://localhost:3500/", app_health_url = "http://localhost:3500/health", port = 3500 } },
+]
+"#,
+        )
+        .unwrap();
+        let b = &mixed.clones[1];
+        assert_eq!(b.path, "/work/app-b");
+        assert_eq!(b.env["WORKSPACE"], "app-b");
+        assert_eq!(b.adapter["port"].as_integer(), Some(3500));
+        assert!(b.has_values());
+        // The array of tables, after the root keys, gives the same list.
+        let tables = Config::parse(
+            r#"project = "demo"
+
+[[clones]]
+path = "/work/app"
+
+[[clones]]
+path = "/work/app-b"
+env = { WORKSPACE = "app-b" }
+
+[clones.adapter]
+app_url = "http://localhost:3500/"
+app_health_url = "http://localhost:3500/health"
+port = 3500
+"#,
+        )
+        .unwrap();
+        assert_eq!(tables.clones, mixed.clones);
+        // A table with only a path is the same entry as the path.
+        let only = Config::parse("clones = [{ path = \"/work/app\" }]\n").unwrap();
+        assert_eq!(only.clones, strings.clones[..1]);
+        assert_eq!(
+            only.clone_paths().unwrap(),
+            [PathBuf::from("/work/app")],
+            "the folders keep their order"
+        );
+    }
+
+    #[test]
+    fn the_loader_refuses_a_broken_entry_of_clones_and_names_it() {
+        for (text, part) in [
+            (
+                "clones = [\"/a\", { path = \"/b\", evn = { A = \"1\" } }]",
+                "clones entry 2 (/b) has the unknown key `evn`",
+            ),
+            (
+                "clones = [\"/a\", { env = { A = \"1\" } }]",
+                "clones entry 2 has no path",
+            ),
+            ("clones = [{ path = \"\" }]", "clones entry 1 has no path"),
+            (
+                "clones = [{ path = 3 }]",
+                "clones entry 1: path must be the folder of the clone as text",
+            ),
+            ("clones = [3]", "clones entry 1 is neither a path nor a table"),
+            (
+                "clones = [{ path = \"/b\", env = \"A=1\" }]",
+                "clones entry 1 (/b): env must be a table of texts",
+            ),
+            (
+                "clones = [{ path = \"/b\", env = { A = 1 } }]",
+                "clones entry 1 (/b): env.A must be text",
+            ),
+            (
+                "clones = [{ path = \"/b\", adapter = \"x\" }]",
+                "clones entry 1 (/b): adapter must be a table",
+            ),
+            // The env of a clone follows each rule of claude.env.
+            (
+                "clones = [{ path = \"/b\", env = { \"1A\" = \"x\" } }]",
+                "clones entry 1 (/b): env has the name `1A`, but the name of a variable has only letters, digits, and `_`, and it starts with no digit",
+            ),
+            (
+                "clones = [{ path = \"/b\", env = { GIT_CONFIG_GLOBAL = \"x\" } }]",
+                "clones entry 1 (/b): env cannot set GIT_CONFIG_GLOBAL, because the runner sets it for each session",
+            ),
+            (
+                "clones = [{ path = \"/b\", env = { A = \"x\\ny\" } }]",
+                "clones entry 1 (/b): env.A must be one line of text",
+            ),
+            (
+                "clones = [{ path = \"/b\", adapter = { dir = \"/other\" } }]",
+                "clones entry 1 (/b): adapter.dir names the folder of the adapter",
+            ),
+            (
+                "clones = [\"/work/app\", { path = \"/work/app\", env = { A = \"1\" } }]",
+                "clones entry 1 (/work/app) and clones entry 2 (/work/app) name the same clone /work/app",
+            ),
+        ] {
+            let error = refusal(&format!("{text}\n"));
+            assert!(error.contains(part), "{text}: {error}");
+        }
+        // Two paths of one folder name the same clone: the loader compares the real paths.
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("app");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let error = refusal(&format!(
+            "clones = [{:?}, {:?}]\n",
+            real.display().to_string(),
+            link.display().to_string()
+        ));
+        assert!(error.contains("name the same clone"), "{error}");
+        assert!(error.contains("clones entry 2"), "{error}");
+    }
+
+    #[test]
+    fn the_values_of_a_clone_win_over_claude_env_and_the_adapter_table() {
+        let config = Config::parse(
+            r#"clones = ["/work/app", { path = "/work/app-b", env = { WORKSPACE = "app-b", ONLY_B = "1" }, adapter = { app_url = "http://localhost:3500/" } }]
+
+[claude]
+env = { WORKSPACE = "app", SHARED = "yes" }
+
+[adapter]
+app_url = "http://localhost:3000/"
+board = "DEMO"
+"#,
+        )
+        .unwrap();
+        let b = Path::new("/work/app-b");
+        assert_eq!(config.clone_entry(b).unwrap().path, "/work/app-b");
+        assert_eq!(
+            config.env_for(Some(b)),
+            BTreeMap::from([
+                ("ONLY_B".to_string(), "1".to_string()),
+                ("SHARED".to_string(), "yes".to_string()),
+                ("WORKSPACE".to_string(), "app-b".to_string()),
+            ])
+        );
+        let table = config.adapter_for(Some(b));
+        assert_eq!(table["app_url"].as_str(), Some("http://localhost:3500/"));
+        assert_eq!(table["board"].as_str(), Some("DEMO"));
+        // A clone with no values, a clone that is not in clones, and no clone: the tables as
+        // they are.
+        for clone in [
+            Some(Path::new("/work/app")),
+            Some(Path::new("/other")),
+            None,
+        ] {
+            assert_eq!(config.env_for(clone), config.claude.env, "{clone:?}");
+            assert_eq!(config.adapter_for(clone), config.adapter, "{clone:?}");
+        }
+    }
+
+    #[test]
+    fn clones_print_as_they_load_and_a_list_of_paths_prints_as_before() {
+        // A list of paths prints as a list of texts.
+        let strings = Config::parse("clones = [\"/work/app\", \"~/work/b\"]\n").unwrap();
+        let text = toml::to_string_pretty(&strings).unwrap();
+        assert!(
+            text.contains("clones = [\n    \"/work/app\",\n    \"~/work/b\",\n]"),
+            "{text}"
+        );
+        assert_eq!(
+            serde_json::to_value(&strings).unwrap()["clones"],
+            serde_json::json!(["/work/app", "~/work/b"])
+        );
+        // A table prints with its values, and the text loads back to the same values.
+        let tables = Config::parse(
+            "[[clones]]\npath = \"/work/app\"\n\n[[clones]]\npath = \"/work/app-b\"\nenv = { WORKSPACE = \"app-b\" }\nadapter = { port = 3500 }\n",
+        )
+        .unwrap();
+        let text = toml::to_string_pretty(&tables).unwrap();
+        assert!(
+            text.contains("{ path = \"/work/app-b\", env = { WORKSPACE = \"app-b\" }, adapter = { port = 3500 } }"),
+            "{text}"
+        );
+        assert_eq!(Config::parse(&text).unwrap(), tables);
+        assert_eq!(
+            serde_json::to_value(&tables).unwrap()["clones"][1],
+            serde_json::json!({"path": "/work/app-b", "env": {"WORKSPACE": "app-b"}, "adapter": {"port": 3500}})
+        );
     }
 
     #[test]
