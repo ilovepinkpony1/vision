@@ -1389,6 +1389,13 @@ struct Conflict {
 /// app.py with the function of staging and the function of the ticket.
 const BOTH: &str = "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n\n\ndef sub(a, b):\n    return a - b\n";
 
+/// A file of staging with no conflict.
+const NOTES: &str = "Staging notes.\n";
+
+/// The identity of the commits of a session, as the runner gives it to `act` in `git`.
+const BOT_NAME: &str = "app[bot]";
+const BOT_EMAIL: &str = "7+app[bot]@users.noreply.github.com";
+
 impl Conflict {
     fn new() -> Conflict {
         let t = AdapterTest::new();
@@ -1398,10 +1405,13 @@ impl Conflict {
             &["checkout", "--quiet", "-b", "staging", "main"],
             &repos.clone,
         );
-        repos.write(&[(
-            "app.py",
-            "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n",
-        )]);
+        repos.write(&[
+            (
+                "app.py",
+                "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n",
+            ),
+            ("notes.md", NOTES),
+        ]);
         let tip = repos.commit("add mul");
         git(
             &["push", "--quiet", &remote, "staging:refs/heads/staging"],
@@ -1450,6 +1460,7 @@ impl Conflict {
             .config(config)
             .field("clone", json!(self.repos.clone.display().to_string()))
             .field("head", json!(self.repos.head))
+            .field("git", json!({"name": BOT_NAME, "email": BOT_EMAIL}))
             .run()
     }
 
@@ -1457,9 +1468,14 @@ impl Conflict {
         self.repos.clone.join(".vision/merge/staging")
     }
 
-    /// Writes app.py in the merge folder and commits the merge, as Merger does.
+    /// Writes app.py in the merge folder, as Merger does. Its sandbox cannot write the git
+    /// folder of the worktree, so it neither stages nor commits.
     fn resolve(&self, text: &str) {
         std::fs::write(self.folder().join("app.py"), text).unwrap();
+    }
+
+    /// Commits the merge in the merge folder by hand, as a person can.
+    fn commit_by_hand(&self) {
         git(&["add", "app.py"], &self.folder());
         git(&["commit", "--quiet", "--no-edit"], &self.folder());
     }
@@ -1487,6 +1503,7 @@ fn deploy_a_conflict_starts_the_merge_in_a_worktree_of_the_clone_and_names_it() 
         "- `app.py`",
         "Merge folder: `.vision/merge/staging`",
         "Merge message: `Merge DEMO-12 (",
+        "Do not stage or commit",
     ] {
         assert!(content.contains(part), "{part} in:\n{content}");
     }
@@ -1517,20 +1534,21 @@ fn deploy_a_conflict_starts_the_merge_in_a_worktree_of_the_clone_and_names_it() 
 }
 
 #[test]
-fn deploy_merge_pushes_the_resolved_merge_as_a_fast_forward_and_removes_its_folder() {
+fn deploy_merge_commits_the_resolved_files_and_pushes_the_merge_as_a_fast_forward() {
     let c = Conflict::new();
     assert_eq!(c.call("deploy").json["conflict"], json!(true));
+    // Merger only edits the file. A scratch file of its turn stays out of the merge.
     c.resolve(BOTH);
-    let merge = git(&["rev-parse", "HEAD"], &c.folder());
+    std::fs::write(c.folder().join("scratch.txt"), "notes of the turn\n").unwrap();
     let result = c.call("deploy.merge");
     assert_eq!(result.state(), "confirmed", "{result:?}");
+    let merge = c
+        .repos
+        .remote_head("staging")
+        .expect("staging on the remote");
     assert!(
         has(&result, &format!("pushed the merge {}", &merge[..12])),
         "{result:?}"
-    );
-    assert_eq!(
-        c.repos.remote_head("staging").as_deref(),
-        Some(merge.as_str())
     );
     assert_eq!(
         git(
@@ -1538,6 +1556,26 @@ fn deploy_merge_pushes_the_resolved_merge_as_a_fast_forward_and_removes_its_fold
             &c.repos.remote
         ),
         format!("{merge} {} {}", c.tip, c.repos.head)
+    );
+    // The commit has the merge message and the identity of the call, and only the files of
+    // the merge.
+    assert_eq!(
+        git(
+            &["log", "-1", "--format=%an <%ae>|%cn <%ce>|%s", &merge],
+            &c.repos.remote
+        ),
+        format!(
+            "{BOT_NAME} <{BOT_EMAIL}>|{BOT_NAME} <{BOT_EMAIL}>|Merge DEMO-12 ({}) into staging",
+            &c.repos.head[..12]
+        )
+    );
+    assert_eq!(
+        git(&["show", &format!("{merge}:app.py")], &c.repos.remote),
+        BOTH.trim_end()
+    );
+    assert_eq!(
+        git(&["ls-tree", "--name-only", &merge], &c.repos.remote),
+        "app.py\nnotes.md"
     );
     assert!(!c.folder().exists());
     assert!(!git(&["worktree", "list"], &c.repos.clone).contains(".vision/merge"));
@@ -1548,7 +1586,23 @@ fn deploy_merge_pushes_the_resolved_merge_as_a_fast_forward_and_removes_its_fold
 }
 
 #[test]
-fn deploy_merge_refuses_no_merge_an_open_merge_a_marker_and_a_branch_that_moved() {
+fn deploy_merge_pushes_a_merge_that_a_person_committed_by_hand() {
+    let c = Conflict::new();
+    assert_eq!(c.call("deploy").json["conflict"], json!(true));
+    c.resolve(BOTH);
+    c.commit_by_hand();
+    let merge = git(&["rev-parse", "HEAD"], &c.folder());
+    let result = c.call("deploy.merge");
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert_eq!(
+        c.repos.remote_head("staging").as_deref(),
+        Some(merge.as_str())
+    );
+    assert!(!c.folder().exists());
+}
+
+#[test]
+fn deploy_merge_refuses_no_merge_a_marker_a_change_with_no_conflict_and_a_branch_that_moved() {
     let c = Conflict::new();
     let none = c.call("deploy.merge");
     assert_eq!(none.state(), "failed", "{none:?}");
@@ -1557,12 +1611,30 @@ fn deploy_merge_refuses_no_merge_an_open_merge_a_marker_and_a_branch_that_moved(
         "{none:?}"
     );
     c.call("deploy");
+    let marked = std::fs::read_to_string(c.folder().join("app.py")).unwrap();
+    // Merger left the markers in the file of the list: nothing is staged or committed.
     let open = c.call("deploy.merge");
     assert_eq!(open.state(), "failed", "{open:?}");
-    assert!(has(&open, "is not committed"), "{open:?}");
-    // A merge that keeps a marker.
-    let marked = std::fs::read_to_string(c.folder().join("app.py")).unwrap();
+    assert!(
+        has(&open, "still holds a conflict marker at app.py:"),
+        "{open:?}"
+    );
+    assert_eq!(git(&["rev-parse", "MERGE_HEAD"], &c.folder()), c.repos.head);
+    assert_eq!(git(&["rev-parse", "HEAD"], &c.folder()), c.tip);
+    // Merger resolved the file, but it also changed a file with no conflict.
+    c.resolve(BOTH);
+    std::fs::write(c.folder().join("notes.md"), "Other notes.\n").unwrap();
+    let other = c.call("deploy.merge");
+    assert_eq!(other.state(), "failed", "{other:?}");
+    assert!(
+        has(&other, "changes notes.md, which had no conflict"),
+        "{other:?}"
+    );
+    assert_eq!(git(&["rev-parse", "HEAD"], &c.folder()), c.tip);
+    std::fs::write(c.folder().join("notes.md"), NOTES).unwrap();
+    // A merge that a person committed by hand with a marker left.
     c.resolve(&marked);
+    c.commit_by_hand();
     let result = c.call("deploy.merge");
     assert_eq!(result.state(), "failed", "{result:?}");
     assert!(

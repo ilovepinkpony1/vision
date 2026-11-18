@@ -2411,15 +2411,13 @@ fn a_deploy_that_does_not_merge_goes_to_merger_and_deploy_merge_pushes_the_merge
     git(&work, &["push", "--quiet", "origin", "staging"]);
     let tip = git(&work, &["rev-parse", "HEAD"]);
 
-    // Merger keeps both functions and commits the merge in the merge folder.
+    // Merger keeps both functions in the file of the merge folder. It does not commit: the
+    // sandbox of a real turn cannot write the git folder of a worktree.
     let both =
         format!("{TOY_CALC}{multiply}\n# Gives a minus b.\nsubtract() {{ echo $(($1 - $2)); }}\n");
     let resolved = team.path().join("calc.sh");
     std::fs::write(&resolved, &both).unwrap();
-    let command = format!(
-        "cp '{}' .vision/merge/staging/calc.sh && git -C .vision/merge/staging add calc.sh && git -C .vision/merge/staging commit -q --no-edit",
-        resolved.display()
-    );
+    let command = format!("cp '{}' .vision/merge/staging/calc.sh", resolved.display());
     p.scenario(
         "merger",
         "merge-staging",
@@ -2478,11 +2476,16 @@ fn a_deploy_that_does_not_merge_goes_to_merger_and_deploy_merge_pushes_the_merge
     assert!(p.doc("merge.md").is_some());
     assert!(p.flags().is_empty(), "{:?}", p.flags());
 
-    // deploy.merge pushed the merge of the head into the tip, as a fast-forward of staging.
+    // deploy.merge committed the merge of the head into the tip, and pushed it as a
+    // fast-forward of staging.
     let merge = git(&p.remote, &["rev-parse", "refs/heads/staging"]);
     assert_eq!(
         git(&p.remote, &["rev-list", "--parents", "-n", "1", &merge]),
         format!("{merge} {tip} {head}")
+    );
+    assert_eq!(
+        git(&p.remote, &["log", "-1", "--format=%s", &merge]),
+        format!("Merge {KEY} ({}) into staging", &head[..12])
     );
     assert_eq!(
         git(&p.remote, &["show", "refs/heads/staging:calc.sh"]),

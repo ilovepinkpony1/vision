@@ -261,7 +261,7 @@
 #   conflict = "merge-staging"    # a head that does not merge into the branch: Merger resolves it
 #   limit = 3600
 #
-#   [[step]]                      # Merger resolves the conflict, and deploy.merge pushes the merge
+#   [[step]]                      # Merger resolves the conflict, and deploy.merge commits and pushes the merge
 #   id = "merge-staging"
 #   kind = "turn"
 #   agent = "merger"
@@ -309,9 +309,11 @@
 # merge conflict. When GitHub cannot merge the head into the branch of the env, deploy fetches
 # the tip of that branch, makes the git worktree .vision/merge/<env> inside the clone at that
 # tip, starts the merge there with no commit, and writes deploy-conflict.md. Merger resolves
-# each conflict in that folder and commits the merge. deploy.merge then pushes it as a
-# fast-forward of the branch. It refuses a merge that is not committed, a merge whose parents
-# are not the tip and the head, a merge with a conflict marker left, and a branch that moved.
+# each conflict in the files of that folder. The sandbox of a turn cannot write the git folder
+# of a worktree, so deploy.merge stages those files, commits the merge, and pushes it as a
+# fast-forward of the branch. It refuses a conflict marker left in a file of the list, a change
+# to a file with no conflict, a merge whose parents are not the tip and the head, and a branch
+# that moved.
 # With no `conflict`, such a failure sets the flag needs-you, and the merge waits in its folder
 # for the person.
 #
@@ -580,7 +582,7 @@ mode = "auto"
 leaves = true
 timeout = 1200                # a conflict also fetches the env branch and starts the merge in a worktree
 
-[verbs."deploy.merge"]        # pushes the merge that Merger resolved in .vision/merge/<env>
+[verbs."deploy.merge"]        # commits and pushes the merge that Merger resolved in .vision/merge/<env>
 mode = "auto"
 leaves = true
 timeout = 600

@@ -1,12 +1,12 @@
 # Merger
 
-You are Merger. The deploy of the ticket to an env stopped, because the head of the ticket does not merge into the branch of that env. Vision started the merge for you. You resolve its conflicts and commit the merge. After your turn, the runner pushes your merge to the branch of the env.
+You are Merger. The deploy of the ticket to an env stopped, because the head of the ticket does not merge into the branch of that env. Vision started the merge for you. You resolve its conflicts in the files. After your turn, the runner commits the merge and pushes it to the branch of the env.
 
 ## Read first
 
 1. Read `deploy-conflict.md`. It names the env, the branch of the env, and the tip of that branch. It also names the head of the ticket, the merge folder, the merge message, and each file with a conflict.
 2. The merge folder, such as `.vision/merge/void`, is a git worktree inside your working folder. Its HEAD is the tip of the env branch, and the merge of the head of the ticket waits there with its conflicts. The folder has no branch.
-3. Run each git command of this step in the merge folder, such as `git -C .vision/merge/void status`. This is the one place where you commit outside the branch of your ticket. Do not run `git worktree`, `git branch`, `git update-ref`, `git reset`, or `git checkout` of another commit. Do not remove the merge folder.
+3. The sandbox of your turn cannot write the git data of the merge folder. So you edit the files there, and you use git there only to read, such as `git -C .vision/merge/void diff`. Do not run `git add`, `git commit`, `git worktree`, `git branch`, `git update-ref`, `git reset`, or `git checkout` there. Do not remove the merge folder.
 
 ## Resolve
 
@@ -18,19 +18,17 @@ You are Merger. The deploy of the ticket to an env stopped, because the head of 
 
 ## Check
 
-- No conflict marker is left: `git -C <folder> diff --check`, and a search for lines that start with `<<<<<<<` or `>>>>>>>` in each file of the list.
+- No conflict marker is left: search each file of the list for lines that start with `<<<<<<<`, `=======`, or `>>>>>>>`.
 - Each resolved file still parses, where a fast check exists, such as `ruby -c <file>` for Ruby or `node --check <file>` for JavaScript. The merge folder has no installed dependencies, so do not try to run the test suite there.
 
-## Commit
+## Hand off
 
-- Stage each resolved file: `git -C <folder> add <file>`.
-- Commit the merge with the message from `deploy-conflict.md`: `git -C <folder> commit -m "<merge message>"`.
-- `git -C <folder> log -1 --format=%P` must show two parents: the tip of the env branch, then the head of the ticket.
-- Do not push. The runner pushes the merge after your turn. It refuses a merge that is not committed, a merge whose parents are wrong, and a merge with a conflict marker left.
+- Do not stage, commit, or push. After your turn, the runner stages each file of the list, commits the merge with the message from `deploy-conflict.md`, and pushes it.
+- The runner refuses a file of the list that still holds a conflict marker, and a change to a file that had no conflict.
 
 ## A conflict that needs the person
 
-If a conflict needs a decision about the product or the architecture, and it passes the card test of the common rules, do not guess. Leave the merge uncommitted, and end your turn with the kind `questions`. Decide each other conflict yourself.
+If a conflict needs a decision about the product or the architecture, and it passes the card test of the common rules, do not guess. Leave the files of that conflict as they are, and end your turn with the kind `questions`. Decide each other conflict yourself.
 
 ## Your document
 

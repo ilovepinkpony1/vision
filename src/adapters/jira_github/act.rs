@@ -1793,6 +1793,70 @@ fn clone_of(call: &Map<String, Value>) -> Option<PathBuf> {
     }
 }
 
+/// The message of the merge of the head of a ticket into the branch of an env.
+fn merge_message(key: &str, head: &str, branch: &str) -> String {
+    format!("Merge {key} ({}) into {branch}", short(head))
+}
+
+/// `user.name` and `user.email` from the `git` object of the call (the identity of the commits
+/// of a session), as values for [`Git::config`]. With no such object, git makes its own guess,
+/// and that guess fails on a host whose name has no domain.
+fn identity_settings(call: &Map<String, Value>) -> Vec<String> {
+    let text = |key: &str| {
+        call.get("git")?
+            .get(key)?
+            .as_str()
+            .map(str::trim)
+            .filter(|t| !t.is_empty() && !t.contains(['\n', '\r', '\0']))
+            .map(str::to_string)
+    };
+    match (text("name"), text("email")) {
+        (Some(name), Some(email)) => {
+            vec![format!("user.name={name}"), format!("user.email={email}")]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The non-empty lines of a text, trimmed, such as the file names that git gives.
+fn names(text: &str) -> Vec<String> {
+    splitlines(text)
+        .into_iter()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// True when a merge waits in the worktree `work`: git has a MERGE_HEAD there.
+fn merge_waits(work: &Path) -> Res<bool> {
+    let found = Git::new(
+        &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
+        Some(work),
+    )
+    .unchecked()
+    .run()?;
+    Ok(found.code == Some(0))
+}
+
+/// The path of the list of the files with a conflict, in the git folder of the worktree `work`.
+fn conflict_list_path(work: &Path) -> Res<PathBuf> {
+    let list = Git::new(&["rev-parse", "--git-path", CONFLICT_LIST], Some(work)).text()?;
+    Ok(if Path::new(&list).is_absolute() {
+        PathBuf::from(list)
+    } else {
+        work.join(list)
+    })
+}
+
+/// The files with a conflict of the merge in `work`, from the list that `deploy` wrote. Empty
+/// when the list is gone.
+fn conflict_list(work: &Path) -> Res<Vec<String>> {
+    Ok(names(
+        &std::fs::read_to_string(conflict_list_path(work)?).unwrap_or_default(),
+    ))
+}
+
 /// Starts the merge of `head` into the env branch in a worktree of the clone, so that an agent
 /// can resolve its conflicts: fetches the tip of the branch as `refs/vision/deploy/<env>`, makes
 /// the worktree `.vision/merge/<env>` at that tip (an old one goes first), and runs `git merge`
@@ -1849,37 +1913,41 @@ fn prepare_merge(
     .timeout(600)
     .run()?;
     let work = clone.join(&folder);
-    let message = format!("Merge {key} ({}) into {branch}", short(head));
+    let message = merge_message(key, head, branch);
+    // git refuses to start a merge with no committer, also with --no-commit, and it cannot
+    // guess one on a host whose name has no domain.
+    let identity = identity_settings(call);
     let merged = Git::new(
         &["merge", "--no-ff", "--no-commit", "-m", &message, head],
         Some(&work),
     )
     .unchecked()
     .timeout(600)
+    .config(&identity)
     .run()?;
-    let files: Vec<String> =
-        splitlines(&Git::new(&["diff", "--name-only", "--diff-filter=U"], Some(&work)).text()?)
-            .into_iter()
-            .map(str::trim)
-            .filter(|f| !f.is_empty())
-            .map(str::to_string)
-            .collect();
+    let files = names(&Git::new(&["diff", "--name-only", "--diff-filter=U"], Some(&work)).text()?);
     if files.is_empty() {
+        let started = merge_waits(&work)?;
         remove_merge(&clone, &folder);
+        if !started && merged.code != Some(0) {
+            let said = format!("{}{}", merged.stdout_text(), merged.stderr_text());
+            return fail(format!(
+                "git merge of {} did not start: {}",
+                short(head),
+                clean(said.trim(), 300)
+            ));
+        }
         return fail(format!(
             "{branch} is at {} now, and {} merges into it with no conflict. Run the step again",
             short(&tip),
             short(head)
         ));
     }
-    let list = Git::new(&["rev-parse", "--git-path", CONFLICT_LIST], Some(&work)).text()?;
-    let list = if Path::new(&list).is_absolute() {
-        PathBuf::from(list)
-    } else {
-        work.join(list)
-    };
-    std::fs::write(&list, format!("{}\n", files.join("\n")))
-        .map_err(|e| Error::Unexpected(format!("OSError: {e}")))?;
+    std::fs::write(
+        conflict_list_path(&work)?,
+        format!("{}\n", files.join("\n")),
+    )
+    .map_err(|e| Error::Unexpected(format!("OSError: {e}")))?;
     let said = format!("{}{}", merged.stdout_text(), merged.stderr_text());
     Ok(Merge {
         tip,
@@ -1930,6 +1998,7 @@ fn conflict_answer(
          - Merge folder: `{folder}`\n\
          - Merge message: `{message}`\n\n\
          ## Files with a conflict\n\n{files}\n\n\
+         Resolve each of these files in the merge folder, and change no other file. Do not stage or commit: after the turn, `deploy.merge` stages these files, commits the merge with the message above, and pushes it.\n\n\
          ## What git merge said\n\n```text\n{said}\n```\n",
         tip = merge.tip,
         folder = merge.folder,
@@ -1960,10 +2029,13 @@ fn conflict_answer(
 
 // deploy.merge ----------------------------------------------------------------------------------
 
-/// Pushes the merge that an agent resolved in the merge folder of an env (see `deploy`) to the
-/// branch of the env. It pushes only a merge of the head into the tip that the branch still
-/// has, so the push is a fast-forward, and never a merge that holds a conflict marker in a file
-/// that had a conflict. After the push, the merge folder goes away.
+/// Commits and pushes the merge that an agent resolved in the merge folder of an env (see
+/// `deploy`) to the branch of the env. The sandbox of a turn cannot write the git folder of a
+/// worktree, so the agent only edits the files with a conflict, and this verb stages them and
+/// commits the merge. A merge that a person committed by hand goes as it is. It pushes only a
+/// merge of the head into the tip that the branch still has, so the push is a fast-forward,
+/// and never a merge that holds a conflict marker in a file that had a conflict. After the
+/// push, the merge folder goes away.
 fn deploy_merge(
     config: &Config,
     call: &Map<String, Value>,
@@ -1971,7 +2043,7 @@ fn deploy_merge(
     state: &mut Acting,
 ) -> Res<Value> {
     let why = "deploy.merge";
-    check_key(call.get("key"), "the ticket key")?;
+    let key = check_key(call.get("key"), "the ticket key")?;
     let Some(head) = commit_of(truthy(call.get("head"))).map(str::to_string) else {
         return fail("deploy.merge needs the last commit in head");
     };
@@ -2027,16 +2099,11 @@ fn deploy_merge(
             "no merge waits in {folder}. Run the deploy step again, so that it starts the merge"
         ));
     }
-    let pending = Git::new(
-        &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
-        Some(&work),
-    )
-    .unchecked()
-    .run()?;
-    if pending.code == Some(0) {
-        return failed(&format!(
-            "the merge in {folder} is not committed. Resolve each conflict, then commit the merge"
-        ));
+    if merge_waits(&work)? {
+        let message = merge_message(&key, &head, &branch);
+        if let Some(refused) = commit_merge(call, &work, &folder, &message)? {
+            return failed(&refused);
+        }
     }
     let merge = Git::new(&["rev-parse", "--verify", "HEAD^{commit}"], Some(&work)).text()?;
     let line = Git::new(&["rev-list", "--parents", "-n", "1", &merge], Some(&work)).text()?;
@@ -2115,31 +2182,92 @@ fn deploy_merge(
     )
 }
 
+/// Commits the merge that waits in `work` after an agent edited its files with a conflict:
+/// stages those files and commits with `message` and the identity of the call. It refuses a
+/// file that still holds a conflict marker, and a change to a file that had no conflict.
+/// Gives the reason of a refusal, or `None` after the commit.
+fn commit_merge(
+    call: &Map<String, Value>,
+    work: &Path,
+    folder: &str,
+    message: &str,
+) -> Res<Option<String>> {
+    let files = conflict_list(work)?;
+    if files.is_empty() {
+        return Ok(Some(format!(
+            "the merge in {folder} is not committed, and the list of its files with a conflict is gone. Run the deploy step again, so that it starts the merge"
+        )));
+    }
+    if let Some(marker) = working_marker(work, &files) {
+        return Ok(Some(format!(
+            "the merge in {folder} still holds a conflict marker at {marker}. Resolve it, then run the step again"
+        )));
+    }
+    let other: Vec<String> = names(&Git::new(&["diff", "--name-only"], Some(work)).text()?)
+        .into_iter()
+        .filter(|f| !files.contains(f))
+        .collect();
+    if !other.is_empty() {
+        return Ok(Some(format!(
+            "the merge in {folder} changes {}, which had no conflict. Undo that change, then run the step again",
+            other.join(", ")
+        )));
+    }
+    let mut add = vec!["add", "-A", "--"];
+    add.extend(files.iter().map(String::as_str));
+    Git::new(&add, Some(work)).run()?;
+    let open = names(&Git::new(&["diff", "--name-only", "--diff-filter=U"], Some(work)).text()?);
+    if !open.is_empty() {
+        return Ok(Some(format!(
+            "the merge in {folder} still has a conflict in {}. Resolve it, then run the step again",
+            open.join(", ")
+        )));
+    }
+    let mut settings = identity_settings(call);
+    settings.push("commit.gpgsign=false".into());
+    Git::new(
+        &["commit", "--quiet", "--no-verify", "-m", message],
+        Some(work),
+    )
+    .config(&settings)
+    .run()?;
+    Ok(None)
+}
+
+/// The first conflict marker in the work tree of `work`, in a file of `files`, as
+/// `path:line`. A file that is gone or binary has none.
+fn working_marker(work: &Path, files: &[String]) -> Option<String> {
+    for file in files {
+        let Ok(bytes) = std::fs::read(work.join(file)) else {
+            continue;
+        };
+        if bytes.contains(&0) {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&bytes);
+        if let Some(index) = text.lines().position(is_marker) {
+            return Some(format!("{file}:{}", index + 1));
+        }
+    }
+    None
+}
+
+/// A line that starts a side or ends a conflict, as `git merge` writes it.
+fn is_marker(line: &str) -> bool {
+    ["<<<<<<<", ">>>>>>>"].iter().any(|mark| {
+        line.strip_prefix(mark)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+    })
+}
+
 /// The first conflict marker of the merge commit in a file that had a conflict, as
 /// `path:line`, or `None`. With no list of those files, each file that the merge changed
 /// counts.
 fn conflict_marker(work: &Path, merge: &str) -> Res<Option<String>> {
-    let list = Git::new(&["rev-parse", "--git-path", CONFLICT_LIST], Some(work)).text()?;
-    let list = if Path::new(&list).is_absolute() {
-        PathBuf::from(list)
-    } else {
-        work.join(list)
-    };
-    let mut files: Vec<String> = std::fs::read_to_string(&list)
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|f| !f.is_empty())
-        .map(str::to_string)
-        .collect();
+    let mut files = conflict_list(work)?;
     if files.is_empty() {
         let first = format!("{merge}^1");
-        files = splitlines(&Git::new(&["diff", "--name-only", &first, merge], Some(work)).text()?)
-            .into_iter()
-            .map(str::trim)
-            .filter(|f| !f.is_empty())
-            .map(str::to_string)
-            .collect();
+        files = names(&Git::new(&["diff", "--name-only", &first, merge], Some(work)).text()?);
     }
     if files.is_empty() {
         return Ok(None);

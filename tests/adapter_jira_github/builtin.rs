@@ -32,6 +32,7 @@ fn runner<'a>(t: &AdapterTest, secrets: &'a Secrets) -> Runner<'a> {
         base_ref: BASE_REF.into(),
         secrets,
         session: Default::default(),
+        git: json!(null),
     }
 }
 

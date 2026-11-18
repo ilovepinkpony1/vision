@@ -360,6 +360,10 @@ pub struct Runner<'a> {
     pub secrets: &'a Secrets,
     /// The environment of a work session, for a job with `env = "session"`.
     pub session: SessionEnv,
+    /// The name and the address of a commit that a verb makes, such as the merge commit of
+    /// `deploy.merge`, as `{"name": ..., "email": ...}`: the identity of the commits of a
+    /// session. `bin/act` gets it as `git`. Null sends nothing.
+    pub git: Value,
 }
 
 impl<'a> Runner<'a> {
@@ -373,6 +377,7 @@ impl<'a> Runner<'a> {
         secrets: &'a Secrets,
         clone: Option<&Path>,
     ) -> Runner<'a> {
+        let (name, email) = crate::turn::identity(&config.user, &config.git);
         Runner {
             scripts: adapter.scripts.clone(),
             builtin: adapter.builtin.as_deref().map(Builtin::new),
@@ -383,6 +388,7 @@ impl<'a> Runner<'a> {
                 pass: config.claude.env_pass.clone(),
                 set: config.env_for(clone),
             },
+            git: serde_json::json!({"name": name, "email": email}),
         }
     }
 
@@ -472,6 +478,9 @@ impl<'a> Runner<'a> {
         };
         input.insert("config".into(), self.config.clone());
         input.insert("base_ref".into(), Value::String(self.base_ref.clone()));
+        if script == Script::Act && !self.git.is_null() {
+            input.insert("git".into(), self.git.clone());
+        }
         let bytes = serde_json::to_vec(&Value::Object(input)).unwrap_or_default();
         let mut command = Command::new(&path);
         if let Some(builtin) = &self.builtin {
@@ -772,7 +781,31 @@ mod tests {
             base_ref: "origin/trunk".into(),
             secrets,
             session: SessionEnv::default(),
+            git: Value::Null,
         }
+    }
+
+    #[test]
+    fn only_act_gets_the_identity_of_a_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["act", "observe"] {
+            script(
+                dir.path(),
+                name,
+                "read line; printf '{\"got\": %s}' \"$line\"",
+            );
+        }
+        let secrets = Secrets::default();
+        let mut runner = runner(dir.path(), &secrets);
+        runner.git = json!({"name": "app[bot]", "email": "7+app[bot]@users.noreply.github.com"});
+        let got = |answer: Answer| match answer {
+            Answer::Done(map) => map["got"].clone(),
+            other => panic!("done, not {other:?}"),
+        };
+        let act = got(runner.act(json!({}), DEFAULT_TIMEOUT).unwrap());
+        assert_eq!(act["git"], runner.git);
+        let observe = got(runner.observe(json!({})).unwrap());
+        assert_eq!(observe.get("git"), None, "{observe}");
     }
 
     #[test]
