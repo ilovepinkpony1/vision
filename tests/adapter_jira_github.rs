@@ -111,6 +111,7 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
         "ci.rerun",
         "tracker.move",
         "deploy",
+        "deploy.merge",
         "review.reply",
         "review.rerequest",
         "review.resolve",
@@ -126,14 +127,20 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
         .filter(|v| !v.read)
         .map(|v| v.name.as_str())
         .collect();
-    assert_eq!(writes.len(), 11, "{writes:?}");
+    assert_eq!(writes.len(), 12, "{writes:?}");
     for verb in ["review.resolve", "review.minimize"] {
         assert!(
             !adapter.verbs[verb].leaves,
             "{verb} sends no text out, so no gate reads it"
         );
     }
-    for verb in ["tracker.describe", "git.push", "pr.open", "review.reply"] {
+    for verb in [
+        "tracker.describe",
+        "git.push",
+        "pr.open",
+        "review.reply",
+        "deploy.merge",
+    ] {
         assert!(adapter.verbs[verb].leaves, "{verb} sends text out");
     }
     for verb in ["jira.issue", "jira.search", "github.pr", "ci.log"] {

@@ -1462,6 +1462,33 @@ pub(crate) fn op_facts(
     Ok(out)
 }
 
+/// The first verb of `entries` whose operation at the commit of now failed on a merge
+/// conflict: its label and the detail of its failure. `None` when no verb failed so.
+fn conflict_of(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &Ticket,
+    entries: &[Entry],
+) -> Result<Option<(String, String)>> {
+    for entry in entries.iter().filter(|e| e.kind == EntryKind::Verb) {
+        let Ok(args) = entry_args(ctx, &ticket.key, entry) else {
+            continue;
+        };
+        let run = OperationRun {
+            ticket: ticket.key.clone(),
+            verb: entry.name.clone(),
+            args,
+            turn: None,
+        };
+        if let Some(op) = executor::lookup(ctx, ledger, &run)? {
+            if op.state == executor::OpState::Failed && op.conflict {
+                return Ok(Some((entry.label(), op.detail)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// The value of a cap of the configuration by its name, or a number of entries of the step.
 pub(crate) fn cap_value(ctx: &Ctx, name: &str) -> Result<Option<u32>> {
     if let Ok(n) = name.parse::<u32>() {
@@ -1657,6 +1684,22 @@ pub(crate) fn gather(
                 });
                 (hit.to.clone(), hit.how())
             }),
+            // A merge conflict of a start verb wins over the interrupt, as it does in
+            // `decide`, so the event of the move names the conflict.
+            conflict: match &wait.conflict {
+                Some(to) => {
+                    conflict_of(ctx, ledger, ticket, &step.start)?.map(|(label, detail)| {
+                        let how = format!("conflict {label}");
+                        branch = Some(Branch {
+                            to: to.clone(),
+                            how: how.clone(),
+                            detail: Some(json!({"conflict": label, "reason": detail})),
+                        });
+                        (to.clone(), how)
+                    })
+                }
+                None => None,
+            },
             target: wait_target(&step.on, visit.watched.as_deref()),
             waits: wait.wait.clone(),
             limit: wait.limit,

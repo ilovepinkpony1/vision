@@ -15,11 +15,11 @@
                  A false pass sends a bug to a person.
     shepherd     claude-opus-5-5        high    default                                no turn yet
                  It gives verdicts on review comments and fixes the valid ones.
+    merger       claude-opus-5-5        high    default                                no turn yet
+                 It resolves the merge conflicts of a deploy. A wrong merge breaks an env that t…
     judge        claude-fable-5-2       high    default                                no turn yet
                  It can answer alone, so a wrong answer costs the most. Its turns are short.
-    curator      claude-fable-5-2       high    default                                no turn yet
-                 It runs seldom, and its proposals change each later answer.
-  ╭─ recommendation for scout ───────────────────────────────────────────────────────── ▼ 8 more ╮
+  ╭─ recommendation for scout ───────────────────────────────────────────────────────── ▼ 9 more ╮
   │  Fewer than 20 measured turns for a second model, so the default stays.                      │
   │                                                                                              │
   │  No turn of this agent ended yet, so nothing is measured.                                    │

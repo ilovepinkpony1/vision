@@ -174,6 +174,9 @@ pub struct OperationResult {
     pub set: SetValues,
     /// The documents of the confirmed answer that the executor wrote to the ticket folder.
     pub documents: Vec<String>,
+    /// The answer failed on a merge conflict that an agent can resolve (section 11.1). A wait
+    /// step with `conflict` sends the ticket to the step that resolves it.
+    pub conflict: bool,
     /// The sensitive paths that wait for the approval of the person.
     pub held: Vec<String>,
     /// For the mode shadow: what the verb would do.
@@ -194,6 +197,9 @@ struct Stored {
     /// The documents of the confirmed answer, written to the ticket folder.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     documents: Vec<String>,
+    /// The failed answer named a merge conflict.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    conflict: bool,
     /// The gate that refused the operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gate: Option<String>,
@@ -669,7 +675,8 @@ fn reconcile_one(
                     let answer = act_answer(&map);
                     stored.detail = format!("reconcile: {}", answer.detail);
                     stored.set = answer.set;
-                    if answer.state == OpState::Confirmed {
+                    stored.conflict = answer.conflict;
+                    if answer.state == OpState::Confirmed || answer.conflict {
                         stored.documents = act_documents(ctx, row, &answer.documents, &secrets)?;
                     }
                     (answer.state, answer.external_id)
@@ -1006,7 +1013,8 @@ fn execute(
             let answer = act_answer(&map);
             stored.detail = answer.detail;
             stored.set = answer.set;
-            if answer.state == OpState::Confirmed {
+            stored.conflict = answer.conflict;
+            if answer.state == OpState::Confirmed || answer.conflict {
                 stored.documents = act_documents(ctx, row, &answer.documents, secrets)?;
             }
             (answer.state, answer.external_id)
@@ -1055,7 +1063,8 @@ fn act_input(row: &OperationRow, call: &CallRecord, pr: Option<i64>, reconcile: 
     input
 }
 
-/// Writes the documents of a confirmed answer to the ticket folder, with the rules of the
+/// Writes the documents of a confirmed answer, or of an answer that failed on a merge
+/// conflict, to the ticket folder, with the rules of the
 /// documents of a job: masked, plain names only, and never a name that the person or the
 /// pipeline owns. Gives their names.
 fn act_documents(
@@ -1085,6 +1094,8 @@ struct ActAnswer {
     set: SetValues,
     /// The valid documents of the answer. A dropped one is a note of `detail`.
     documents: Vec<Document>,
+    /// A failed answer with `"conflict": true`: a merge conflict that an agent can resolve.
+    conflict: bool,
 }
 
 fn act_answer(map: &Map<String, Value>) -> ActAnswer {
@@ -1129,12 +1140,14 @@ fn act_answer(map: &Map<String, Value>) -> ActAnswer {
         }
         detail.push_str(&note);
     }
+    let conflict = state == OpState::Failed && map.get("conflict") == Some(&Value::Bool(true));
     ActAnswer {
         state,
         detail,
         external_id: clean::line(map.get("external_id"), 200),
         set,
         documents,
+        conflict,
     }
 }
 
@@ -1306,6 +1319,7 @@ fn result_of(row: &OperationRow) -> Result<OperationResult> {
         external_id: row.external_id.clone(),
         set: stored.set,
         documents: stored.documents,
+        conflict: stored.conflict,
         held: stored.held,
         intent: stored.intent,
         source: row.source.clone(),
@@ -1403,6 +1417,32 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("read verb"));
+    }
+
+    #[test]
+    fn only_a_failed_answer_names_a_merge_conflict_and_keeps_its_documents() {
+        let answer = |value: Value| act_answer(value.as_object().unwrap());
+        let conflict = answer(
+            json!({"state": "failed", "detail": "conflict", "conflict": true,
+            "documents": [{"name": "deploy-conflict.md", "content": "# The conflict\n"}]}),
+        );
+        assert!(conflict.conflict);
+        assert_eq!(conflict.state, OpState::Failed);
+        assert_eq!(conflict.documents.len(), 1);
+        // A confirmed answer, a text in the place of true, and a plain failure name no conflict.
+        assert!(!answer(json!({"state": "confirmed", "conflict": true})).conflict);
+        assert!(!answer(json!({"state": "failed", "conflict": "true"})).conflict);
+        assert!(!answer(json!({"state": "failed"})).conflict);
+        // The flag goes into the stored result, and an old result without it reads as false.
+        let stored = Stored {
+            conflict: true,
+            ..Stored::default()
+        };
+        let text = serde_json::to_string(&stored).unwrap();
+        assert!(text.contains("\"conflict\":true"), "{text}");
+        let old: Stored = serde_json::from_str("{\"detail\":\"x\"}").unwrap();
+        assert!(!old.conflict);
+        assert!(!serde_json::to_string(&old).unwrap().contains("conflict"));
     }
 
     #[test]

@@ -12,13 +12,14 @@ use crate::paths::Paths;
 use crate::util::fs::read_optional;
 
 /// The files of `agents/`, as the binary embeds them.
-const EMBEDDED: [(&str, &str); 18] = [
+const EMBEDDED: [(&str, &str); 19] = [
     ("common.md", include_str!("../../agents/common.md")),
     ("scout.md", include_str!("../../agents/scout.md")),
     ("builder.md", include_str!("../../agents/builder.md")),
     ("reviewer.md", include_str!("../../agents/reviewer.md")),
     ("tester.md", include_str!("../../agents/tester.md")),
     ("shepherd.md", include_str!("../../agents/shepherd.md")),
+    ("merger.md", include_str!("../../agents/merger.md")),
     ("judge.md", include_str!("../../agents/judge.md")),
     ("curator.md", include_str!("../../agents/curator.md")),
     ("repro.md", include_str!("../../agents/repro.md")),

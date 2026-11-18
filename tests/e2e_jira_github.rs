@@ -2337,6 +2337,164 @@ fn a_late_comment_interrupts_a_wait_step_before_its_watch() {
     assert_eq!(detail["interrupt"], Value::Null);
 }
 
+/// The adapter of the repo with the steps of the env staging before ready-to-merge: a deploy
+/// whose merge conflict goes to merge-staging, where Merger resolves it and deploy.merge pushes
+/// the merge.
+fn conflict_adapter() -> String {
+    let anchor = "\n[[step]]\nid = \"ready-to-merge\"";
+    let text = fast_adapter();
+    assert_eq!(text.matches(anchor).count(), 1);
+    text.replace(
+        anchor,
+        &format!(
+            r#"
+[[step]]
+id = "deploy-staging"
+kind = "wait"
+start = [{{ verb = "deploy", args = {{ env = "staging" }} }}]
+watch = "envs.staging.holds"
+on = {{ "true" = "ready-to-merge" }}
+wait = ["false", "none"]
+conflict = "merge-staging"
+every = 1
+
+[[step]]
+id = "merge-staging"
+kind = "turn"
+agent = "merger"
+turn = "worker"
+reads = ["deploy-conflict.md"]
+expects = ["doc:merge.md"]
+after = [{{ verb = "deploy.merge", args = {{ env = "staging" }} }}]
+next = "ready-to-merge"
+{anchor}"#
+        ),
+    )
+}
+
+#[test]
+fn a_deploy_that_does_not_merge_goes_to_merger_and_deploy_merge_pushes_the_merge() {
+    let p = Project::with_adapter(conflict_adapter());
+    // The env staging, with the branch staging, in the [adapter] table of this test only.
+    let path = p.vision.join("config.toml");
+    let mut doc: DocumentMut = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    let mut env = toml_edit::InlineTable::new();
+    env.insert("name", "staging".into());
+    env.insert("branch", "staging".into());
+    let mut envs = toml_edit::Array::new();
+    envs.push(env);
+    doc["adapter"]["envs"] = toml_edit::value(envs);
+    std::fs::write(&path, doc.to_string()).unwrap();
+
+    needs_the_person_at_refine(&p);
+    pull_request_by_hand(&p);
+    let head = p.head();
+    // Another ticket put multiply on staging, at the place where this ticket adds subtract.
+    let team = TempDir::new().unwrap();
+    let work = team.path().join("team");
+    git(
+        team.path(),
+        &[
+            "clone",
+            "--quiet",
+            p.remote.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    git(
+        &work,
+        &["checkout", "--quiet", "-b", "staging", "origin/main"],
+    );
+    let multiply = "\n# Gives a times b.\nmultiply() { echo $(($1 * $2)); }\n";
+    std::fs::write(work.join("calc.sh"), format!("{TOY_CALC}{multiply}")).unwrap();
+    git(&work, &["commit", "--quiet", "-am", "Add multiply"]);
+    git(&work, &["push", "--quiet", "origin", "staging"]);
+    let tip = git(&work, &["rev-parse", "HEAD"]);
+
+    // Merger keeps both functions and commits the merge in the merge folder.
+    let both =
+        format!("{TOY_CALC}{multiply}\n# Gives a minus b.\nsubtract() {{ echo $(($1 - $2)); }}\n");
+    let resolved = team.path().join("calc.sh");
+    std::fs::write(&resolved, &both).unwrap();
+    let command = format!(
+        "cp '{}' .vision/merge/staging/calc.sh && git -C .vision/merge/staging add calc.sh && git -C .vision/merge/staging commit -q --no-edit",
+        resolved.display()
+    );
+    p.scenario(
+        "merger",
+        "merge-staging",
+        json!([runs_then(
+            &command,
+            result(
+                "Merged.",
+                &[(
+                    "merge.md",
+                    "# Merge of DEMO-12 into staging\n\n## calc.sh\n\nstaging added multiply, and the ticket added subtract: both stay.\n"
+                )]
+            )
+        )]),
+    );
+
+    p.run(&["retry", KEY, "--step", "deploy-staging"])
+        .expect_code(0);
+    p.tick_until("the merge on staging", |p| {
+        p.step().as_deref() == Some("ready-to-merge")
+    });
+
+    // The deploy failed on the conflict, and the ticket went to merge-staging with no flag.
+    let moved = p
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "step")
+        .find_map(|e| {
+            let detail: Value = serde_json::from_str(e.detail.as_deref()?).ok()?;
+            (detail["to"] == "merge-staging").then_some(detail)
+        })
+        .unwrap_or_else(|| panic!("no move to merge-staging. {}", p.report()));
+    assert_eq!(
+        (&moved["from"], &moved["how"], &moved["conflict"]),
+        (
+            &json!("deploy-staging"),
+            &json!("conflict deploy"),
+            &json!("deploy")
+        )
+    );
+    assert!(
+        moved["reason"]
+            .as_str()
+            .unwrap_or("")
+            .contains("conflict in calc.sh"),
+        "{moved}"
+    );
+    let conflict = p
+        .doc("deploy-conflict.md")
+        .expect("the document of the conflict");
+    assert!(
+        conflict.contains("- `calc.sh`") && conflict.contains(&tip),
+        "{conflict}"
+    );
+    assert!(p.doc("merge.md").is_some());
+    assert!(p.flags().is_empty(), "{:?}", p.flags());
+
+    // deploy.merge pushed the merge of the head into the tip, as a fast-forward of staging.
+    let merge = git(&p.remote, &["rev-parse", "refs/heads/staging"]);
+    assert_eq!(
+        git(&p.remote, &["rev-list", "--parents", "-n", "1", &merge]),
+        format!("{merge} {tip} {head}")
+    );
+    assert_eq!(
+        git(&p.remote, &["show", "refs/heads/staging:calc.sh"]),
+        both.trim_end()
+    );
+    // The merge folder is gone, and the clone keeps its branch, its head, and a clean tree.
+    assert!(!p.clone.join(".vision/merge/staging").exists());
+    assert_eq!(git(&p.clone, &["symbolic-ref", "--short", "HEAD"]), BRANCH);
+    assert_eq!(p.head(), head);
+    assert_eq!(git(&p.clone, &["status", "--porcelain"]), "");
+}
+
 #[test]
 fn a_round_of_comments_keeps_the_marks_only_after_its_end_facts_hold() {
     // A note of a bot waits, and the Shepherd answers nothing. Its first result leaves a file

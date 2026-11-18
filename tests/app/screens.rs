@@ -267,7 +267,7 @@ fn agent_rows(app: &App) -> Vec<String> {
 fn the_screen_models_with_more_agents_than_rows_shows_a_window_that_follows_the_selection() {
     let mut app = models_many(SMALL);
     let names: Vec<&str> = vision::models::AGENTS.iter().map(|a| a.name).collect();
-    assert_eq!(names.len(), 15);
+    assert_eq!(names.len(), 16);
     assert_snapshot("models_many_100x28", &screen(&app));
     // At each selection, the rows of seven agents show between the table and the box, the
     // selected agent is one of them, and the box and the footer keep their rows.

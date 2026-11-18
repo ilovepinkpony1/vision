@@ -342,6 +342,7 @@ mod tests {
                     (path.to_string(), steps)
                 })
                 .collect(),
+            conflict: None,
         }
     }
 

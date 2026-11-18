@@ -258,7 +258,18 @@
 #   on = { "true" = "deployed-staging" }
 #   wait = ["false", "none"]
 #   interrupt = { "review.state" = { comments = "comments", changes = "comments" } }
+#   conflict = "merge-staging"    # a head that does not merge into the branch: Merger resolves it
 #   limit = 3600
+#
+#   [[step]]                      # Merger resolves the conflict, and deploy.merge pushes the merge
+#   id = "merge-staging"
+#   kind = "turn"
+#   agent = "merger"
+#   turn = "worker"
+#   reads = ["deploy-conflict.md"]
+#   expects = ["doc:merge.md"]
+#   after = [{ verb = "deploy.merge", args = { env = "staging" } }]
+#   next = "deployed-staging"
 #
 #   [[step]]                      # the env runs the head: its newest deployment holds it
 #   id = "deployed-staging"
@@ -293,6 +304,16 @@
 # several paths, the paths are read in their sorted order, and the first value that names a
 # step wins. The answer of observe of this adapter always holds review.state, so an interrupt
 # on it costs no call.
+#
+# `conflict` of a wait step names the step where the ticket goes when a start verb failed on a
+# merge conflict. When GitHub cannot merge the head into the branch of the env, deploy fetches
+# the tip of that branch, makes the git worktree .vision/merge/<env> inside the clone at that
+# tip, starts the merge there with no commit, and writes deploy-conflict.md. Merger resolves
+# each conflict in that folder and commits the merge. deploy.merge then pushes it as a
+# fast-forward of the branch. It refuses a merge that is not committed, a merge whose parents
+# are not the tip and the head, a merge with a conflict marker left, and a branch that moved.
+# With no `conflict`, such a failure sets the flag needs-you, and the merge waits in its folder
+# for the person.
 #
 # `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
 # merge happened, not that the env already runs the new code. `envs.staging.deployed` says
@@ -557,7 +578,12 @@ timeout = 120
 [verbs.deploy]
 mode = "auto"
 leaves = true
-timeout = 120
+timeout = 1200                # a conflict also fetches the env branch and starts the merge in a worktree
+
+[verbs."deploy.merge"]        # pushes the merge that Merger resolved in .vision/merge/<env>
+mode = "auto"
+leaves = true
+timeout = 600
 
 [verbs."review.reply"]
 mode = "auto"

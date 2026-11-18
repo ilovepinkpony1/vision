@@ -445,6 +445,10 @@ pub struct WaitStep {
     /// goes. Each look reads the interrupts before `watch`, from the same answer, and the
     /// paths in their sorted order: the first value that names a step moves the ticket there.
     pub interrupt: BTreeMap<String, BTreeMap<String, String>>,
+    /// `conflict`: the step where the ticket goes when a start verb failed on a merge conflict,
+    /// such as a deploy whose head does not merge into the branch of its env. `None`: such a
+    /// failure sets the flag needs-you, as each other failure does.
+    pub conflict: Option<String>,
 }
 
 /// A time of day in the time zone of the machine, such as `09:00`.
@@ -1934,6 +1938,7 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
             "cap",
             "from",
             "interrupt",
+            "conflict",
         ],
         "ask" => &["docs", "on", "cap", "when"],
         "check" => &["doc", "line", "stop_line", "next", "fail", "cap", "when"],
@@ -2037,6 +2042,9 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
             ),
             (_, "interrupt") => format!(
                 "a {kind} step has no interrupt: only a wait step looks at the answer of observe, and an interrupt moves it before its watch"
+            ),
+            (_, "conflict") => format!(
+                "a {kind} step has no conflict: only a wait step sends a merge conflict of its start verbs to another step"
             ),
             _ => format!("the key `{key}` does not belong to a {kind} step"),
         };
@@ -2845,6 +2853,11 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
         }
     };
     let interrupt = interrupt_table(table.remove("interrupt"), at, problems);
+    let conflict = string(
+        table.remove("conflict"),
+        &format!("{at} conflict"),
+        problems,
+    );
     WaitStep {
         watch,
         every,
@@ -2852,6 +2865,7 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
         limit,
         from,
         interrupt,
+        conflict,
     }
 }
 
@@ -2986,6 +3000,19 @@ fn check_links(adapter: &Adapter, problems: &mut Problems) {
             }
         }
         if let StepKind::Wait(wait) = &step.kind {
+            if let Some(target) = &wait.conflict {
+                if !ids.contains(target.as_str()) {
+                    problems.add(
+                        &at,
+                        format!("conflict names the step `{target}`, which does not exist"),
+                    );
+                } else if *target == step.id {
+                    problems.add(
+                        &at,
+                        format!("conflict names its own step `{target}`, so the failed start verb never leaves it. Name the step that resolves the conflict"),
+                    );
+                }
+            }
             for (path, values) in &wait.interrupt {
                 for (value, target) in values {
                     if !ids.contains(target.as_str()) {
@@ -3413,6 +3440,7 @@ url = "http://localhost:3000"
                 limit: None,
                 from: None,
                 interrupt: BTreeMap::new(),
+                conflict: None,
             })
         );
         assert_eq!(ci.on["red"], "build");
@@ -4701,6 +4729,37 @@ url = "http://localhost:3000"
             (
                 with("action = \"approve-merge\"\n", "action = \"approve-merge\"\ninterrupt = { \"review.state\" = { comments = \"build\" } }\n"),
                 "step `approve`: a human step has no interrupt: only a wait step looks at the answer of observe",
+            ),
+        ];
+        for (text, expected) in cases {
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+    }
+
+    #[test]
+    fn the_loader_reads_the_conflict_step_of_a_wait_step_and_refuses_one_that_cannot_work() {
+        let adapter = parse(&with("every = 30\n", "every = 30\nconflict = \"build\"\n")).unwrap();
+        let StepKind::Wait(wait) = &adapter.step("ci").unwrap().kind else {
+            panic!("ci is a wait step");
+        };
+        assert_eq!(wait.conflict.as_deref(), Some("build"));
+        let StepKind::Wait(plain) = &parse(GOOD).unwrap().step("ci").unwrap().kind.clone() else {
+            panic!("ci is a wait step");
+        };
+        assert_eq!(plain.conflict, None);
+        let cases: Vec<(String, &str)> = vec![
+            (
+                with("every = 30\n", "every = 30\nconflict = \"nowhere\"\n"),
+                "step `ci`: conflict names the step `nowhere`, which does not exist",
+            ),
+            (
+                with("every = 30\n", "every = 30\nconflict = \"ci\"\n"),
+                "step `ci`: conflict names its own step `ci`, so the failed start verb never leaves it",
+            ),
+            (
+                with("action = \"approve-merge\"\n", "action = \"approve-merge\"\nconflict = \"build\"\n"),
+                "step `approve`: a human step has no conflict: only a wait step sends a merge conflict of its start verbs to another step",
             ),
         ];
         for (text, expected) in cases {

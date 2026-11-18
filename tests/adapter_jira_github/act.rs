@@ -14,8 +14,8 @@ use crate::fixtures::{
 };
 use crate::jira_github_support::world::{install, World};
 use crate::jira_github_support::{
-    assert_no_secret_in_files, git, header_hash, read_calls, secret, secret_forms, secrets_without,
-    AdapterTest, Outcome, Reply, Repos, BRANCH, KEY,
+    assert_no_secret_in_files, git, git_output, header_hash, read_calls, secret, secret_forms,
+    secrets_without, AdapterTest, Outcome, Reply, Repos, BRANCH, KEY,
 };
 
 fn issue_path() -> String {
@@ -1344,6 +1344,9 @@ fn deploy_409_is_a_conflict() {
     let result = deploy(&t, "staging", false);
     assert_eq!(result.state(), "failed");
     assert!(has(&result, "conflict"));
+    // With no clone, no merge can start: the failure is for the person, as before.
+    assert_eq!(result.json.get("conflict"), None, "{result:?}");
+    assert!(has(&result, "Merge it by hand"));
 }
 
 #[test]
@@ -1372,6 +1375,224 @@ fn deploy_an_unknown_env_and_the_base_branch() {
         .server
         .calls(Some("POST"), Some(&merges_path()))
         .is_empty());
+}
+
+/// A clone and its bare remote where the head of the ticket and the branch staging change the
+/// same lines of app.py, so the head does not merge into staging. The fake GitHub answers 409
+/// to the merge, and its compare reads the bare remote.
+struct Conflict {
+    t: AdapterTest,
+    repos: Repos,
+    tip: String,
+}
+
+/// app.py with the function of staging and the function of the ticket.
+const BOTH: &str = "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n\n\ndef sub(a, b):\n    return a - b\n";
+
+impl Conflict {
+    fn new() -> Conflict {
+        let t = AdapterTest::new();
+        let repos = Repos::new(&t.path("repos"));
+        let remote = repos.remote.display().to_string();
+        git(
+            &["checkout", "--quiet", "-b", "staging", "main"],
+            &repos.clone,
+        );
+        repos.write(&[(
+            "app.py",
+            "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n",
+        )]);
+        let tip = repos.commit("add mul");
+        git(
+            &["push", "--quiet", &remote, "staging:refs/heads/staging"],
+            &repos.clone,
+        );
+        git(&["checkout", "--quiet", BRANCH], &repos.clone);
+        git(&["branch", "--quiet", "-D", "staging"], &repos.clone);
+        // A Vision clone ignores its .vision folder.
+        std::fs::write(repos.clone.join(".git/info/exclude"), "/.vision/\n").unwrap();
+        t.server.route("POST", &merges_path(), |_| {
+            Reply::json(409, json!({"message": "Merge conflict"}))
+        });
+        let (bare, head) = (repos.remote.clone(), repos.head.clone());
+        t.server.route(
+            "GET",
+            &format!("{REPO_PATH}/compare/staging...{head}"),
+            move |_| {
+                let tip = git(&["rev-parse", "refs/heads/staging"], &bare);
+                let holds = git_output(
+                    &["merge-base", "--is-ancestor", &head, "refs/heads/staging"],
+                    &bare,
+                )
+                .status
+                .success();
+                let status = if tip == head {
+                    "identical"
+                } else if holds {
+                    "behind"
+                } else {
+                    "diverged"
+                };
+                Reply::json(200, json!({ "status": status }))
+            },
+        );
+        Conflict { t, repos, tip }
+    }
+
+    fn call(&self, verb: &str) -> Outcome {
+        let config = self.t.config(json!({
+            "git_remote_url": self.repos.remote.display().to_string(),
+            "envs": [{"name": "staging", "branch": "staging"}],
+        }));
+        self.t
+            .act(verb)
+            .args(json!({"env": "staging"}))
+            .config(config)
+            .field("clone", json!(self.repos.clone.display().to_string()))
+            .field("head", json!(self.repos.head))
+            .run()
+    }
+
+    fn folder(&self) -> std::path::PathBuf {
+        self.repos.clone.join(".vision/merge/staging")
+    }
+
+    /// Writes app.py in the merge folder and commits the merge, as Merger does.
+    fn resolve(&self, text: &str) {
+        std::fs::write(self.folder().join("app.py"), text).unwrap();
+        git(&["add", "app.py"], &self.folder());
+        git(&["commit", "--quiet", "--no-edit"], &self.folder());
+    }
+}
+
+#[test]
+fn deploy_a_conflict_starts_the_merge_in_a_worktree_of_the_clone_and_names_it() {
+    let c = Conflict::new();
+    let result = c.call("deploy");
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert_eq!(result.json["conflict"], json!(true), "{result:?}");
+    assert!(
+        has(
+            &result,
+            "The merge waits in .vision/merge/staging with a conflict in app.py"
+        ),
+        "{result:?}"
+    );
+    let doc = &result.json["documents"][0];
+    assert_eq!(doc["name"], "deploy-conflict.md");
+    let content = doc["content"].as_str().unwrap();
+    for part in [
+        c.tip.as_str(),
+        c.repos.head.as_str(),
+        "- `app.py`",
+        "Merge folder: `.vision/merge/staging`",
+        "Merge message: `Merge DEMO-12 (",
+    ] {
+        assert!(content.contains(part), "{part} in:\n{content}");
+    }
+    // The worktree is at the tip of staging, the merge of the head waits there, and app.py
+    // holds the markers.
+    let folder = c.folder();
+    assert_eq!(git(&["rev-parse", "HEAD"], &folder), c.tip);
+    assert_eq!(git(&["rev-parse", "MERGE_HEAD"], &folder), c.repos.head);
+    assert!(std::fs::read_to_string(folder.join("app.py"))
+        .unwrap()
+        .contains("<<<<<<< "));
+    assert_eq!(
+        git(&["rev-parse", "refs/vision/deploy/staging"], &c.repos.clone),
+        c.tip
+    );
+    // The clone keeps its branch, its head, and its clean work tree.
+    assert_eq!(
+        git(&["symbolic-ref", "--short", "HEAD"], &c.repos.clone),
+        BRANCH
+    );
+    assert_eq!(git(&["rev-parse", "HEAD"], &c.repos.clone), c.repos.head);
+    assert_eq!(git(&["status", "--porcelain"], &c.repos.clone), "");
+    assert_no_secret_in_files(&[&c.repos.clone, &c.repos.remote, &c.t.home, &c.t.scratch]);
+    // A second deploy starts the merge again in a new worktree, in the place of the old one.
+    assert_eq!(c.call("deploy").json["conflict"], json!(true));
+    let list = git(&["worktree", "list", "--porcelain"], &c.repos.clone);
+    assert_eq!(list.matches("worktree ").count(), 2, "{list}");
+}
+
+#[test]
+fn deploy_merge_pushes_the_resolved_merge_as_a_fast_forward_and_removes_its_folder() {
+    let c = Conflict::new();
+    assert_eq!(c.call("deploy").json["conflict"], json!(true));
+    c.resolve(BOTH);
+    let merge = git(&["rev-parse", "HEAD"], &c.folder());
+    let result = c.call("deploy.merge");
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert!(
+        has(&result, &format!("pushed the merge {}", &merge[..12])),
+        "{result:?}"
+    );
+    assert_eq!(
+        c.repos.remote_head("staging").as_deref(),
+        Some(merge.as_str())
+    );
+    assert_eq!(
+        git(
+            &["rev-list", "--parents", "-n", "1", &merge],
+            &c.repos.remote
+        ),
+        format!("{merge} {} {}", c.tip, c.repos.head)
+    );
+    assert!(!c.folder().exists());
+    assert!(!git(&["worktree", "list"], &c.repos.clone).contains(".vision/merge"));
+    assert_no_secret_in_files(&[&c.repos.clone, &c.repos.remote, &c.t.home, &c.t.scratch]);
+    // Now staging holds the head: a second call and the reconcile only read.
+    assert_eq!(c.call("deploy.merge").state(), "confirmed");
+    assert_eq!(c.call("deploy").state(), "confirmed");
+}
+
+#[test]
+fn deploy_merge_refuses_no_merge_an_open_merge_a_marker_and_a_branch_that_moved() {
+    let c = Conflict::new();
+    let none = c.call("deploy.merge");
+    assert_eq!(none.state(), "failed", "{none:?}");
+    assert!(
+        has(&none, "no merge waits in .vision/merge/staging"),
+        "{none:?}"
+    );
+    c.call("deploy");
+    let open = c.call("deploy.merge");
+    assert_eq!(open.state(), "failed", "{open:?}");
+    assert!(has(&open, "is not committed"), "{open:?}");
+    // A merge that keeps a marker.
+    let marked = std::fs::read_to_string(c.folder().join("app.py")).unwrap();
+    c.resolve(&marked);
+    let result = c.call("deploy.merge");
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        has(&result, "still holds a conflict marker at app.py:"),
+        "{result:?}"
+    );
+    assert_eq!(
+        c.repos.remote_head("staging").as_deref(),
+        Some(c.tip.as_str())
+    );
+    // Another ticket lands on staging after the merge started.
+    c.call("deploy");
+    c.resolve(BOTH);
+    let tree = format!("{}^{{tree}}", c.tip);
+    let other = git(
+        &["commit-tree", &tree, "-p", &c.tip, "-m", "another ticket"],
+        &c.repos.remote,
+    );
+    git(
+        &["update-ref", "refs/heads/staging", &other],
+        &c.repos.remote,
+    );
+    let result = c.call("deploy.merge");
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(has(&result, "staging moved from"), "{result:?}");
+    assert_eq!(
+        c.repos.remote_head("staging").as_deref(),
+        Some(other.as_str())
+    );
+    assert!(!c.folder().exists(), "a merge of an old tip goes away");
 }
 
 // review.rerequest ------------------------------------------------------------------------------

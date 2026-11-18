@@ -99,6 +99,9 @@ pub enum KindFacts {
         /// An interrupt of the step that fired at the last observe: its step, and the way of
         /// the move. It wins over `on`.
         interrupt: Option<(String, String)>,
+        /// `conflict` of the step when a start verb failed on a merge conflict: its step, and
+        /// the way of the move. It wins over the flag of the failed verb.
+        conflict: Option<(String, String)>,
         /// The step of `on` for that value.
         target: Option<String>,
         /// `wait` of the step: the values that mean "not yet". `None`: each value waits.
@@ -309,6 +312,7 @@ pub fn decide(facts: &Facts) -> Next {
             watch,
             watched,
             interrupt,
+            conflict,
             target,
             waits,
             limit,
@@ -319,6 +323,12 @@ pub fn decide(facts: &Facts) -> Next {
                 return Next::Nothing(format!(
                     "it waits until {until}, and then it starts to watch {watch}"
                 ));
+            }
+            if let Some((to, how)) = conflict {
+                return Next::Move {
+                    to: to.clone(),
+                    how: how.clone(),
+                };
             }
             if let Some(stop) = ops_next(List::Start, start) {
                 return stop;
@@ -1278,6 +1288,7 @@ kind = "end"
                 watch: "ci.state".into(),
                 watched: watched.map(str::to_string),
                 interrupt: None,
+                conflict: None,
                 target: target.map(str::to_string),
                 waits: None,
                 limit: None,
@@ -1307,6 +1318,41 @@ kind = "end"
     }
 
     #[test]
+    fn a_merge_conflict_of_a_start_verb_moves_the_ticket_to_the_conflict_step_and_no_flag_is_set() {
+        let wait = |conflict: Option<(&str, &str)>| {
+            let mut facts = turn_facts(None, Vec::new());
+            facts.step = "deploy-staging".into();
+            facts.next = None;
+            facts.kind = KindFacts::Wait {
+                start: vec![("deploy".to_string(), known(Outcome::Failed))],
+                watch: "envs.staging.holds".into(),
+                watched: None,
+                interrupt: None,
+                conflict: conflict.map(|(to, how)| (to.to_string(), how.to_string())),
+                target: None,
+                waits: Some(vec!["false".into(), "none".into()]),
+                limit: Some(60),
+                waited: None,
+                until: None,
+            };
+            decide(&facts)
+        };
+        assert_eq!(
+            wait(Some(("merge-staging", "conflict deploy"))),
+            Next::Move {
+                to: "merge-staging".into(),
+                how: "conflict deploy".into()
+            }
+        );
+        // With no conflict route, the failed verb sets the flag as before.
+        assert!(
+            matches!(wait(None), Next::Flag { reason, .. } if reason.starts_with("deploy failed")),
+            "{:?}",
+            wait(None)
+        );
+    }
+
+    #[test]
     fn an_interrupt_of_a_wait_step_moves_the_ticket_before_its_watched_value_counts() {
         let wait = |interrupt: Option<(&str, &str)>, watched: &str, target: Option<&str>| {
             let mut facts = turn_facts(None, Vec::new());
@@ -1317,6 +1363,7 @@ kind = "end"
                 watch: "envs.staging.deployed".into(),
                 watched: Some(watched.into()),
                 interrupt: interrupt.map(|(to, how)| (to.to_string(), how.to_string())),
+                conflict: None,
                 target: target.map(str::to_string),
                 waits: Some(vec!["false".into()]),
                 limit: Some(60),
@@ -1360,6 +1407,7 @@ kind = "end"
                 watch: "tracker_status".into(),
                 watched: watched.map(str::to_string),
                 interrupt: None,
+                conflict: None,
                 target: target.map(str::to_string),
                 waits: Some(vec!["none".into()]),
                 limit: Some(60),
@@ -1396,6 +1444,7 @@ kind = "end"
                 watch: "ci.state".into(),
                 watched: watched.map(str::to_string),
                 interrupt: None,
+                conflict: None,
                 target: None,
                 waits: waits.map(|w| w.iter().map(|v| v.to_string()).collect()),
                 limit,

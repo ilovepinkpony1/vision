@@ -52,6 +52,7 @@ fn model_shows_each_agent_with_its_default_and_reason() {
             "reviewer",
             "tester",
             "shepherd",
+            "merger",
             "judge",
             "curator",
             "repro",
@@ -81,13 +82,13 @@ fn model_shows_each_agent_with_its_default_and_reason() {
             .iter()
             .filter(|l| l.starts_with("  recommendation: "))
             .count(),
-        15,
+        16,
         "{}",
         run.stdout
     );
 
     let rows = rows(&home);
-    assert_eq!(rows.len(), 15);
+    assert_eq!(rows.len(), 16);
     let judge = row(&rows, "judge");
     assert_eq!(judge["model"], "claude-fable-5-2");
     assert_eq!(judge["effort"], "high");

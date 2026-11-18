@@ -581,11 +581,11 @@ fn the_wheel_and_a_click_on_models_with_more_agents_than_rows_follow_the_window(
     }
     assert_eq!(app.models.selected, 10);
     // A part of a row holds the index of its agent in the table, not the row in the window:
-    // `cause` is the fifth row of the window and the ninth agent.
+    // `cause` is the sixth row of the window and the tenth agent.
     let buf = draw(&mut app);
     click(&mut app, 3.0, find(&buf, "cause"));
-    assert_eq!(app.models.selected, 8);
-    assert_eq!(app.models.lines()[8].agent, "cause");
+    assert_eq!(app.models.selected, 9);
+    assert_eq!(app.models.lines()[9].agent, "cause");
     // The box of the recommendation does not scroll.
     let buf = draw(&mut app);
     let before = ticked(&app);
@@ -1475,7 +1475,7 @@ fn a_click_on_a_mark_of_more_rows_selects_the_next_row_out_of_view() {
     let buf = draw(&mut app);
     let shown = app.models.selected;
     assert_eq!(shown, 0);
-    click(&mut app, 3.0, find(&buf, "▼ 8 more"));
+    click(&mut app, 3.0, find(&buf, "▼ 9 more"));
     let next = app.models.selected;
     assert!(next > 0, "an agent below the window is selected");
     let buf = draw(&mut app);

@@ -4,7 +4,8 @@
 //! path needs:
 //!
 //! - Jira: issues with an ADF description, a status, and transitions; the search of the queue.
-//! - GitHub: the branches of a local bare repo, pull requests, reviews, review comments with
+//! - GitHub: the branches of a local bare repo, the compare of two commits, the merge of a
+//!   commit into a branch (409 on a conflict), pull requests, reviews, review comments with
 //!   their replies, conversation comments, requested reviewers, and workflow runs with jobs and
 //!   logs. Each comment and each review has a node id. The GraphQL calls give the review
 //!   threads with their state, resolve a thread, hide a comment, and tell which comments are
@@ -249,6 +250,85 @@ impl World {
         );
         let out = out.trim().to_string();
         (ok && !out.is_empty()).then_some(out)
+    }
+
+    /// A branch name or a commit as a commit of the remote.
+    fn commit_of(&self, name: &str) -> Option<String> {
+        self.branch_head(name).or_else(|| {
+            let object = format!("{name}^{{commit}}");
+            let (ok, out) = git(&["rev-parse", "--verify", "--quiet", &object], &self.remote);
+            let out = out.trim().to_string();
+            (ok && !out.is_empty()).then_some(out)
+        })
+    }
+
+    fn is_ancestor(&self, older: &str, newer: &str) -> bool {
+        git(&["merge-base", "--is-ancestor", older, newer], &self.remote).0
+    }
+
+    /// `GET /compare/<base>...<head>`: only the status, as GitHub gives it.
+    fn compare(&self, range: &str) -> Reply {
+        let Some((base, head)) = range.split_once("...") else {
+            return not_found().unwrap();
+        };
+        let (Some(base), Some(head)) = (self.commit_of(base), self.commit_of(head)) else {
+            return not_found().unwrap();
+        };
+        let status = if base == head {
+            "identical"
+        } else if self.is_ancestor(&head, &base) {
+            "behind"
+        } else if self.is_ancestor(&base, &head) {
+            "ahead"
+        } else {
+            "diverged"
+        };
+        Reply::json(200, json!({ "status": status }))
+    }
+
+    /// `POST /merges`: merges the commit `head` into the branch `base` as the merge API of
+    /// GitHub does: 204 when the branch holds it, 409 on a conflict, 201 with the new commit.
+    fn merge_into_branch(&mut self, body: &Map<String, Value>) -> Reply {
+        let field = |key: &str| {
+            body.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let base = field("base");
+        let Some(tip) = self.branch_head(&base) else {
+            return Reply::json(404, json!({"message": "Base does not exist"}));
+        };
+        let Some(head) = self.commit_of(&field("head")) else {
+            return Reply::json(404, json!({"message": "Head does not exist"}));
+        };
+        if self.is_ancestor(&head, &tip) {
+            return Reply::empty(204);
+        }
+        let (clean, out) = git(&["merge-tree", "--write-tree", &tip, &head], &self.remote);
+        if !clean {
+            return Reply::json(409, json!({"message": "Merge conflict"}));
+        }
+        let tree = out.lines().next().unwrap_or("").trim().to_string();
+        let message = field("commit_message");
+        let sha = git_ok(
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                &tip,
+                "-p",
+                &head,
+                "-m",
+                &message,
+            ],
+            &self.remote,
+        )
+        .trim()
+        .to_string();
+        let reference = format!("refs/heads/{base}");
+        git_ok(&["update-ref", &reference, &sha, &tip], &self.remote);
+        Reply::json(201, json!({ "sha": sha }))
     }
 
     fn branches(&self) -> Vec<String> {
@@ -665,6 +745,12 @@ impl World {
     fn github(&mut self, record: &Record, path: &str) -> Option<Reply> {
         let method = record.method.as_str();
         let body = body_of(record);
+        if let (Some(range), "GET") = (path.strip_prefix("/compare/"), method) {
+            return Some(self.compare(range));
+        }
+        if (path, method) == ("/merges", "POST") {
+            return Some(self.merge_into_branch(&body));
+        }
         if method == "GET" && path == "/branches" {
             let names: Vec<Value> = self
                 .branches()

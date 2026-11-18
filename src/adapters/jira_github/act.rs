@@ -6,7 +6,7 @@
 //! A failure before the verb changed anything is `failed`. A failure after it can have changed
 //! something, and each failure of a reconcile, is `uncertain`: the tick asks again.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
@@ -34,10 +34,11 @@ pub struct Acting {
 type Verb = fn(&Config, &Map<String, Value>, bool, &mut Acting) -> Res<Value>;
 type Read = fn(&Config, &Map<String, Value>) -> Res<Value>;
 
-const VERBS: [(&str, Verb); 11] = [
+const VERBS: [(&str, Verb); 12] = [
     ("ci.rerun", ci_rerun),
     ("ci.run", ci_run),
     ("deploy", deploy),
+    ("deploy.merge", deploy_merge),
     ("git.push", git_push),
     ("pr.open", pr_open),
     ("review.minimize", review_minimize),
@@ -1735,16 +1736,436 @@ fn deploy(
             } else {
                 format!(": {message}")
             };
-            failed(&format!(
-                "conflict: {} does not merge into {branch}{tail}. Merge it by hand, or fix the branch",
+            let text = format!(
+                "conflict: {} does not merge into {branch}{tail}",
                 short(&head)
-            ))
+            );
+            // The merge starts in a worktree of the clone, so that an agent can resolve it.
+            match prepare_merge(config, call, &key, &name, &branch, &head) {
+                Ok(merge) => Ok(conflict_answer(&key, &name, &branch, &head, &text, &merge)),
+                Err(e) => failed(&format!(
+                    "{text}. The merge did not start in the clone: {e}. Merge it by hand, or fix the branch"
+                )),
+            }
         }
         _ => failed(&format!(
             "GitHub has no branch {branch} or no commit {} (404)",
             short(&head)
         )),
     }
+}
+
+/// The document of a deploy that stopped on a merge conflict.
+const CONFLICT_DOC: &str = "deploy-conflict.md";
+
+/// The file in the git folder of a merge worktree that lists the files with a conflict.
+const CONFLICT_LIST: &str = "vision-conflicts";
+
+/// A merge that waits in its worktree for an agent.
+struct Merge {
+    /// The tip of the env branch that the merge starts from.
+    tip: String,
+    /// The folder of the worktree, relative to the clone.
+    folder: String,
+    message: String,
+    files: Vec<String>,
+    said: String,
+}
+
+/// The folder of the merge of an env, relative to the clone: inside `.vision/`, which the
+/// clone ignores.
+fn merge_folder(env: &str) -> String {
+    format!(".vision/merge/{env}")
+}
+
+/// An env name that can be a folder name.
+fn plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+fn clone_of(call: &Map<String, Value>) -> Option<PathBuf> {
+    match call.get("clone") {
+        Some(Value::String(c)) if Path::new(c).is_dir() => Some(PathBuf::from(c)),
+        _ => None,
+    }
+}
+
+/// Starts the merge of `head` into the env branch in a worktree of the clone, so that an agent
+/// can resolve its conflicts: fetches the tip of the branch as `refs/vision/deploy/<env>`, makes
+/// the worktree `.vision/merge/<env>` at that tip (an old one goes first), and runs `git merge`
+/// with no commit. The worktree has no branch, so no branch of the clone changes.
+fn prepare_merge(
+    config: &Config,
+    call: &Map<String, Value>,
+    key: &str,
+    env: &str,
+    branch: &str,
+    head: &str,
+) -> Res<Merge> {
+    let why = "deploy";
+    let Some(clone) = clone_of(call) else {
+        return fail("the call names no clone of the ticket");
+    };
+    if !plain_name(env) {
+        return fail(format!("the env name `{env}` cannot name a folder"));
+    }
+    let url = remote_url(config, why)?;
+    let settings = [
+        NO_REDIRECT.to_string(),
+        auth_config(&url, &secret("FORGE_TOKEN", why)?),
+    ];
+    let reference = format!("refs/vision/deploy/{env}");
+    let refspec = format!("+refs/heads/{branch}:{reference}");
+    Git::new(
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-recurse-submodules",
+            &url,
+            &refspec,
+        ],
+        Some(&clone),
+    )
+    .timeout(450)
+    .config(&settings)
+    .run()?;
+    let tip = Git::new(
+        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+        Some(&clone),
+    )
+    .text()?;
+    let folder = merge_folder(env);
+    remove_merge(&clone, &folder);
+    std::fs::create_dir_all(clone.join(".vision").join("merge"))
+        .map_err(|e| Error::Unexpected(format!("OSError: {e}")))?;
+    Git::new(
+        &["worktree", "add", "--detach", "--quiet", &folder, &tip],
+        Some(&clone),
+    )
+    .timeout(600)
+    .run()?;
+    let work = clone.join(&folder);
+    let message = format!("Merge {key} ({}) into {branch}", short(head));
+    let merged = Git::new(
+        &["merge", "--no-ff", "--no-commit", "-m", &message, head],
+        Some(&work),
+    )
+    .unchecked()
+    .timeout(600)
+    .run()?;
+    let files: Vec<String> =
+        splitlines(&Git::new(&["diff", "--name-only", "--diff-filter=U"], Some(&work)).text()?)
+            .into_iter()
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+            .collect();
+    if files.is_empty() {
+        remove_merge(&clone, &folder);
+        return fail(format!(
+            "{branch} is at {} now, and {} merges into it with no conflict. Run the step again",
+            short(&tip),
+            short(head)
+        ));
+    }
+    let list = Git::new(&["rev-parse", "--git-path", CONFLICT_LIST], Some(&work)).text()?;
+    let list = if Path::new(&list).is_absolute() {
+        PathBuf::from(list)
+    } else {
+        work.join(list)
+    };
+    std::fs::write(&list, format!("{}\n", files.join("\n")))
+        .map_err(|e| Error::Unexpected(format!("OSError: {e}")))?;
+    let said = format!("{}{}", merged.stdout_text(), merged.stderr_text());
+    Ok(Merge {
+        tip,
+        folder,
+        message,
+        files,
+        said: clean(said.trim(), 4000),
+    })
+}
+
+/// Removes the merge worktree of an env, if there is one.
+fn remove_merge(clone: &Path, folder: &str) {
+    let _ = Git::new(&["worktree", "remove", "--force", folder], Some(clone))
+        .unchecked()
+        .run();
+    let _ = Git::new(&["worktree", "prune"], Some(clone))
+        .unchecked()
+        .run();
+    let path = clone.join(folder);
+    if path.starts_with(clone.join(".vision").join("merge")) && path.exists() {
+        let _ = std::fs::remove_dir_all(&path);
+    }
+}
+
+/// The failed answer of a deploy that stopped on a merge conflict: `conflict` true, and a
+/// document for the agent that resolves it.
+fn conflict_answer(
+    key: &str,
+    env: &str,
+    branch: &str,
+    head: &str,
+    text: &str,
+    merge: &Merge,
+) -> Value {
+    let files = merge
+        .files
+        .iter()
+        .map(|f| format!("- `{f}`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let content = format!(
+        "# The deploy of {key} to {env} stopped on a merge conflict\n\n\
+         The head of the ticket does not merge into the branch of the env. Vision started the merge in a git worktree inside the clone, and the merge waits there with its conflicts.\n\n\
+         - Env: {env}\n\
+         - Branch of the env: `{branch}`\n\
+         - Tip of that branch: `{tip}`\n\
+         - Head of the ticket: `{head}`\n\
+         - Merge folder: `{folder}`\n\
+         - Merge message: `{message}`\n\n\
+         ## Files with a conflict\n\n{files}\n\n\
+         ## What git merge said\n\n```text\n{said}\n```\n",
+        tip = merge.tip,
+        folder = merge.folder,
+        message = merge.message,
+        said = merge.said,
+    );
+    let shown: Vec<&str> = merge.files.iter().take(5).map(String::as_str).collect();
+    let more = merge.files.len().saturating_sub(shown.len());
+    let mut list = shown.join(", ");
+    if more > 0 {
+        list.push_str(&format!(" and {more} more"));
+    }
+    let mut out = answer(
+        "failed",
+        &format!(
+            "{text}. The merge waits in {} with a conflict in {list}",
+            merge.folder
+        ),
+        None,
+        None,
+        Some(json!([{"name": CONFLICT_DOC, "content": content}])),
+    );
+    if let Value::Object(map) = &mut out {
+        map.insert("conflict".into(), json!(true));
+    }
+    out
+}
+
+// deploy.merge ----------------------------------------------------------------------------------
+
+/// Pushes the merge that an agent resolved in the merge folder of an env (see `deploy`) to the
+/// branch of the env. It pushes only a merge of the head into the tip that the branch still
+/// has, so the push is a fast-forward, and never a merge that holds a conflict marker in a file
+/// that had a conflict. After the push, the merge folder goes away.
+fn deploy_merge(
+    config: &Config,
+    call: &Map<String, Value>,
+    reconcile: bool,
+    state: &mut Acting,
+) -> Res<Value> {
+    let why = "deploy.merge";
+    check_key(call.get("key"), "the ticket key")?;
+    let Some(head) = commit_of(truthy(call.get("head"))).map(str::to_string) else {
+        return fail("deploy.merge needs the last commit in head");
+    };
+    let name = match args_of(call).get("env") {
+        Some(Value::String(n)) if !n.is_empty() => n.clone(),
+        _ => return fail("deploy.merge needs args.env: the name of an env of `envs`"),
+    };
+    let Some(env) = config.envs()?.into_iter().find(|e| e.name == name) else {
+        return fail(format!(
+            "deploy.merge needs the env {name} in `envs` of the [adapter] table, with its branch"
+        ));
+    };
+    let branch = env.branch;
+    if branch == config.base_branch()? || bad_ref(&branch) || !plain_name(&name) {
+        return refuse(format!(
+            "deploy.merge refuses the branch {} of the env {name}: it pushes only into a staging branch",
+            py_repr_str(&branch)
+        ));
+    }
+    let gh = GitHub::new(config, why, None)?;
+    let external = format!("deploy-merge-{name}-{}", short(&head));
+    let clone = clone_of(call);
+    let folder = merge_folder(&name);
+    match gh.holds(&branch, &head)? {
+        None => {
+            return failed(&format!(
+                "the branch {branch} of the env {name} does not exist on GitHub"
+            ))
+        }
+        Some(true) => {
+            if let Some(clone) = &clone {
+                remove_merge(clone, &folder);
+            }
+            return confirmed(
+                &format!("{branch} already holds {}", short(&head)),
+                external,
+            );
+        }
+        Some(false) => {}
+    }
+    if reconcile {
+        return failed(&format!(
+            "{branch} does not hold {}: the push of the merge did not happen",
+            short(&head)
+        ));
+    }
+    let Some(clone) = clone else {
+        return fail("deploy.merge needs the clone of the ticket");
+    };
+    let work = clone.join(&folder);
+    if !work.is_dir() {
+        return failed(&format!(
+            "no merge waits in {folder}. Run the deploy step again, so that it starts the merge"
+        ));
+    }
+    let pending = Git::new(
+        &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
+        Some(&work),
+    )
+    .unchecked()
+    .run()?;
+    if pending.code == Some(0) {
+        return failed(&format!(
+            "the merge in {folder} is not committed. Resolve each conflict, then commit the merge"
+        ));
+    }
+    let merge = Git::new(&["rev-parse", "--verify", "HEAD^{commit}"], Some(&work)).text()?;
+    let line = Git::new(&["rev-list", "--parents", "-n", "1", &merge], Some(&work)).text()?;
+    let parents: Vec<&str> = line.split_whitespace().skip(1).collect();
+    if parents.len() != 2 || parents[1] != head {
+        return failed(&format!(
+            "the commit {} in {folder} is not the merge of {} into {branch}: its parents are {}",
+            short(&merge),
+            short(&head),
+            if parents.is_empty() {
+                "none".to_string()
+            } else {
+                parents
+                    .iter()
+                    .map(|p| short(p))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        ));
+    }
+    let tip = parents[0].to_string();
+    if let Some(marker) = conflict_marker(&work, &merge)? {
+        return failed(&format!(
+            "the merge {} still holds a conflict marker at {marker}. Resolve it, then commit the merge again",
+            short(&merge)
+        ));
+    }
+    let url = remote_url(config, why)?;
+    let auth = auth_config(&url, &secret("FORGE_TOKEN", why)?);
+    let remote = remote_head(&url, &branch, &auth)?;
+    if remote.as_deref() != Some(tip.as_str()) {
+        remove_merge(&clone, &folder);
+        return failed(&format!(
+            "{branch} moved from {} to {} after the merge started. Run the deploy step again, so that it merges the new tip",
+            short(&tip),
+            short_opt(remote.as_deref())
+        ));
+    }
+    state.acted = true;
+    let output = push_commit(&clone, &url, &branch, &merge, &auth)?;
+    if output.code != Some(0) {
+        let text = output.stderr_text();
+        let lines: Vec<&str> = splitlines(&text)
+            .into_iter()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with("hint:"))
+            .collect();
+        let header = auth.split_once('=').map(|(_, v)| v).unwrap_or("");
+        let err = clean(&lines[lines.len().saturating_sub(4)..].join(" "), 300)
+            .replace(header, "[header]");
+        let all = lines.join(" ");
+        if ["[rejected]", "non-fast-forward", "fetch first"]
+            .iter()
+            .any(|w| all.contains(w))
+        {
+            remove_merge(&clone, &folder);
+            return failed(&format!(
+                "{branch} moved after the merge started, and Vision never forces a push: {err}. Run the deploy step again, so that it merges the new tip"
+            ));
+        }
+        return uncertain(&format!("git push of the merge failed: {err}"));
+    }
+    if remote_head(&url, &branch, &auth)?.as_deref() != Some(merge.as_str()) {
+        return uncertain(&format!(
+            "git push ended, but {branch} is not at the merge {} on the remote",
+            short(&merge)
+        ));
+    }
+    remove_merge(&clone, &folder);
+    confirmed(
+        &format!(
+            "pushed the merge {} of {} into {branch}",
+            short(&merge),
+            short(&head)
+        ),
+        external,
+    )
+}
+
+/// The first conflict marker of the merge commit in a file that had a conflict, as
+/// `path:line`, or `None`. With no list of those files, each file that the merge changed
+/// counts.
+fn conflict_marker(work: &Path, merge: &str) -> Res<Option<String>> {
+    let list = Git::new(&["rev-parse", "--git-path", CONFLICT_LIST], Some(work)).text()?;
+    let list = if Path::new(&list).is_absolute() {
+        PathBuf::from(list)
+    } else {
+        work.join(list)
+    };
+    let mut files: Vec<String> = std::fs::read_to_string(&list)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .map(str::to_string)
+        .collect();
+    if files.is_empty() {
+        let first = format!("{merge}^1");
+        files = splitlines(&Git::new(&["diff", "--name-only", &first, merge], Some(work)).text()?)
+            .into_iter()
+            .map(str::trim)
+            .filter(|f| !f.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let mut args = vec![
+        "grep",
+        "-n",
+        "-I",
+        "-E",
+        "^(<<<<<<<|>>>>>>>)( |$)",
+        merge,
+        "--",
+    ];
+    args.extend(files.iter().map(String::as_str));
+    let found = Git::new(&args, Some(work)).unchecked().run()?;
+    if found.code != Some(0) {
+        return Ok(None);
+    }
+    let text = found.stdout_text();
+    let first = splitlines(&text).first().copied().unwrap_or("").to_string();
+    // `git grep` names the commit first: `<commit>:<path>:<line>:<text>`.
+    let place: Vec<&str> = first.splitn(4, ':').collect();
+    Ok(Some(match place.as_slice() {
+        [_, path, line, _] => format!("{path}:{line}"),
+        _ => clean(&first, 120),
+    }))
 }
 
 // review.rerequest ------------------------------------------------------------------------------

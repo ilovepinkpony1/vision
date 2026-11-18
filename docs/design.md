@@ -752,6 +752,7 @@ The defaults, with the reason for each one:
 | reviewer | `claude-opus-5-5` | max | The review is the last gate before a person reads the code. |
 | tester | `claude-opus-5-5` | high | A false pass sends a bug to a person. |
 | shepherd | `claude-opus-5-5` | high | It gives verdicts on review comments and fixes the valid ones. |
+| merger | `claude-opus-5-5` | high | It resolves the merge conflicts of a deploy. A wrong merge breaks an env that the whole team uses. |
 | judge | `claude-fable-5-2` | high | It can answer alone, so a wrong answer costs the most. Its turns are short. |
 | curator | `claude-fable-5-2` | high | It runs seldom, and its proposals change each later answer. |
 | repro | `claude-opus-5-5` | high | It must show the bug with a failing spec. A false reproduction sends the fix the wrong way. |
@@ -839,7 +840,8 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
 - The call object always has `config`: the `[adapter]` table of the configuration, with the `adapter` keys of the clone of the ticket over it.
 - `state` of an `act` answer is `confirmed`, `failed`, or `uncertain`.
 - `set` can give new values for the ticket row: `pr`, `head`.
-- `documents` of a job go to the ticket folder. The documents of an `act` answer with the state `confirmed` go there too. A later turn can read them. The runner masks each secret value in them. A script cannot write a document that the person or the pipeline owns, such as `plan.md`, `issue.json`, or `comments-seen.json`.
+- `documents` of a job go to the ticket folder. The documents of an `act` answer with the state `confirmed` go there too. A later turn can read them.
+- A `failed` answer can have `"conflict": true`: the verb failed on a merge conflict that an agent can resolve. Its documents go to the ticket folder too. A wait step with `conflict` then sends the ticket to the step that resolves it. The runner masks each secret value in them. A script cannot write a document that the person or the pipeline owns, such as `plan.md`, `issue.json`, or `comments-seen.json`.
 - A reconcile call also has `external_id` and `started`. `external_id` is the id that the first answer stored, or `null`. `started` is the time of the first call.
 - A read verb changes nothing outside. A turn can ask for it, and the documents of its answer go to that turn.
 - If `act` ends with a different exit code, a signal, a time limit, or bad output, the operation becomes `uncertain`. The outside state is unknown then.
@@ -1069,6 +1071,8 @@ A wait step can have `from`, a time of day such as `"09:00"` in the local time o
 
 A wait step can have `interrupt`, such as `interrupt = { "review.state" = { comments = "comments", changes = "comments" } }`. It maps a path of the answer of `observe` to a table from a value to a step. Each look of the step reads the interrupts first, from the same answer, and then `watch`. If the value of a path names a step, the ticket moves there at that tick. With no interrupt that fires, `watch` and `on` decide. The move counts as an entry of its step, as a move of `on` does. The event `step` has `how` = `interrupt <path> = <value>`, and the keys `interrupt` and `value`. With several paths, Vision reads them in their sorted order, and the first value that names a step wins. A look comes after `from` and after the start verbs, so a deploy that the step starts runs first. The loader refuses `interrupt` on another kind of step, an empty table, a key that is not a path, and the path `head.state`. It also refuses a target that is not a string, a step that does not exist, and the step itself. A path that the answer does not have gives none, so its interrupt never fires. The answer of `observe` of the adapter for Jira and GitHub always holds `review.state`, so an interrupt on it costs no extra call.
 
+A wait step can have `conflict`, such as `conflict = "merge-staging"`. When a start verb fails and its answer names a merge conflict, the ticket moves to that step at the next tick. No flag is set. The move counts as an entry of its step. The event `step` has `how` = `conflict <verb>`, the key `conflict` with the verb, and the key `reason` with the detail of the failure. A merge conflict wins over an interrupt. With no `conflict`, the failure sets the flag `needs-you`, as each other failure does. The loader refuses `conflict` on another kind of step, a step that does not exist, and the step itself.
+
 A job can have `command`, a shell command of the person, with `doc` and `env`. The loader refuses `doc` and `env` without `command`, a `doc` that is not a plain file name, and a `doc` that the person or the pipeline owns, such as `plan.md`.
 
 A verb with `once = true` runs one time for a ticket and its arguments, at any commit. The loader refuses `once` on a read verb and on a verb with `leaves`, because the gates judge what leaves at each commit. A read verb can have `about`, one line of up to 300 characters.
@@ -1212,6 +1216,10 @@ The key `own_logins` names the logins of the person and of the bot. The key `ign
 `review.state` is the first value that holds of `merged`, `closed`, `comments`, `changes`, `conflict`, `approved`, and `waiting`. `conflict` means that the open pull request conflicts with its base. No step names `conflict`, so the ticket gets the flag `needs-you` at once, with the value in the reason. The person merges the base into the branch in the clone, resolves the conflict, and pushes the branch. Then `vision retry KEY` lets the ticket go on.
 
 The key `envs` lists the staging envs of the project. For each env, `observe` gives `envs.<name>.branch`, `envs.<name>.head`, and `envs.<name>.holds`. `head` is the last commit of the env branch. If the env branch holds the head commit of the ticket, `holds` is true. It says that the merge happened, not that the env runs the new code.
+
+`deploy` merges the head into the env branch with the merge API of GitHub. When GitHub answers that the merge conflicts, `deploy` fetches the tip of the env branch into the clone as `refs/vision/deploy/<env>`. It makes the git worktree `.vision/merge/<env>` inside the clone at that tip, with no branch, and it starts the merge there with no commit. It writes `deploy-conflict.md` with the tip, the head, the merge message, and each file with a conflict. Its answer is `failed` with `conflict: true`, so a wait step with `conflict` sends the ticket to Merger.
+
+Merger resolves each conflict in the merge folder and commits the merge. Then `deploy.merge` pushes the merge to the env branch. It pushes only a merge whose parents are the tip and the head, so the push is a fast-forward and never a force. It refuses a merge that is not committed, and a merge that keeps a conflict marker in a file that had a conflict. It also refuses an env branch that moved after the merge started, and the person runs the deploy step again. After a push, the merge folder goes away. When the merge cannot start, such as with no clone, the answer stays a plain failure, and the person merges by hand.
 
 An env can also name `deployment`, a GitHub environment where the project records its deployments. For such an env, `observe` reads the newest deployment and gives `envs.<name>.deployed`, `deployment_sha`, and `deployed_at`. If the commit of that deployment holds the head commit of the ticket, `deployed` is true. The adapter reads the deployment record and not its statuses. So `deployed` is true from the moment that the project records the deployment.
 

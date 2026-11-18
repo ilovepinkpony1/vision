@@ -116,6 +116,7 @@ fn the_model_table_shows_a_pin_and_a_reset_of_the_commands() {
             "reviewer",
             "tester",
             "shepherd",
+            "merger",
             "judge",
             "curator",
             "repro",

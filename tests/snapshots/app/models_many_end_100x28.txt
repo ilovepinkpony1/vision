@@ -4,7 +4,7 @@
   Each agent keeps its model until you change it. A change holds for the next turn of the agent,
   not for a turn that runs now.
     AGENT        MODEL                  EFFORT  SOURCE                                    MEASURED
-  ───────────────────────────────────────────────────────────────────────────────────── ▲ 8 more ─
+  ───────────────────────────────────────────────────────────────────────────────────── ▲ 9 more ─
     cause        gpt-6.1-sol            high    default                                no turn yet
                  A second model finds the cause on its own, so its guess does not follow the oth…
     history      claude-sonnet-5-5      medium  default                                no turn yet
