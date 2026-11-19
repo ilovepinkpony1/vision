@@ -141,6 +141,21 @@ impl Ledger {
         )? == 1)
     }
 
+    /// Writes a new branch of a ticket with its head, and drops the number of its pull request,
+    /// because a pull request belongs to the old branch. Gives false when it has no row.
+    pub fn set_ticket_branch(
+        &self,
+        key: &str,
+        branch: &str,
+        head: &str,
+        updated: &str,
+    ) -> Result<bool> {
+        Ok(self.conn().execute(
+            "UPDATE tickets SET branch = ?2, head = ?3, pr = NULL, updated = ?4 WHERE key = ?1",
+            params![key, branch, head, updated],
+        )? == 1)
+    }
+
     /// Writes the clone of a ticket, or frees it with `None`.
     pub fn set_ticket_clone(&self, key: &str, clone: Option<&str>, updated: &str) -> Result<bool> {
         Ok(self.conn().execute(

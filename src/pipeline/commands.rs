@@ -781,7 +781,7 @@ fn restart(
         None => None,
     };
     if target.id != step.id {
-        return move_ticket(ctx, ledger, ticket, &target, resumed.as_ref());
+        return move_ticket(ctx, ledger, ticket, &target, resumed.as_ref(), None);
     }
     let now = time::now_rfc3339();
     // A flag needs-you that the test of the head of a continue set goes with the stop: this
@@ -1301,7 +1301,7 @@ fn refuse_busy(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<()> {
 /// to that step (see [`move_ticket`]). A STEP that is the current step is a plain retry. A
 /// paused ticket that the person continues with a STEP runs the `[[resume]]` rules first: the
 /// head of the pull request, and the event `resumed`. A plain retry runs no rule.
-pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
+pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>, new_branch: bool) -> Result<()> {
     ctx.require_setup()?;
     let _lock = wait_for_lock(ctx)?;
     let ledger = ctx.ledger()?;
@@ -1324,6 +1324,15 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
         );
     };
     let paused = ticket.flags.iter().any(|f| f == PAUSED);
+    if new_branch {
+        // As a plain retry, it ends a pause: the person is done in the session. The next turn
+        // starts a new session, because the old one knows only the old branch.
+        let target = target.unwrap_or_else(|| step.clone());
+        refuse_end(&adapter, key, &target, None)?;
+        let text = new_branch_move(ctx, &ledger, &adapter, ticket, &target)?;
+        println!("{text}");
+        return Ok(());
+    }
     // The person continues a paused ticket at a named step: the rules run, with one call of
     // observe, before anything changes.
     let checked = match (&target, paused) {
@@ -1349,7 +1358,7 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
         None => None,
     };
     if let Some(target) = target.filter(|t| t.id != step.id) {
-        let text = move_ticket(ctx, &ledger, ticket, &target, resumed.as_ref())?;
+        let text = move_ticket(ctx, &ledger, ticket, &target, resumed.as_ref(), None)?;
         println!("{text}");
         return Ok(());
     }
@@ -1496,6 +1505,110 @@ pub fn retry(ctx: &Ctx, key: &TicketKey, to: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// `vision retry KEY --new-branch`: the ticket enters the step on a new branch, the branch of the
+/// pattern of the adapter, made from the base ref after a fetch. The old branch stays in git, and
+/// the row drops the number of its pull request. A ticket with no clone takes a slot first.
+fn new_branch_move(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    mut ticket: Ticket,
+    target: &Step,
+) -> Result<String> {
+    let key = ticket.key.clone();
+    if !ticket.has_clone() {
+        slots::claim(ctx, ledger, adapter, &mut ticket)?;
+    }
+    let clone = ticket.clone_dir()?;
+    let clone_text = clone.display().to_string();
+    let old = ticket.row.branch.clone().unwrap_or_default();
+    let branch = adapter.branch_for(&key);
+    if branch == old {
+        bail!(
+            "{key} is on the branch {branch} already, the branch of the pattern of the adapter, so there is no new branch to make. Run `vision retry {key} --step {}` to move it on this branch",
+            target.id
+        );
+    }
+    let dirty = dirty_lines(&clone)?;
+    if !dirty.is_empty() {
+        bail!(
+            "the clone {clone_text} has {} change(s) in its work tree, such as `{}`, so its branch cannot change. Commit or clean them first",
+            dirty.len(),
+            dirty[0].trim()
+        );
+    }
+    git::run(&clone, &["fetch", "--quiet", "--all", "--prune"])
+        .with_context(|| format!("could not fetch in the clone {clone_text}"))?;
+    let base = &adapter.base;
+    let at = |reference: String| {
+        git::run(&clone, &["rev-parse", "--verify", "--quiet", &reference])
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    };
+    if at(format!("{base}^{{commit}}")).is_none() {
+        bail!(
+            "the base ref {base} of the adapter is missing in the clone {clone_text}. Fetch it there, or fix base in adapter.toml"
+        );
+    }
+    if let Some(tip) = at(format!("refs/heads/{branch}")) {
+        bail!(
+            "the clone {clone_text} has a branch {branch} already, at {}. If it holds nothing that you need, delete it with `git -C {clone_text} branch -D {branch}`, then run this again",
+            short(&tip)
+        );
+    }
+    let remote = base_remote(&clone, adapter).unwrap_or_else(|| "origin".to_string());
+    if at(format!("refs/remotes/{remote}/{branch}")).is_some() {
+        bail!(
+            "{remote} has a branch {branch} already, so the new branch would meet it at its first push. Look at that branch, and delete it on {remote} if nobody needs it, then run this again"
+        );
+    }
+    git::run(
+        &clone,
+        &["switch", "--quiet", "--no-track", "-c", &branch, base],
+    )
+    .map_err(|e| {
+        switch_error(
+            e,
+            &clone,
+            &branch,
+            &format!("vision retry {key} --step {} --new-branch", target.id),
+            format!("could not make the branch {branch} from {base} in the clone {clone_text}"),
+        )
+    })?;
+    let head = head_of(&clone)?;
+    let now = time::now_rfc3339();
+    let pr = ticket.row.pr;
+    in_tx(ledger, |ledger| {
+        ledger.set_ticket_branch(key.as_str(), &branch, &head, &now)?;
+        ledger.add_event(&Event::now("user", "branch").ticket(key.as_str()).detail(json!({
+            "from": old, "to": branch, "base": head, "clone": clone_text, "pr": pr,
+        })))?;
+        Ok(())
+    })?;
+    ticket.row.branch = Some(branch.clone());
+    ticket.row.head = Some(head.clone());
+    ticket.row.pr = None;
+    ctx.log(&format!(
+        "retry: {key} moved from the branch {old} to the new branch {branch} from {base} ({})",
+        short(&head)
+    ));
+    let note = format!(
+        "The ticket runs on a new branch now: {branch}, made from {base} at {}. The old branch {old} stays in git, but it is no longer the branch of the ticket, so build nothing on it.",
+        short(&head)
+    );
+    let mut text = format!(
+        "{key} is on the new branch {branch} from {base} ({}) in the clone {clone_text}, and the old branch {old} stays in git. ",
+        short(&head)
+    );
+    if let Some(n) = pr {
+        text.push_str(&format!(
+            "The pull request #{n} of the old branch stays open: close it if nobody needs it. "
+        ));
+    }
+    text.push_str(&move_ticket(ctx, ledger, ticket, target, None, Some(&note))?);
+    Ok(text)
+}
+
 /// The message of the first turn of a turn step after the person moved the ticket there.
 fn moved_message(from: &str) -> String {
     format!(
@@ -1517,6 +1630,7 @@ fn move_ticket(
     mut ticket: Ticket,
     target: &Step,
     resumed: Option<&Resumed>,
+    note: Option<&str>,
 ) -> Result<String> {
     let key = ticket.key.clone();
     let from = ticket.state().to_string();
@@ -1527,7 +1641,12 @@ fn move_ticket(
     let head = ticket.clone_dir().ok().and_then(|c| head_of(&c).ok());
     let mut visit = ticket.counts.enter(target, MOVE, &now, turns, head, false);
     if matches!(target.kind, StepKind::Turn(_)) {
-        visit.message = Some(moved_message(&from));
+        let mut message = moved_message(&from);
+        if let Some(note) = note {
+            message.push(' ');
+            message.push_str(note);
+        }
+        visit.message = Some(message);
         ticket.counts.visit = Some(visit.clone());
     }
     ticket.row.state = Some(target.id.clone());
@@ -1670,6 +1789,12 @@ pub fn event_entry(e: &EventRow) -> Option<LogEntry> {
         "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
         "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
         "kind" => format!("{} kind {}", e.actor, field("kind")),
+        "branch" => format!(
+            "{} moved the ticket from the branch {} to the new branch {}",
+            e.actor,
+            field("from"),
+            field("to")
+        ),
         "slot" if detail.get("gave").is_some() => format!(
             "{} gave the clone {} to {}: the ticket waits in the background at the step {}",
             e.actor,

@@ -258,6 +258,10 @@ pub enum PipelineCommand {
         /// Enter this step of the adapter instead of the current step, such as in-review
         #[arg(long, value_name = "STEP")]
         step: Option<String>,
+        /// Enter the step on a new branch: the branch of the pattern of the adapter, made from
+        /// its base ref. The old branch stays in git
+        #[arg(long)]
+        new_branch: bool,
     },
 
     /// Set the kind of a ticket, a kind of [kinds] of the adapter, such as bug

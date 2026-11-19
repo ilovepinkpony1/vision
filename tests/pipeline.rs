@@ -139,6 +139,80 @@ fn take_with_no_free_clone_queues_the_ticket_and_says_who_holds_each_clone() {
 }
 
 #[test]
+fn retry_with_a_new_branch_moves_the_ticket_to_a_branch_of_the_pattern_made_from_the_base() {
+    let world = World::new();
+    world.run(&["take", KEY]).expect_code(0);
+    let clone = world.clone().to_path_buf();
+    let old = world.commit_in(&clone, &[("old.txt", "old work\n")], "Old work");
+
+    // The ticket is on the branch of the pattern: there is no new branch to make.
+    let same = world.run(&["retry", KEY, "--step", "refine", "--new-branch"]);
+    same.expect_code(1);
+    assert!(
+        same.stderr
+            .contains("DEMO-12 is on the branch vision/DEMO-12 already"),
+        "{same:?}"
+    );
+
+    // Another pattern, as for a ticket that runs on a branch made by hand.
+    world.write_adapter(|text| {
+        text.replacen("branch = \"vision/{key}\"", "branch = \"fresh/{key}\"", 1)
+    });
+    std::fs::write(clone.join("scratch.txt"), "work in progress").unwrap();
+    let dirty = world.run(&["retry", KEY, "--step", "refine", "--new-branch"]);
+    dirty.expect_code(1);
+    assert!(dirty.stderr.contains("such as `?? scratch.txt`"), "{dirty:?}");
+    std::fs::remove_file(clone.join("scratch.txt")).unwrap();
+
+    let moved = world.run(&["retry", KEY, "--step", "refine", "--new-branch"]);
+    moved.expect_code(0);
+    assert!(
+        moved
+            .stdout
+            .contains("DEMO-12 is on the new branch fresh/DEMO-12 from origin/main"),
+        "{moved:?}"
+    );
+    assert!(
+        moved
+            .stdout
+            .contains("the old branch vision/DEMO-12 stays in git"),
+        "{moved:?}"
+    );
+    let main = git(&clone, &["rev-parse", "origin/main"]);
+    assert_eq!(
+        git(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "fresh/DEMO-12"
+    );
+    assert_eq!(git(&clone, &["rev-parse", "HEAD"]), main);
+    assert_eq!(
+        git(&clone, &["rev-parse", "vision/DEMO-12"]),
+        old,
+        "the old branch keeps its commit"
+    );
+    let row = world.row().unwrap();
+    assert_eq!(row.branch.as_deref(), Some("fresh/DEMO-12"));
+    assert_eq!(row.head.as_deref(), Some(main.as_str()));
+    assert_eq!(row.pr, None);
+    assert_eq!(world.step().as_deref(), Some("refine"));
+    let message = world.counts()["visit"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        message.contains("The ticket runs on a new branch now: fresh/DEMO-12"),
+        "{message}"
+    );
+    let events = world.event_kinds();
+    assert!(
+        events.ends_with(&["branch".to_string(), "move".to_string()]),
+        "{events:?}"
+    );
+
+    // The ticket is on the branch of the pattern now, so a second new branch is refused.
+    world.run(&["retry", KEY, "--new-branch"]).expect_code(1);
+}
+
+#[test]
 fn a_wrong_plan_hash_is_refused_and_an_edited_plan_keeps_the_first_text_of_the_agent() {
     let world = World::new();
     simple_scenarios(&world);
