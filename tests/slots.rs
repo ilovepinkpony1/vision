@@ -181,7 +181,10 @@ fn an_idle_ticket_gives_its_slot_and_a_ticket_that_started_comes_back_before_a_n
     );
     assert_eq!(clone_of(&world, "DEMO-13"), None);
     assert_eq!(flags_of(&world, "DEMO-13"), [WAITS]);
-    assert_eq!(reason_of(&world, "DEMO-13", WAITS), "1st in line: no slot is free");
+    assert_eq!(
+        reason_of(&world, "DEMO-13", WAITS),
+        "1st in line: no slot is free"
+    );
     let status = world.run(&["status", "--json"]).json();
     assert!(
         status["needs"]
@@ -200,7 +203,10 @@ fn an_idle_ticket_gives_its_slot_and_a_ticket_that_started_comes_back_before_a_n
     });
     assert_eq!(step_of(&world, KEY), "watch");
     assert_eq!(clone_of(&world, KEY), None, "DEMO-12 is in the background");
-    assert_eq!(clone_of(&world, "DEMO-13").as_deref(), Some(clone_text.as_str()));
+    assert_eq!(
+        clone_of(&world, "DEMO-13").as_deref(),
+        Some(clone_text.as_str())
+    );
     assert!(flags_of(&world, "DEMO-13").is_empty());
     assert_eq!(branch_of(&clone), "vision/DEMO-13");
     let gave = slot_events(&world, KEY);
@@ -238,14 +244,18 @@ fn an_idle_ticket_gives_its_slot_and_a_ticket_that_started_comes_back_before_a_n
         flags_of(w, KEY).iter().any(|f| f == WAITS)
     });
     assert_eq!(step_of(&world, KEY), "second");
-    assert_eq!(reason_of(&world, KEY, WAITS), "1st in line: no slot is free");
+    assert_eq!(
+        reason_of(&world, KEY, WAITS),
+        "1st in line: no slot is free"
+    );
 
     // A new take comes after DEMO-12, which started first.
     let late = world.run(&["take", "DEMO-14"]);
     late.expect_code(0);
     assert!(
-        late.stdout
-            .starts_with("Queued DEMO-14 at the step first: no slot is free, and it is 2nd in line."),
+        late.stdout.starts_with(
+            "Queued DEMO-14 at the step first: no slot is free, and it is 2nd in line."
+        ),
         "{late:?}"
     );
 
@@ -260,9 +270,16 @@ fn an_idle_ticket_gives_its_slot_and_a_ticket_that_started_comes_back_before_a_n
     assert_eq!(step_of(&world, "DEMO-13"), "watch");
     assert_eq!(clone_of(&world, "DEMO-14"), None);
     world.tick();
-    assert_eq!(reason_of(&world, "DEMO-14", WAITS), "1st in line: no slot is free");
+    assert_eq!(
+        reason_of(&world, "DEMO-14", WAITS),
+        "1st in line: no slot is free"
+    );
     let took = slot_events(&world, KEY);
-    assert_eq!(took.last().unwrap()["took"], clone_text.as_str(), "{took:?}");
+    assert_eq!(
+        took.last().unwrap()["took"],
+        clone_text.as_str(),
+        "{took:?}"
+    );
 
     // DEMO-12 ends: its slot goes to DEMO-14, and DEMO-13 stays in the background.
     world.tick_until("the second verb of DEMO-12 waits", LONG, |w| {
@@ -293,14 +310,18 @@ fn a_stop_takes_a_ticket_out_of_the_queue_and_a_continue_puts_it_back_at_the_end
     );
     assert_eq!(flags_of(&world, "DEMO-13"), ["stopped"]);
     world.tick();
-    assert_eq!(flags_of(&world, "DEMO-13"), ["stopped"], "a stopped ticket stays out");
+    assert_eq!(
+        flags_of(&world, "DEMO-13"),
+        ["stopped"],
+        "a stopped ticket stays out"
+    );
 
     let again = world.run(&["take", "DEMO-13"]);
     again.expect_code(0);
     assert!(
-        again
-            .stdout
-            .starts_with("Queued DEMO-13 at the step first: no slot is free, and it is 1st in line."),
+        again.stdout.starts_with(
+            "Queued DEMO-13 at the step first: no slot is free, and it is 1st in line."
+        ),
         "{again:?}"
     );
     assert_eq!(flags_of(&world, "DEMO-13"), [WAITS]);
@@ -326,7 +347,9 @@ fn a_stop_takes_a_ticket_out_of_the_queue_and_a_continue_puts_it_back_at_the_end
 
     // After its approval DEMO-13 only watches, so a continue of DEMO-12 takes its slot.
     approve(&world, "DEMO-13");
-    world.tick_until("DEMO-13 waits at watch", LONG, |w| step_of(w, "DEMO-13") == "watch");
+    world.tick_until("DEMO-13 waits at watch", LONG, |w| {
+        step_of(w, "DEMO-13") == "watch"
+    });
     let back = world.run(&["take", KEY]);
     back.expect_code(0);
     assert_eq!(branch_of(world.clone()), "vision/DEMO-12");

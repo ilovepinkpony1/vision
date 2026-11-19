@@ -15,8 +15,8 @@ use super::machine::{dirty_lines, head_of, human_mark, in_tx, save, span, visit_
 use super::resume::{self, Checked, Head, Resumed, RESUMED};
 use super::slots::{self, NewTake};
 use super::state::{
-    flags_text, Counts, FlagReason, QueuedTake, SlotNote, Visit, NEEDS_YOU, PAUSED, RESUME, STOPPED,
-    WAITS_FOR_SLOT,
+    flags_text, Counts, FlagReason, QueuedTake, SlotNote, Visit, NEEDS_YOU, PAUSED, RESUME,
+    STOPPED, WAITS_FOR_SLOT,
 };
 use super::view::{plan_hash, SHORT_HASH};
 use crate::adapter::{self, Adapter, Step, StepKind};
@@ -1580,9 +1580,13 @@ fn new_branch_move(
     let pr = ticket.row.pr;
     in_tx(ledger, |ledger| {
         ledger.set_ticket_branch(key.as_str(), &branch, &head, &now)?;
-        ledger.add_event(&Event::now("user", "branch").ticket(key.as_str()).detail(json!({
-            "from": old, "to": branch, "base": head, "clone": clone_text, "pr": pr,
-        })))?;
+        ledger.add_event(
+            &Event::now("user", "branch")
+                .ticket(key.as_str())
+                .detail(json!({
+                    "from": old, "to": branch, "base": head, "clone": clone_text, "pr": pr,
+                })),
+        )?;
         Ok(())
     })?;
     ticket.row.branch = Some(branch.clone());
@@ -1605,7 +1609,14 @@ fn new_branch_move(
             "The pull request #{n} of the old branch stays open: close it if nobody needs it. "
         ));
     }
-    text.push_str(&move_ticket(ctx, ledger, ticket, target, None, Some(&note))?);
+    text.push_str(&move_ticket(
+        ctx,
+        ledger,
+        ticket,
+        target,
+        None,
+        Some(&note),
+    )?);
     Ok(text)
 }
 

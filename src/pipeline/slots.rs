@@ -189,11 +189,7 @@ pub(crate) fn assign(
             continue;
         }
         let last = match wants {
-            Wants::Row(i) => tickets[i]
-                .counts
-                .slot
-                .as_ref()
-                .and_then(|s| s.last.clone()),
+            Wants::Row(i) => tickets[i].counts.slot.as_ref().and_then(|s| s.last.clone()),
             Wants::New => None,
         };
         let pick = match free_slot(&slots, last.as_deref()) {
@@ -235,8 +231,7 @@ pub(crate) fn assign(
                 Some(take) => {
                     let row_take = NewTake::of_row(&tickets[i], &take, &adapter);
                     let taken = tickets[i].row.taken.clone();
-                    start_take(ctx, ledger, &adapter, &row_take, &path, taken.as_deref())
-                        .map(Some)
+                    start_take(ctx, ledger, &adapter, &row_take, &path, taken.as_deref()).map(Some)
                 }
                 None => bring_back(ctx, ledger, &adapter, &mut tickets[i], &path, &at, true)
                     .map(|()| None),
@@ -315,7 +310,12 @@ pub(crate) fn assign(
 /// A continue of a stopped ticket that holds no slot, or whose clone another ticket holds: a
 /// free slot, else the slot of an idle ticket. The clone moves to the branch of the ticket at
 /// the tip of that branch, and the row names the clone. With no slot, it stops with the reason.
-pub(crate) fn claim(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, ticket: &mut Ticket) -> Result<()> {
+pub(crate) fn claim(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    ticket: &mut Ticket,
+) -> Result<()> {
     let config = ctx.config()?;
     let clones = config.clone_paths()?;
     let at = time::now_rfc3339();
@@ -351,7 +351,14 @@ pub(crate) fn claim(ctx: &Ctx, ledger: &Ledger, adapter: &Adapter, ticket: &mut 
         bail!(text);
     };
     if let Some(h) = slots[s].holder {
-        release(ctx, ledger, &mut tickets[h], &slots[s].path, ticket.key.as_str(), &at)?;
+        release(
+            ctx,
+            ledger,
+            &mut tickets[h],
+            &slots[s].path,
+            ticket.key.as_str(),
+            &at,
+        )?;
         slots[s].holder = None;
     }
     let path = slots[s].path.clone();
@@ -558,7 +565,10 @@ fn slots_of(clones: &[PathBuf], tickets: &[Ticket]) -> Vec<Slot> {
 /// first free clone.
 fn free_slot(slots: &[Slot], last: Option<&str>) -> Option<usize> {
     if let Some(last) = last.and_then(|l| expand_tilde(l).ok()) {
-        if let Some(s) = slots.iter().position(|s| s.free && same_dir(&s.path, &last)) {
+        if let Some(s) = slots
+            .iter()
+            .position(|s| s.free && same_dir(&s.path, &last))
+        {
             return Some(s);
         }
     }
@@ -578,9 +588,8 @@ fn idle_slot(
     let mut best: Option<(String, usize)> = None;
     for (s, slot) in slots.iter().enumerate() {
         let Some(h) = slot.holder else { continue };
-        let is = *idle[h].get_or_insert_with(|| {
-            is_idle(ctx, ledger, adapter, &tickets[h], &slot.path, true)
-        });
+        let is = *idle[h]
+            .get_or_insert_with(|| is_idle(ctx, ledger, adapter, &tickets[h], &slot.path, true));
         if !is {
             continue;
         }
@@ -810,7 +819,13 @@ pub(crate) fn bring_back(
 }
 
 /// The flag `waits-for-slot` with the place in the queue. A new place changes only the reason.
-fn wait_flag(ctx: &Ctx, ledger: &Ledger, ticket: &mut Ticket, place: usize, at: &str) -> Result<()> {
+fn wait_flag(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    ticket: &mut Ticket,
+    place: usize,
+    at: &str,
+) -> Result<()> {
     let reason = format!("{} in line: no slot is free", ordinal(place));
     let had = ticket.flags.iter().any(|f| f == WAITS_FOR_SLOT);
     let old = ticket.counts.reasons.get(WAITS_FOR_SLOT).cloned();
@@ -919,10 +934,14 @@ fn queue_new(ctx: &Ctx, ledger: &Ledger, new: &NewTake, place: usize, at: &str) 
     std::fs::create_dir_all(&dir).with_context(|| format!("could not make {}", dir.display()))?;
     in_tx(ledger, |ledger| {
         ledger.put_ticket(&row)?;
-        ledger.add_event(&Event::now("user", "queued").ticket(new.key.as_str()).detail(json!({
-            "step": new.take.step, "place": place, "outside": new.take.outside,
-            "branch": new.branch, "pr": new.pr,
-        })))?;
+        ledger.add_event(
+            &Event::now("user", "queued")
+                .ticket(new.key.as_str())
+                .detail(json!({
+                    "step": new.take.step, "place": place, "outside": new.take.outside,
+                    "branch": new.branch, "pr": new.pr,
+                })),
+        )?;
         Ok(())
     })?;
     ctx.log(&format!(
@@ -946,7 +965,10 @@ mod tests {
             .collect();
         assert_eq!(
             words,
-            ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th"]
+            [
+                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd",
+                "101st", "111th"
+            ]
         );
     }
 

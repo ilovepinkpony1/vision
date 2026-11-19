@@ -90,7 +90,10 @@ impl Ticket {
 
     /// True when the row names a clone: the ticket holds a slot, unless it is stopped.
     pub fn has_clone(&self) -> bool {
-        self.row.clone.as_deref().is_some_and(|c| !c.trim().is_empty())
+        self.row
+            .clone
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
     }
 
     /// The last commit of the ticket: `HEAD` of its clone, else the head of its row, as for a

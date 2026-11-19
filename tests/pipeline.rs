@@ -161,7 +161,10 @@ fn retry_with_a_new_branch_moves_the_ticket_to_a_branch_of_the_pattern_made_from
     std::fs::write(clone.join("scratch.txt"), "work in progress").unwrap();
     let dirty = world.run(&["retry", KEY, "--step", "refine", "--new-branch"]);
     dirty.expect_code(1);
-    assert!(dirty.stderr.contains("such as `?? scratch.txt`"), "{dirty:?}");
+    assert!(
+        dirty.stderr.contains("such as `?? scratch.txt`"),
+        "{dirty:?}"
+    );
     std::fs::remove_file(clone.join("scratch.txt")).unwrap();
 
     let moved = world.run(&["retry", KEY, "--step", "refine", "--new-branch"]);
