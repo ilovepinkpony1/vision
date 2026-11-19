@@ -177,6 +177,13 @@ pub fn filter_of(origin: Origin<'_>) -> Filter {
         _ => match entry.kind.as_str() {
             "judge-started" | "judge-applied" | "judge-uses" | "questions-intake"
             | "questions-resumed" | "ask" | "ask-answered" => Filter::Questions,
+            // Waiting for a slot is no problem: the queue moves by itself (section 11.3).
+            "flag"
+                if entry.detail.get("flag").and_then(Value::as_str)
+                    == Some(crate::pipeline::state::WAITS_FOR_SLOT) =>
+            {
+                Filter::Steps
+            }
             "questions-invalid" | "flag" | "flag-cleared" | "notice" => Filter::Problems,
             "end-fact" if entry.detail.get("held").and_then(Value::as_bool) != Some(true) => {
                 Filter::Problems

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::decide::OpFact;
 use super::machine::{op_facts, visit_turns, Ticket};
-use super::state::{clear_command, NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT};
+use super::state::{clear_command, NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT, WAITS_FOR_SLOT};
 use crate::adapter::StepKind;
 use crate::ctx::Ctx;
 use crate::executor::{self, short, Outcome};
@@ -135,6 +135,7 @@ fn default_reason(flag: &str) -> &'static str {
         PAUSED => "you took over the session with vision open. Run vision retry when you are done",
         STOPPED => "you stopped it with vision stop",
         WAITS_FOR_LIMIT => "a limit of the subscription refused a turn",
+        WAITS_FOR_SLOT => "no slot is free",
         _ => "a rule stopped it",
     }
 }
@@ -393,6 +394,7 @@ fn now_line(
             PAUSED => "paused",
             STOPPED => "stopped",
             WAITS_FOR_LIMIT => "waits for the limit",
+            WAITS_FOR_SLOT => "waits for a slot",
             other => other,
         };
         let reason: String = flag.reason.chars().take(60).collect();
@@ -448,14 +450,22 @@ fn now_line(
             "waits for you: vision {} {key}",
             visit.action.as_deref().unwrap_or("?")
         ),
-        "wait" => match (
-            super::machine::opens_later(&visit, time::now()),
-            &visit.watched,
-        ) {
-            (Some(opens), _) => format!("waits until {}", time::local_hm(opens)),
-            (None, Some(value)) => format!("waits: the watched value is {value}"),
-            (None, None) => "waits for its first look".into(),
-        },
+        "wait" => {
+            let text = match (
+                super::machine::opens_later(&visit, time::now()),
+                &visit.watched,
+            ) {
+                (Some(opens), _) => format!("waits until {}", time::local_hm(opens)),
+                (None, Some(value)) => format!("waits: the watched value is {value}"),
+                (None, None) => "waits for its first look".into(),
+            };
+            // A ticket that gave its slot to another ticket (section 11.3).
+            if ticket.has_clone() {
+                text
+            } else {
+                format!("in the background, {text}")
+            }
+        }
         "turn" => turn_text(ledger, ticket, &visit)?,
         "end" => "the end step finishes it".into(),
         _ => "the next tick moves it".into(),

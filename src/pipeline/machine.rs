@@ -87,6 +87,20 @@ impl Ticket {
             })?;
         expand_tilde(text)
     }
+
+    /// True when the row names a clone: the ticket holds a slot, unless it is stopped.
+    pub fn has_clone(&self) -> bool {
+        self.row.clone.as_deref().is_some_and(|c| !c.trim().is_empty())
+    }
+
+    /// The last commit of the ticket: `HEAD` of its clone, else the head of its row, as for a
+    /// ticket in the background (section 11.3).
+    pub fn head(&self) -> Option<String> {
+        match self.clone_dir() {
+            Ok(clone) => head_of(&clone).ok(),
+            Err(_) => self.row.head.clone().filter(|h| !h.trim().is_empty()),
+        }
+    }
 }
 
 /// Runs `f` in one transaction of the ledger.
@@ -191,7 +205,7 @@ pub(crate) fn ensure_visit(
     }
     let now = time::now_rfc3339();
     let turns = u32::try_from(ledger.step_turn_ids(ticket.key.as_str(), &step.id)?.len())?;
-    let base = ticket.clone_dir().ok().and_then(|c| head_of(&c).ok());
+    let base = ticket.head();
     let visit = ticket
         .counts
         .enter(step, "repair", &now, turns, base, false);
@@ -311,6 +325,11 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
                 .iter()
                 .all(|f| f == super::state::NEEDS_YOU || f == WAITS_FOR_LIMIT);
         if !ticket.flags.is_empty() && !keeps {
+            continue;
+        }
+        // A ticket in the background is watched at a wait step. At each other step it needs a
+        // slot first, and the slots of the tick give it one (section 11.3).
+        if !ticket.has_clone() && !matches!(step.kind, StepKind::Wait(_)) {
             continue;
         }
         let result =
@@ -1106,6 +1125,11 @@ fn select_one(
     if ticket.flags.iter().any(|f| f != WAITS_FOR_LIMIT) {
         return Ok(Vec::new());
     }
+    // A ticket with no clone acts only where it needs no work tree. At each other step it waits
+    // until the slots of the tick give it a clone (section 11.3).
+    if !ticket.has_clone() && !super::slots::needs_no_slot(ctx, ledger, ticket, &step)? {
+        return Ok(Vec::new());
+    }
     ensure_visit(ctx, ledger, ticket, &step)?;
     // A step whose `when` does not hold is skipped: the ticket moves through its next in the
     // same tick.
@@ -1440,7 +1464,7 @@ pub(crate) fn op_facts(
                 }
             }
             EntryKind::Job => {
-                let head = ticket.clone_dir().ok().and_then(|c| head_of(&c).ok());
+                let head = ticket.head();
                 match head
                     .map(|h| executor::job_passed(ledger, ticket.key.as_str(), &entry.name, &h))
                 {
@@ -2172,7 +2196,7 @@ pub(crate) fn move_to_with(
     };
     let now = time::now_rfc3339();
     let turns = u32::try_from(ledger.step_turn_ids(ticket.key.as_str(), &step.id)?.len())?;
-    let base = ticket.clone_dir().ok().and_then(|c| head_of(&c).ok());
+    let base = ticket.head();
     let visit = ticket.counts.enter(&step, how, &now, turns, base, true);
     ticket.row.state = Some(step.id.clone());
     in_tx(ledger, |ledger| {

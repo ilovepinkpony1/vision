@@ -17,7 +17,7 @@ use crate::executor;
 use crate::ledger::turns::Window;
 use crate::ledger::{Ledger, TicketRow};
 use crate::paths::{tilde_display, Paths, TicketKey};
-use crate::pipeline::commands::{next_clone, pick_rows, report_of, PickRow};
+use crate::pipeline::commands::{pick_rows, report_of, PickRow};
 use crate::pipeline::state::{flags_of, Counts, NEEDS_YOU, PAUSED, STOPPED};
 use crate::snapshot::{LimitsView, Need};
 use crate::util::time;
@@ -199,9 +199,7 @@ fn read_start_info(paths: &Paths, key: &str) -> anyhow::Result<StartInfo> {
     let config = ctx.config()?;
     let adapter = adapter::load_with(config, paths)?;
     let key = TicketKey::parse(key)?;
-    let clone = next_clone(&ctx)
-        .map(|path| tilde_display(&path))
-        .map_err(|e| format!("{e:#}"));
+    let clone = crate::pipeline::slots::next_slot(&ctx).map_err(|e| format!("{e:#}"));
     let entry = adapter.entry();
     let mut first = FirstStep {
         step: entry.id.clone(),

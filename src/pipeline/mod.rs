@@ -25,6 +25,7 @@ mod machine;
 mod request;
 pub mod resume;
 pub mod rounds;
+pub mod slots;
 pub mod state;
 mod team;
 pub mod view;

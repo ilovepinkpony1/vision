@@ -288,7 +288,8 @@ pub struct KillCard {
 /// What the start card says about a ticket.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StartInfo {
-    /// The clone that the take will use, with `~` for the home folder, or why none is free.
+    /// The slot that the take will get, in words with `~` for the home folder, such as
+    /// `~/clones/app is free`, or the place in the queue when no slot is free (section 11.3).
     pub clone: Result<String, String>,
     pub branch: String,
     pub base: String,

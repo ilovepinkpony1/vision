@@ -262,7 +262,14 @@ fn action_done(
     match action {
         Action::Take { key } => {
             let resumed = app.held_ticket(key).is_some_and(|h| h.stopped);
+            // A take with no free slot waits in the queue (section 11.3).
+            let queued = result
+                .stdout
+                .lines()
+                .find(|l| l.starts_with("Queued "))
+                .map(str::to_string);
             let text = match (resumed, app.engine.paused) {
+                _ if queued.is_some() => queued.unwrap_or_default(),
                 (true, false) => format!("{key} starts again at its step. A pass runs now."),
                 (false, false) => format!("Took {key}. A pass starts its first step now."),
                 (true, true) => format!(

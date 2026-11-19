@@ -316,7 +316,7 @@ Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger reco
 1. Take the lock. If a different tick holds it, exit with code 0.
 2. Write the heartbeat. If the `off` file exists, write the snapshot and exit.
 3. Reconcile each operation in the state `executing` or `uncertain`.
-4. Collect each turn that ended. Write its row, its result file, and the limit reading.
+4. Collect each turn that ended. Write its row, its result file, and the limit reading. Then give the slots to the tickets that need one (section 11.3).
 5. For each ticket, read the facts of its step and test the end fact.
 6. Select the next action of each ticket: start a turn, run a job, run an operation, set a flag, or nothing.
 7. If its mode and the limits allow the action, do it.
@@ -1150,7 +1150,7 @@ A continue that read the rules writes the event `resumed` and a row of `human` w
 
 A `failed` operation is final for its key. `vision retry KEY` frees the key, so that the verb can run again at the same commit. If an operation of the ticket is `uncertain`, `vision retry KEY` refuses, because the reconcile step must settle it first.
 
-`vision take KEY` needs a free clone of `clones`. It fetches, and it makes the branch from `base`. A clone holds one ticket at a time. A clone can be a git worktree, and the take uses the clones in their order. Git lets one worktree hold a branch at a time. If another worktree holds the branch of the ticket, the take stops, names that worktree, and says how to free the branch. A continue of a stopped ticket does the same.
+`vision take KEY` needs a slot: a free clone of `clones`, or the slot of a ticket that only watches (see "Slots and the queue" below). It fetches, and it makes the branch from `base`. A clone holds one ticket at a time. A clone can be a git worktree, and the take uses the clones in their order. Git lets one worktree hold a branch at a time. If another worktree holds the branch of the ticket, the take stops, names that worktree, and says how to free the branch. A continue of a stopped ticket does the same.
 
 A ticket can be in progress outside Vision: someone made a branch with its key by hand, and maybe opened a pull request. The queue gives such a ticket as not eligible, with its `branch`, and with `pr` for an open pull request. The branch of the pull request wins over another branch with the key. If git cannot take the text as the name of a branch, Vision drops the branch of that ticket.
 
@@ -1159,6 +1159,18 @@ A plain `vision take KEY` of such a ticket calls `observe` one time, with that b
 `vision take KEY --step STEP` takes such a ticket at STEP, in a free clone, after a fetch. A branch that the clone does not have starts at the remote branch. A local branch that is behind the remote branch moves forward to it, and a local branch with its own commits keeps them. A local branch that went apart from the remote branch stops the take, and nothing moves. The take refuses the end step and a step that the adapter does not have. The steps before STEP do not run.
 
 The row of the ticket gets the branch, the number of the pull request, and the head. The event `take` has `outside`, `pr`, `facts`, and `suggestion`. From then on, Vision holds the ticket as any other ticket.
+
+Slots and the queue. Each clone of `clones` is a slot. A ticket that is not stopped holds the slot that its row names. A wait step with no `start` entry only watches. A wait step whose `start` entries are all `confirmed` also only watches. At such a step, the ticket waits for the outside world: a review, CI, a deploy, or a time. It needs no work tree, so it can give its slot to another ticket. Then it is in the background: its row names no clone, and Vision still watches it at each tick with the head of its row.
+
+If another ticket needs a slot and no slot is free, an idle ticket gives its slot. A ticket is idle in this case: it holds a slot, it has no flag, no turn of it runs, and its step only watches. Its work tree must be clean, and its head must be on the remote, so that no commit stays only in that clone. Vision finds the head on the remote in three ways. The pull request of the last look has it, or a remote branch of the clone holds it. Else a fetch of the branch can bring it. Of the idle tickets, the one that began to watch first gives its slot first. Its row then names no clone, and its head is the head of the clone. The event `slot` has `gave`, the clone, and `to`, the ticket that gets it.
+
+If the row of a ticket names no clone and its step does not only watch, the ticket needs a slot. One example is a ticket in the background whose review moves it to a turn step. The tickets that need a slot form a queue with two groups. First come the tickets that started, in the order of the entry into their step. Then come the takes that wait for their first slot, in the order of the take. A ticket with another flag than `waits-for-slot` is not in the queue, because it waits for the person.
+
+At each tick, before the end facts, Vision gives the slots in the order of the queue. If the clone that a ticket held last is free, the ticket takes it. Else it takes the first free clone, else the slot of an idle ticket. A ticket that started switches the clone to its branch at the head of its row. If the clone does not have the branch, Vision makes it at that head, after a fetch. If the branch in the clone points to another commit, the ticket gets the flag `needs-you`, and the slot goes to the next ticket. A take that waits does the work of the take in that clone. The event `slot` has `took`, the clone.
+
+A ticket that gets no slot has the flag `waits-for-slot`, and its reason gives the place in the queue, such as "2nd in line". The flag stops each action of the ticket. If the ticket gets a slot, the tick clears the flag. `vision needs` does not list it, because the person has nothing to do. The column NOW of `vision status` and the app show the place in the queue. For a ticket in the background, they show "in the background".
+
+`vision take KEY` puts the ticket at the end of the queue and gives the slots at once. If the ticket gets a slot, the take prints the clone, as before. Else the take prints the place of the ticket in the queue, and it exits with code 0. The row of a take that waits has the step, the branch, the flag, and no clone, and the event `queued` has its place. `vision stop` takes a ticket out of the queue. A stopped ticket can hold no slot, or another ticket can hold its clone. Then a continue takes a free slot or the slot of an idle ticket. If no slot is free, a take that never started goes back to the end of the queue. Each other continue then stops with the reason.
 
 The proof is a job. It runs the changed tests at the last commit, and they must pass. It runs the same tests on the base commit, and they must fail. Any new commit voids the proof.
 

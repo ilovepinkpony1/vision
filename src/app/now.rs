@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 
 use super::text::count;
 use crate::pipeline::facts::{EntryState, StateFacts, WaitFacts};
-use crate::pipeline::state::{NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT};
+use crate::pipeline::state::{NEEDS_YOU, PAUSED, STOPPED, WAITS_FOR_LIMIT, WAITS_FOR_SLOT};
 use crate::pipeline::TicketView;
 use crate::running::Running;
 use crate::snapshot::{Need, NeedKind};
@@ -234,6 +234,9 @@ pub fn now(input: &Input) -> Now {
     if has_flag(WAITS_FOR_LIMIT) {
         return limit(input);
     }
+    if has_flag(WAITS_FOR_SLOT) {
+        return slot(input);
+    }
     if let Some(verb) = &facts.uncertain {
         return Now::new(
             Kind::Waits,
@@ -249,7 +252,11 @@ pub fn now(input: &Input) -> Now {
     let kind = view.kind.as_deref().unwrap_or("");
     if kind == "wait" {
         if let Some(wait) = &facts.wait {
-            return waits(input, wait);
+            let mut now = waits(input, wait);
+            if view.clone.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                background(&mut now);
+            }
+            return now;
         }
     }
     if kind == "human" {
@@ -443,6 +450,43 @@ fn limit(input: &Input) -> Now {
             reset,
         ],
     )
+}
+
+/// A ticket that needs a clone, and each clone holds a ticket that works (section 11.3).
+fn slot(input: &Input) -> Now {
+    let place = input
+        .view
+        .flags
+        .iter()
+        .find(|f| f.flag == WAITS_FOR_SLOT)
+        .and_then(|f| f.reason.split(':').next())
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string);
+    Now::new(
+        Kind::Waits,
+        Tone::Wait,
+        match &place {
+            Some(place) => format!("waits for a slot · {place}"),
+            None => "waits for a slot".into(),
+        },
+        "waits for a slot".into(),
+        vec![
+            "Each clone of Vision holds a ticket that works now.".into(),
+            "It gets the next clone that frees up: from a ticket that ends, or from one that only waits for a review, CI, or a deploy.".into(),
+            "A ticket that started comes before a new one.".into(),
+        ],
+    )
+}
+
+/// A ticket in the background: it gave its clone to a ticket that needed one, and the passes
+/// still watch it (section 11.3).
+fn background(now: &mut Now) {
+    now.short = format!("in the background · {}", now.short);
+    now.lines.push(
+        "It gave its clone to a ticket that needed one. It gets a clone again when its next step needs one."
+            .into(),
+    );
 }
 
 fn waits(input: &Input, wait: &WaitFacts) -> Now {

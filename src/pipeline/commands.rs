@@ -13,7 +13,11 @@ use serde_json::{json, Value};
 
 use super::machine::{dirty_lines, head_of, human_mark, in_tx, save, span, visit_turns, Ticket};
 use super::resume::{self, Checked, Head, Resumed, RESUMED};
-use super::state::{flags_text, Counts, FlagReason, Visit, NEEDS_YOU, PAUSED, RESUME, STOPPED};
+use super::slots::{self, NewTake};
+use super::state::{
+    flags_text, Counts, FlagReason, QueuedTake, SlotNote, Visit, NEEDS_YOU, PAUSED, RESUME, STOPPED,
+    WAITS_FOR_SLOT,
+};
 use super::view::{plan_hash, SHORT_HASH};
 use crate::adapter::{self, Adapter, Step, StepKind};
 use crate::config::Config;
@@ -196,7 +200,7 @@ pub fn take(ctx: &Ctx, keys: &[TicketKey], step: Option<&str>) -> Result<()> {
     let mut queue: Option<Vec<QueueTicket>> = None;
     let mut failed = Vec::new();
     for key in keys {
-        match take_one(ctx, &ledger, config, &adapter, &mut queue, key, step) {
+        match take_one(ctx, &ledger, &adapter, &mut queue, key, step) {
             Ok(line) => println!("{line}"),
             Err(e) => {
                 // A suggestion of the rules is the answer of the command, not an error.
@@ -217,7 +221,6 @@ pub fn take(ctx: &Ctx, keys: &[TicketKey], step: Option<&str>) -> Result<()> {
 fn take_one(
     ctx: &Ctx,
     ledger: &Ledger,
-    config: &Config,
     adapter: &Adapter,
     queue: &mut Option<Vec<QueueTicket>>,
     key: &TicketKey,
@@ -260,7 +263,7 @@ fn take_one(
     };
     if !found.eligible {
         if let Some(branch) = found.branch.clone() {
-            return take_outside(ctx, ledger, adapter, config, &found, &branch, step);
+            return take_outside(ctx, ledger, adapter, &found, &branch, step);
         }
     }
     if step.is_some() {
@@ -278,83 +281,157 @@ fn take_one(
             }
         );
     }
-    let clone = free_clone(ledger, config)?;
+    let entry = adapter.entry().clone();
+    let new = NewTake {
+        key: key.clone(),
+        title: Some(found.title.trim().to_string()).filter(|t| !t.is_empty()),
+        branch: adapter.branch_for(key),
+        pr: None,
+        take: QueuedTake {
+            at: time::now_rfc3339(),
+            step: entry.id.clone(),
+            outside: false,
+            event: Value::Null,
+        },
+    };
+    take_or_queue(ctx, ledger, &new)
+}
+
+/// Puts a take at the end of the queue and gives the slots at once (section 11.3): the line of
+/// its start, or its place in the queue. An error of its own start leaves no row of it.
+fn take_or_queue(ctx: &Ctx, ledger: &Ledger, new: &NewTake) -> Result<String> {
+    let given = slots::assign(ctx, ledger, time::now(), Some(new))?;
+    Ok(slots::take_line(new.key.as_str(), &new.take.step, &given))
+}
+
+/// The work of a take in the clone of its slot: a fetch, the branch, and the row of the ticket
+/// at its first step, with the event `take`. A take that waited in the queue keeps the time of
+/// the take in `taken`. Gives the line of the take.
+pub(super) fn start_take(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    new: &NewTake,
+    clone: &Path,
+    taken: Option<&str>,
+) -> Result<String> {
+    let key = &new.key;
+    let take = &new.take;
+    let target = known_step(adapter, &take.step)?;
     let clone_text = clone.display().to_string();
-    git::run(&clone, &["fetch", "--quiet", "--all", "--prune"])
+    git::run(clone, &["fetch", "--quiet", "--all", "--prune"])
         .with_context(|| format!("could not fetch in the clone {clone_text}"))?;
     let base = &adapter.base;
-    if git::run(
-        &clone,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("{base}^{{commit}}"),
-        ],
-    )
-    .is_err()
-    {
-        bail!(
-            "the base ref {base} of the adapter is missing in the clone {clone_text}. Fetch it there, or fix base in adapter.toml"
-        );
-    }
-    let branch = adapter.branch_for(key);
-    git::run(
-        &clone,
-        &["switch", "--quiet", "--no-track", "-C", &branch, base],
-    )
-    .map_err(|e| {
-        switch_error(
-            e,
-            &clone,
-            &branch,
-            &format!("vision take {key}"),
-            format!("could not make the branch {branch} from {base} in the clone {clone_text}"),
+    let branch = &new.branch;
+    if take.outside {
+        let again = format!("vision take {key} --step {}", target.id);
+        let remote = base_remote(clone, adapter).unwrap_or_else(|| "origin".to_string());
+        switch_outside(clone, &remote, branch, &again)?;
+    } else {
+        if git::run(
+            clone,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{base}^{{commit}}"),
+            ],
         )
-    })?;
-    let head = head_of(&clone)?;
-    let entry = adapter.entry().clone();
+        .is_err()
+        {
+            bail!(
+                "the base ref {base} of the adapter is missing in the clone {clone_text}. Fetch it there, or fix base in adapter.toml"
+            );
+        }
+        git::run(
+            clone,
+            &["switch", "--quiet", "--no-track", "-C", branch, base],
+        )
+        .map_err(|e| {
+            switch_error(
+                e,
+                clone,
+                branch,
+                &format!("vision take {key}"),
+                format!("could not make the branch {branch} from {base} in the clone {clone_text}"),
+            )
+        })?;
+    }
+    let head = head_of(clone)?;
     let now = time::now_rfc3339();
-    let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &entry.id)?.len())?;
-    let mut counts = Counts::default();
-    let visit = counts.enter(&entry, "take", &now, turns, Some(head.clone()), true);
-    let title = Some(found.title.trim().to_string()).filter(|t| !t.is_empty());
+    let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &target.id)?.len())?;
+    let mut counts = Counts {
+        slot: Some(SlotNote {
+            last: Some(clone_text.clone()),
+            ..SlotNote::default()
+        }),
+        ..Counts::default()
+    };
+    let visit = counts.enter(&target, "take", &now, turns, Some(head.clone()), true);
     let row = TicketRow {
         key: key.to_string(),
-        title,
-        state: Some(entry.id.clone()),
+        title: new.title.clone(),
+        state: Some(target.id.clone()),
         flags: Some(flags_text(&[])),
         clone: Some(clone_text.clone()),
         branch: Some(branch.clone()),
-        pr: None,
+        pr: new.pr,
         head: Some(head.clone()),
-        taken: Some(now.clone()),
+        taken: Some(taken.unwrap_or(&now).to_string()),
         updated: Some(now.clone()),
         counts: Some(counts.text()),
     };
     let dir = ctx.paths.ticket_dir(key);
     std::fs::create_dir_all(&dir).with_context(|| format!("could not make {}", dir.display()))?;
     let ticket = Ticket::of(row.clone())?;
+    let mut detail = json!({
+        "clone": clone_text, "branch": branch, "base": head, "step": target.id, "seq": visit.seq,
+    });
+    if let (Some(more), Some(map)) = (take.event.as_object(), detail.as_object_mut()) {
+        for (name, value) in more {
+            map.insert(name.clone(), value.clone());
+        }
+    }
+    if taken.is_some() {
+        detail["queued"] = json!(take.at);
+    }
     in_tx(ledger, |ledger| {
         ledger.put_ticket(&row)?;
         ledger.close_spans(key.as_str(), &now)?;
-        ledger.open_span(&span(&ticket, &entry, "take", &now))?;
+        ledger.open_span(&span(&ticket, &target, "take", &now))?;
         ledger.add_event(
             &Event::now("user", "take")
                 .ticket(key.as_str())
-                .detail(json!({"clone": clone_text, "branch": branch, "base": head, "step": entry.id, "seq": visit.seq})),
+                .detail(detail.clone()),
         )?;
         Ok(())
     })?;
-    ctx.log(&format!(
-        "take: {key} in {clone_text} on {branch} from {base} ({})",
-        short(&head)
-    ));
-    Ok(format!(
-        "Took {key} in the clone {clone_text} on the branch {branch} from {base} ({}). The next tick starts the step {}.",
-        short(&head),
-        entry.id
-    ))
+    if take.outside {
+        ctx.log(&format!(
+            "take: {key} from outside Vision in {clone_text} on {branch} at the step {} ({})",
+            target.id,
+            short(&head)
+        ));
+        Ok(format!(
+            "Took {key} in the clone {clone_text} on its branch {branch} ({}), {}. The next tick enters the step {}.",
+            short(&head),
+            match new.pr {
+                Some(n) => format!("with the pull request #{n}"),
+                None => "with no pull request".to_string(),
+            },
+            target.id
+        ))
+    } else {
+        ctx.log(&format!(
+            "take: {key} in {clone_text} on {branch} from {base} ({})",
+            short(&head)
+        ));
+        Ok(format!(
+            "Took {key} in the clone {clone_text} on the branch {branch} from {base} ({}). The next tick starts the step {}.",
+            short(&head),
+            target.id
+        ))
+    }
 }
 
 /// `vision take` of a ticket that is in progress outside Vision: it has a branch, and maybe an
@@ -368,7 +445,6 @@ fn take_outside(
     ctx: &Ctx,
     ledger: &Ledger,
     adapter: &Adapter,
-    config: &Config,
     found: &QueueTicket,
     branch: &str,
     to: Option<&str>,
@@ -389,75 +465,30 @@ fn take_outside(
             adapter.name
         );
     }
-    let clone = free_clone(ledger, config)?;
-    let clone_text = clone.display().to_string();
-    git::run(&clone, &["fetch", "--quiet", "--all", "--prune"])
-        .with_context(|| format!("could not fetch in the clone {clone_text}"))?;
-    let again = format!("vision take {key} --step {name}");
-    let remote = base_remote(&clone, adapter).unwrap_or_else(|| "origin".to_string());
-    switch_outside(&clone, &remote, branch, &again)?;
-    let head = head_of(&clone)?;
-    let now = time::now_rfc3339();
-    let turns = u32::try_from(ledger.step_turn_ids(key.as_str(), &target.id)?.len())?;
-    let mut counts = Counts::default();
-    let visit = counts.enter(&target, "take", &now, turns, Some(head.clone()), true);
-    let title = Some(found.title.trim().to_string()).filter(|t| !t.is_empty());
     let pr = checked.as_ref().and_then(Checked::pr).or(found.pr);
-    let row = TicketRow {
-        key: key.to_string(),
-        title,
-        state: Some(target.id.clone()),
-        flags: Some(flags_text(&[])),
-        clone: Some(clone_text.clone()),
-        branch: Some(branch.to_string()),
-        pr,
-        head: Some(head.clone()),
-        taken: Some(now.clone()),
-        updated: Some(now.clone()),
-        counts: Some(counts.text()),
-    };
-    let dir = ctx.paths.ticket_dir(key);
-    std::fs::create_dir_all(&dir).with_context(|| format!("could not make {}", dir.display()))?;
-    let ticket = Ticket::of(row.clone())?;
     let facts = checked.as_ref().map(Checked::words).unwrap_or_default();
     let suggestion = checked
         .as_ref()
         .and_then(Checked::suggested)
         .map(str::to_string);
-    in_tx(ledger, |ledger| {
-        ledger.put_ticket(&row)?;
-        ledger.close_spans(key.as_str(), &now)?;
-        ledger.open_span(&span(&ticket, &target, "take", &now))?;
-        ledger.add_event(
-            &Event::now("user", "take")
-                .ticket(key.as_str())
-                .detail(json!({
-                    "clone": clone_text, "branch": branch, "base": head, "step": target.id,
-                    "seq": visit.seq, "outside": true, "pr": pr, "suggestion": suggestion,
-                    "facts": facts,
-                })),
-        )?;
-        Ok(())
-    })?;
-    ctx.log(&format!(
-        "take: {key} from outside Vision in {clone_text} on {branch} at the step {} ({})",
-        target.id,
-        short(&head)
-    ));
-    Ok(format!(
-        "Took {key} in the clone {clone_text} on its branch {branch} ({}), {}. The next tick enters the step {}.",
-        short(&head),
-        match pr {
-            Some(n) => format!("with the pull request #{n}"),
-            None => "with no pull request".to_string(),
+    let new = NewTake {
+        key: key.clone(),
+        title: Some(found.title.trim().to_string()).filter(|t| !t.is_empty()),
+        branch: branch.to_string(),
+        pr,
+        take: QueuedTake {
+            at: time::now_rfc3339(),
+            step: target.id.clone(),
+            outside: true,
+            event: json!({"outside": true, "pr": pr, "suggestion": suggestion, "facts": facts}),
         },
-        target.id
-    ))
+    };
+    take_or_queue(ctx, ledger, &new)
 }
 
 /// The remote of the clone for the base ref of the adapter, such as `origin` of `origin/main`.
 /// A clone without that remote gives its first remote, and a clone with no remote gives `None`.
-fn base_remote(clone: &Path, adapter: &Adapter) -> Option<String> {
+pub(super) fn base_remote(clone: &Path, adapter: &Adapter) -> Option<String> {
     let remotes = git::run(clone, &["remote"]).unwrap_or_default();
     let remotes: Vec<&str> = remotes
         .lines()
@@ -477,7 +508,7 @@ fn base_remote(clone: &Path, adapter: &Adapter) -> Option<String> {
 /// branch that the remote branch is ahead of moves forward to it. A local branch with commits
 /// that the remote does not have keeps them, and the next push sends them. A local branch that
 /// went apart from the remote stops the take, and nothing moves. No commit goes away.
-fn switch_outside(clone: &Path, remote: &str, branch: &str, again: &str) -> Result<()> {
+pub(super) fn switch_outside(clone: &Path, remote: &str, branch: &str, again: &str) -> Result<()> {
     let at =
         |reference: String| git::run(clone, &["rev-parse", "--verify", "--quiet", &reference]).ok();
     let local = at(format!("refs/heads/{branch}"));
@@ -547,7 +578,7 @@ fn clone_holders(ledger: &Ledger) -> Result<Vec<(PathBuf, String, String)>> {
 /// hold a branch at a time: when another worktree of the repo holds the branch, the error names
 /// that worktree and says what to do, and `again` is the command to run after the fix. Else
 /// `what` says what failed.
-fn switch_error(
+pub(super) fn switch_error(
     e: anyhow::Error,
     clone: &Path,
     branch: &str,
@@ -575,7 +606,7 @@ fn switch_error(
     ))
 }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(super) fn same_dir(a: &Path, b: &Path) -> bool {
     a == b
         || match (a.canonicalize(), b.canonicalize()) {
             (Ok(a), Ok(b)) => a == b,
@@ -647,18 +678,34 @@ fn restart(
     to: Option<&str>,
 ) -> Result<String> {
     let key = ticket.key.clone();
-    let clone = ticket.clone_dir().with_context(|| {
-        format!("{key} is stopped, but its row names no clone that holds its branch")
-    })?;
-    if let Some((_, other, step)) = clone_holders(ledger)?
-        .into_iter()
-        .find(|(dir, k, _)| *k != key.as_str() && same_dir(dir, &clone))
+    // A take that never started goes back to the end of the queue (section 11.3).
+    if let Some(take) = ticket
+        .counts
+        .slot
+        .as_ref()
+        .and_then(|s| s.take.as_ref())
+        .filter(|_| !ticket.has_clone())
     {
-        bail!(
-            "the clone {} holds the kept branch of {key}, but {other} holds that clone now (step {step}). Wait for {other} to end, or run `vision stop {other}`",
-            clone.display()
-        );
+        if let Some(name) = to.filter(|name| *name != take.step) {
+            bail!(
+                "{key} never started, so it starts at the step {} of its take, not at {name}. Run `vision take {key}`, then `vision retry {key} --step {name}` after its start",
+                take.step
+            );
+        }
+        return slots::requeue(ctx, ledger, ticket);
     }
+    // A ticket that holds no slot, or whose clone another ticket holds now, takes a slot first:
+    // a free one, or the slot of a ticket that only watches.
+    let taken = match ticket.clone_dir() {
+        Ok(clone) => clone_holders(ledger)?
+            .into_iter()
+            .any(|(dir, k, _)| k != key.as_str() && same_dir(&dir, &clone)),
+        Err(_) => true,
+    };
+    if taken {
+        slots::claim(ctx, ledger, adapter, &mut ticket)?;
+    }
+    let clone = ticket.clone_dir()?;
     let branch = ticket
         .row
         .branch
@@ -1083,6 +1130,10 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
         .get(NEEDS_YOU)
         .and_then(|r| seconds_since(&r.at));
     let now = time::now_rfc3339();
+    // A ticket in the queue of the slots leaves it.
+    let queued = ticket.flags.iter().any(|f| f == WAITS_FOR_SLOT);
+    ticket.flags.retain(|f| f != WAITS_FOR_SLOT);
+    ticket.counts.reasons.remove(WAITS_FOR_SLOT);
     ticket.flags.push(STOPPED.into());
     ticket.counts.reasons.insert(
         STOPPED.into(),
@@ -1117,9 +1168,15 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
         Ok(())
     })?;
     ctx.log(&format!("stop: {key} at the step {}", ticket.state()));
-    let clone = ticket.row.clone.clone().unwrap_or_else(|| "-".into());
+    let place = match ticket.row.clone.as_deref().filter(|c| !c.trim().is_empty()) {
+        Some(clone) => {
+            format!(" The branch stays in the clone {clone}, which other tickets can use now.")
+        }
+        None if queued => " It leaves the queue of the slots.".to_string(),
+        None => " It holds no slot.".to_string(),
+    };
     println!(
-        "Stopped {key} at the step {}.{} The branch stays in the clone {clone}, which other tickets can use now. Run `vision take {key}` to start it again.",
+        "Stopped {key} at the step {}.{}{place} Run `vision take {key}` to start it again.",
         ticket.state(),
         if killed.is_empty() {
             String::new()
@@ -1178,7 +1235,7 @@ fn clear(ticket: &mut Ticket, names: &[&str]) -> Cleared {
 }
 
 /// The step STEP of `--step`: a step of the adapter.
-fn known_step(adapter: &Adapter, name: &str) -> Result<Step> {
+pub(super) fn known_step(adapter: &Adapter, name: &str) -> Result<Step> {
     let Some(step) = adapter.step(name) else {
         let steps: Vec<&str> = adapter
             .steps
@@ -1613,6 +1670,29 @@ pub fn event_entry(e: &EventRow) -> Option<LogEntry> {
         "skipped" => format!("skipped {}: {}", field("step"), cut(field("why"), 240)),
         "fallback" => format!("fallback {}: {}", field("agent"), cut(field("why"), 240)),
         "kind" => format!("{} kind {}", e.actor, field("kind")),
+        "slot" if detail.get("gave").is_some() => format!(
+            "{} gave the clone {} to {}: the ticket waits in the background at the step {}",
+            e.actor,
+            field("gave"),
+            field("to"),
+            field("step")
+        ),
+        "slot" => format!(
+            "{} took the clone {} at the step {}",
+            e.actor,
+            field("took"),
+            field("step")
+        ),
+        "queued" => format!(
+            "{} queued the ticket at the step {}: no slot was free, and it was {} in line",
+            e.actor,
+            field("step"),
+            detail
+                .get("place")
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map_or_else(|| "-".to_string(), slots::ordinal)
+        ),
         MOVE => format!(
             "{} moved the ticket from {} to {}",
             e.actor,

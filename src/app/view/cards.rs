@@ -336,7 +336,7 @@ fn start(app: &App, card: &StartCard, c: &mut Canvas) {
         }
         Some(Ok(info)) => {
             match &info.clone {
-                Ok(clone) => rows.kv("clone", &format!("{clone} is free"), 64, T.fg),
+                Ok(slot) => rows.kv("clone", slot, 64, T.fg),
                 Err(why) => rows.kv("clone", why, 64, T.warn),
             }
             rows.kv(

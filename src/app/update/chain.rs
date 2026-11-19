@@ -139,6 +139,17 @@ pub fn on_done(app: &mut App, done: &JobDone, fx: &mut Vec<Effect>) {
         fail(app, text, fx);
         return;
     }
+    // A take with no free slot waits in the queue (section 11.3): the card says so.
+    if let JobKind::Action(Action::TakeAt { key, .. } | Action::Take { key }) = &done.kind {
+        if let Some(line) = done.result.stdout.lines().find(|l| l.starts_with("Queued ")) {
+            if let Some(chain) = app.chain.as_mut() {
+                chain.done = line.to_string();
+                if let Some(step) = chain.steps.get_mut(chain.at) {
+                    step.after = format!("{key} waits in the queue for a slot.");
+                }
+            }
+        }
+    }
     next(app, fx);
 }
 

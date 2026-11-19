@@ -22,6 +22,9 @@ pub const WAITS_FOR_LIMIT: &str = "waits-for-limit";
 pub const STOPPED: &str = "stopped";
 /// The person took over the session with `vision open`. `vision retry` clears it.
 pub use crate::turn::PAUSED;
+/// The ticket needs a slot (a clone of `clones`), and none is free. The tick clears it when the
+/// ticket gets one (section 11.3).
+pub const WAITS_FOR_SLOT: &str = "waits-for-slot";
 
 /// The counters of a ticket row.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -42,6 +45,41 @@ pub struct Counts {
     /// The kind of the ticket, a kind name of `[kinds]` of the adapter: decided at the first
     /// observe after the take, or set by `vision kind`. `None` with no `[kinds]`.
     pub kind: Option<String>,
+    /// The place of the ticket among the slots, when it holds none or held one before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<SlotNote>,
+}
+
+/// What the ticket row keeps about the slots (section 11.3): the clone that the ticket held
+/// last, since when it is in the background, and a take that waits for its first slot.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SlotNote {
+    /// The clone that the ticket held last. The ticket takes it again when it is free.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last: Option<String>,
+    /// When the ticket gave its slot to another ticket, while it only watched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// A take that waits for its first slot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub take: Option<QueuedTake>,
+}
+
+/// A take that waits for its first slot: what the take does when the ticket gets one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QueuedTake {
+    /// When the take put the ticket in the queue. The queue keeps this order.
+    pub at: String,
+    /// The step where the ticket starts.
+    pub step: String,
+    /// True for a ticket that is in progress outside Vision: its branch comes from the remote.
+    /// Else the take makes the branch from the base ref of the adapter.
+    pub outside: bool,
+    /// More keys for the event `take`, such as the facts and the suggestion of an outside take.
+    #[serde(skip_serializing_if = "Value::is_null")]
+    pub event: Value,
 }
 
 /// One visit of a step: from its entry to the move to the next step.
@@ -305,6 +343,7 @@ pub fn clear_command(flag: &str, key: &str) -> String {
         NEEDS_YOU | PAUSED => format!("vision retry {key}"),
         STOPPED => format!("vision take {key}"),
         WAITS_FOR_LIMIT => "none: the tick clears it when the limit allows a turn again".into(),
+        WAITS_FOR_SLOT => "none: the tick clears it when the ticket gets a slot".into(),
         _ => format!("vision retry {key}"),
     }
 }

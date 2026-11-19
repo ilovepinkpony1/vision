@@ -263,7 +263,7 @@ pub fn start_card() -> App {
         Msg::StartInfo {
             key: "DEMO-15".into(),
             info: Ok(vision::app::model::StartInfo {
-                clone: Ok("~/clones/demo-2".into()),
+                clone: Ok("~/clones/demo-2 is free".into()),
                 branch: "vision/DEMO-15".into(),
                 base: "origin/main".into(),
                 steps: STEPS.iter().map(|s| s.to_string()).collect(),

@@ -3,7 +3,8 @@
 //! 1. Take the lock. If a different tick holds it, exit with code 0.
 //! 2. Write the heartbeat. If the `off` file exists, write the snapshot and exit.
 //! 3. Reconcile each operation in the state `executing` or `uncertain`: [`executor::reconcile_operations`].
-//! 4. Collect each turn that ended: [`turn::collect_ended_turns`].
+//! 4. Collect each turn that ended: [`turn::collect_ended_turns`]. Then give the slots to the
+//!    tickets that need one: [`pipeline::slots::tick`].
 //! 5. For each ticket, test the end fact of its step: [`pipeline::test_end_facts`].
 //! 6. Select the next action of each ticket: [`pipeline::select_actions`].
 //! 7. Do each action that its mode and the limits allow: [`act`].
@@ -200,6 +201,7 @@ fn run_steps(pass: &mut Pass, done: &mut Vec<String>) -> Result<()> {
     done.push("reconcile".into());
     turn::collect_ended_turns(pass).context("step 4, collect the ended turns")?;
     questions::tick(pass).context("step 4, the cards and the Judge")?;
+    pipeline::slots::tick(pass).context("step 4, the slots")?;
     done.push("collect".into());
     pipeline::test_end_facts(pass).context("step 5, test the end facts")?;
     done.push("end-facts".into());

@@ -95,39 +95,47 @@ fn take_refuses_a_reserved_key_a_key_that_is_not_eligible_and_a_held_key() {
 }
 
 #[test]
-fn take_with_no_free_clone_says_who_holds_each_clone_and_a_dirty_clone_is_not_free() {
+fn take_with_no_free_clone_queues_the_ticket_and_says_who_holds_each_clone() {
     let world = World::new();
     world.run(&["take", KEY]).expect_code(0);
     let busy = world.run(&["take", "DEMO-13"]);
-    busy.expect_code(1);
-    assert!(busy.stderr.contains("no clone is free"), "{busy:?}");
+    busy.expect_code(0);
     assert!(
-        busy.stderr.contains(&format!(
+        busy.stdout.starts_with(
+            "Queued DEMO-13 at the step refine: no slot is free, and it is 1st in line."
+        ),
+        "{busy:?}"
+    );
+    assert!(
+        busy.stdout.contains(&format!(
             "{}: DEMO-12 holds it (step refine)",
             world.clone().display()
         )),
         "{busy:?}"
     );
+    let row = world.ledger().ticket("DEMO-13").unwrap().unwrap();
+    assert_eq!(row.clone, None);
+    assert_eq!(row.state.as_deref(), Some("refine"));
+    assert_eq!(row.flags.as_deref(), Some(r#"["waits-for-slot"]"#));
+    let again = world.run(&["take", "DEMO-13"]);
+    again.expect_code(1);
+    assert!(
+        again
+            .stderr
+            .contains("Vision already holds DEMO-13: it is at the step refine"),
+        "{again:?}"
+    );
 
-    let dirty = World::new();
-    std::fs::write(dirty.clone().join("scratch.txt"), "work in progress").unwrap();
-    let run = dirty.run(&["take", KEY]);
+    let none = World::new();
+    none.edit_config(|doc| doc["clones"] = toml_edit::value(toml_edit::Array::new()));
+    let run = none.run(&["take", KEY]);
     run.expect_code(1);
     assert!(
         run.stderr
-            .contains("its work tree has 1 change(s), such as `?? scratch.txt`"),
+            .contains("config.toml lists no clone in `clones`"),
         "{run:?}"
     );
-    assert!(dirty.row().is_none());
-
-    dirty.edit_config(|doc| doc["clones"] = toml_edit::value(toml_edit::Array::new()));
-    let none = dirty.run(&["take", KEY]);
-    none.expect_code(1);
-    assert!(
-        none.stderr
-            .contains("config.toml lists no clone in `clones`"),
-        "{none:?}"
-    );
+    assert!(none.row().is_none());
 }
 
 #[test]
@@ -587,12 +595,14 @@ fn stop_frees_the_clone_and_take_starts_the_ticket_again_in_the_clone_of_its_bra
         "the branch stays"
     );
 
-    // The freed clone takes a different ticket; then the stopped one cannot come back there.
+    // The freed clone takes a different ticket. DEMO-13 works there, so a continue of the
+    // stopped one finds no slot and says who holds each clone (section 11.3).
     world.run(&["take", "DEMO-13"]).expect_code(0);
     let blocked = world.run(&["take", KEY]);
     blocked.expect_code(1);
     assert!(
-        blocked.stderr.contains("but DEMO-13 holds that clone now"),
+        blocked.stderr.contains("no slot is free for DEMO-12 now")
+            && blocked.stderr.contains("DEMO-13 holds it (step refine)"),
         "{blocked:?}"
     );
     world.run(&["stop", "DEMO-13"]).expect_code(0);
