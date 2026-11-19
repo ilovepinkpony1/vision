@@ -394,8 +394,16 @@ fn ticket_a_change_request_of_another_reviewer_stops_an_approved_ticket() {
         s.pr = Some(pull(false));
         s.comments = vec![];
         s.reviews = vec![
-            at(review(5, "lead", "APPROVED"), "submitted_at", "2026-11-02T12:00:00Z"),
-            at(review(6, "other", "CHANGES_REQUESTED"), "submitted_at", "2026-11-02T12:30:00Z"),
+            at(
+                review(5, "lead", "APPROVED"),
+                "submitted_at",
+                "2026-11-02T12:00:00Z",
+            ),
+            at(
+                review(6, "other", "CHANGES_REQUESTED"),
+                "submitted_at",
+                "2026-11-02T12:30:00Z",
+            ),
         ];
     }
     let facts = observe_ticket(&t, json!(7), json!({}));
@@ -423,6 +431,54 @@ fn ticket_a_change_request_of_another_reviewer_stops_an_approved_ticket() {
 }
 
 #[test]
+fn ticket_a_change_request_of_an_app_on_an_older_commit_waits_for_its_review_of_the_head() {
+    let (t, w) = ticket_test();
+    let old = "b".repeat(40);
+    {
+        let mut s = w.lock();
+        s.pr = Some(pull(false));
+        s.comments = vec![];
+        s.reviews = vec![at(
+            review(5, "review-bot[bot]", "CHANGES_REQUESTED"),
+            "commit_id",
+            &old,
+        )];
+    }
+    // A push came after the change request, and the app reviews each push by itself. GitHub
+    // never lists an app as a requested reviewer, so this is no `changes` that loops.
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "waiting", "{facts}");
+    assert_eq!(facts["pr"]["rereview_by"], json!(["review-bot[bot]"]));
+    assert_eq!(facts["pr"]["changes_by"], json!(["review-bot[bot]"]));
+
+    // A review of the head that only comments: the old change request counts again.
+    w.lock().reviews.push(at(
+        review(6, "review-bot[bot]", "COMMENTED"),
+        "commit_id",
+        HEAD,
+    ));
+    assert_eq!(state_of(&t), "changes");
+
+    // The app asks for changes on the head.
+    w.lock().reviews = vec![at(
+        review(7, "review-bot[bot]", "CHANGES_REQUESTED"),
+        "commit_id",
+        HEAD,
+    )];
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "changes");
+    assert_eq!(facts["pr"]["rereview_by"], json!([]));
+
+    // A person on an older commit still needs a request: GitHub lists a person who is asked again.
+    w.lock().reviews = vec![at(
+        review(8, "other", "CHANGES_REQUESTED"),
+        "commit_id",
+        &old,
+    )];
+    assert_eq!(state_of(&t), "changes");
+}
+
+#[test]
 fn ticket_an_approval_answers_each_comment_before_it_and_a_later_comment_waits() {
     let (t, w) = ticket_test();
     {
@@ -431,14 +487,22 @@ fn ticket_an_approval_answers_each_comment_before_it_and_a_later_comment_waits()
         // An optional note of a review bot, a summary of a review, and a note of a CI run, each
         // before the approval.
         s.comments = vec![comment(10, "bot", "[P3] optional, no reply needed")];
-        s.issue_comments = vec![issue_comment(60, "lead", "Manually triggered the CI workflow")];
+        s.issue_comments = vec![issue_comment(
+            60,
+            "lead",
+            "Manually triggered the CI workflow",
+        )];
         s.reviews = vec![
             at(
                 review_with(2, "codex", "COMMENTED", "Here are some suggestions"),
                 "submitted_at",
                 "2026-11-02T10:30:00Z",
             ),
-            at(review(5, "lead", "APPROVED"), "submitted_at", "2026-11-02T12:00:00Z"),
+            at(
+                review(5, "lead", "APPROVED"),
+                "submitted_at",
+                "2026-11-02T12:00:00Z",
+            ),
         ];
     }
     let facts = observe_ticket(&t, json!(7), json!({}));
@@ -454,6 +518,24 @@ fn ticket_an_approval_answers_each_comment_before_it_and_a_later_comment_waits()
     let facts = observe_ticket(&t, json!(7), json!({}));
     assert_eq!(facts["review"]["state"], "comments");
     assert_eq!(facts["pr"]["comments_waiting"], 1, "only the later comment");
+
+    // A comment of the same second as the approval waits too: GitHub gives whole seconds, so the
+    // approver may not have seen it.
+    {
+        let mut s = w.lock();
+        s.comments.pop();
+        s.comments.push(at(
+            comment(12, "lead", "One more test, please."),
+            "created_at",
+            "2026-11-02T12:00:00Z",
+        ));
+    }
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "comments", "{facts}");
+    assert_eq!(
+        facts["pr"]["comments_waiting"], 1,
+        "the comment of the same second"
+    );
 
     // A later change request takes the approval back, so each old comment waits again.
     {

@@ -2299,7 +2299,8 @@ fn conflict_marker(work: &Path, merge: &str) -> Res<Option<String>> {
 // review.rerequest ------------------------------------------------------------------------------
 
 /// Asks each reviewer whose last review asked for changes for a new review: an approver, or
-/// another reviewer whose change request counts (see [`forge::pr_facts`]).
+/// another reviewer whose change request counts (see [`forge::pr_facts`]). It never asks a GitHub
+/// App: GitHub ignores such a request, and an app reviews each push by itself.
 fn review_rerequest(
     config: &Config,
     call: &Map<String, Value>,
@@ -2335,11 +2336,21 @@ fn review_rerequest(
     };
     let asked = names("changes_by");
     let requested = names("requested");
-    let todo: Vec<String> = asked
+    let (apps, people): (Vec<String>, Vec<String>) =
+        asked.iter().cloned().partition(|n| forge::is_app(n));
+    let todo: Vec<String> = people
         .iter()
         .filter(|n| !requested.contains(&n.to_lowercase()))
         .cloned()
         .collect();
+    let app_note = if apps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; no request goes to {}, because an app reviews each push by itself",
+            apps.join(", ")
+        )
+    };
     let external = format!("rerequest-{number}");
     if asked.is_empty() {
         return confirmed(
@@ -2348,13 +2359,18 @@ fn review_rerequest(
         );
     }
     if todo.is_empty() {
-        return confirmed(
-            &format!(
-                "a new review of {} is requested on #{number}",
-                asked.join(", ")
-            ),
-            external,
-        );
+        let text = if people.is_empty() {
+            format!(
+                "no request goes to {} on #{number}, because an app reviews each push by itself",
+                apps.join(", ")
+            )
+        } else {
+            format!(
+                "a new review of {} is requested on #{number}{app_note}",
+                people.join(", ")
+            )
+        };
+        return confirmed(&text, external);
     }
     if reconcile {
         return failed(&format!(
@@ -2379,7 +2395,10 @@ fn review_rerequest(
         Err(e) => return Err(e),
     }
     confirmed(
-        &format!("asked {} for a new review of #{number}", todo.join(", ")),
+        &format!(
+            "asked {} for a new review of #{number}{app_note}",
+            todo.join(", ")
+        ),
         external,
     )
 }

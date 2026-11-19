@@ -1717,6 +1717,46 @@ fn rerequest_it_asks_each_reviewer_who_asked_for_changes_once() {
 }
 
 #[test]
+fn rerequest_never_asks_an_app_because_an_app_reviews_each_push_by_itself() {
+    let (t, w) = rerequest_test();
+    w.lock().reviews = vec![
+        review(1, "review-bot[bot]", "CHANGES_REQUESTED"),
+        review(2, "outsider", "CHANGES_REQUESTED"),
+    ];
+    let result = t.act("review.rerequest").field("pr", json!(7)).run();
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert_eq!(
+        t.server.calls(Some("POST"), Some(&request_path()))[0].body,
+        json!({"reviewers": ["outsider"]})
+    );
+    assert!(
+        result
+            .detail()
+            .contains("no request goes to review-bot[bot]"),
+        "{}",
+        result.detail()
+    );
+
+    // Only the app asks for changes: no request at all, and the reconcile agrees.
+    {
+        let mut s = w.lock();
+        s.reviews = vec![review(1, "review-bot[bot]", "CHANGES_REQUESTED")];
+        s.pr = Some(pull(false));
+    }
+    let only = t.act("review.rerequest").field("pr", json!(7)).run();
+    assert_eq!(only.state(), "confirmed", "{only:?}");
+    assert_eq!(t.server.count("POST", &request_path()), 1);
+    assert_eq!(
+        t.act("review.rerequest")
+            .field("pr", json!(7))
+            .reconcile()
+            .run()
+            .state(),
+        "confirmed"
+    );
+}
+
+#[test]
 fn rerequest_no_reviewer_asked_for_changes() {
     let (t, w) = rerequest_test();
     w.lock().reviews = vec![review(1, "lead", "APPROVED")];

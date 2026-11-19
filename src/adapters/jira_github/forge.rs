@@ -637,6 +637,42 @@ pub fn last_states(reviews: &[Value]) -> (BTreeMap<String, String>, BTreeMap<Str
     (last, shown)
 }
 
+/// True for the login of a GitHub App, such as `review-bot[bot]`. GitHub never lists an app as a
+/// requested reviewer, and a review request for one changes nothing.
+pub fn is_app(login: &str) -> bool {
+    login.trim().to_lowercase().ends_with("[bot]")
+}
+
+/// For each reviewer, by the lowercase login: the commit of the review that gave its last state
+/// (see [`last_states`]), and each commit that one of its reviews names, of any state. A review
+/// with no `commit_id` names no commit.
+fn review_commits(
+    reviews: &[Value],
+) -> (BTreeMap<String, String>, BTreeMap<String, BTreeSet<String>>) {
+    let mut sorted: Vec<&Value> = reviews.iter().collect();
+    sorted.sort_by_key(|r| int(r, "id").unwrap_or(0));
+    let mut of_state = BTreeMap::new();
+    let mut each: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for review in sorted {
+        let name = user_of(review).to_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        let commit = text(review, "commit_id");
+        if REVIEW_STATES.contains(&text(review, "state")) {
+            if commit.is_empty() {
+                of_state.remove(&name);
+            } else {
+                of_state.insert(name.clone(), commit.to_string());
+            }
+        }
+        if !commit.is_empty() {
+            each.entry(name).or_default().insert(commit.to_string());
+        }
+    }
+    (of_state, each)
+}
+
 pub fn review_first_line(review: &Value) -> String {
     let line = first_line(&body_of(review), 200);
     if line.is_empty() {
@@ -869,6 +905,11 @@ pub fn comment_mark(kind: &str, id: i64, last: i64) -> String {
 /// still waits, such as a finding of a review of a later push. A change request counts from an
 /// approver and from each other reviewer who is not one of `own_logins` and whose comments
 /// `ignore_logins` does not skip in full.
+///
+/// A GitHub App reviews each push by itself, and GitHub never lists an app as a requested
+/// reviewer. So the change request of an app on an older commit than the head is not `changes`
+/// while the app has no review of the head: the ticket waits for that review. `rereview_by`
+/// names each such app.
 pub fn pr_facts(
     gh: &GitHub,
     pr: &Value,
@@ -910,9 +951,8 @@ pub fn pr_facts(
     approved_by.sort();
     // A change request counts from an approver, and also from each other reviewer who is not one
     // of `own_logins` and whose comments `ignore_logins` does not skip in full.
-    let asks = |name: &str| {
-        counts(name) || (!own.iter().any(|o| o == name) && !ignore.skips_every(name))
-    };
+    let asks =
+        |name: &str| counts(name) || (!own.iter().any(|o| o == name) && !ignore.skips_every(name));
     let mut asked: Vec<String> = last
         .iter()
         .filter(|(n, s)| s.as_str() == "CHANGES_REQUESTED" && asks(n))
@@ -926,11 +966,31 @@ pub fn pr_facts(
             .collect(),
         _ => BTreeSet::new(),
     };
+    // An app reviews each push by itself, and no request can ask it again. So a change request of
+    // an app on an older commit than the head waits while the app has no review of the head.
+    let head_sha = pr
+        .get("head")
+        .and_then(|h| h.get("sha"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let (state_commit, reviewed) = review_commits(&reviews);
+    let rereview: Vec<String> = asked
+        .iter()
+        .filter(|n| {
+            let key = n.to_lowercase();
+            is_app(n)
+                && !head_sha.is_empty()
+                && state_commit.get(&key).is_some_and(|c| c != head_sha)
+                && !reviewed.get(&key).is_some_and(|set| set.contains(head_sha))
+        })
+        .cloned()
+        .collect();
     // With enough approvals and no change request, the newest approval answers each comment
-    // that came before it: the approver saw it. A comment after it still waits.
+    // that came before it: the approver saw it. A comment after it still waits, and so does a
+    // comment of the same second, because GitHub gives whole seconds.
     let approved = approved_by.len() >= needed && asked.is_empty();
     let answered_by_approval = |row: &Value| match (&approved_at, row["at"].as_str()) {
-        (Some(approval), Some(at)) => approved && at <= approval.as_str(),
+        (Some(approval), Some(at)) => approved && at < approval.as_str(),
         _ => false,
     };
     // Each comment that waits, of each kind: the same rows as the job comments gives.
@@ -973,6 +1033,7 @@ pub fn pr_facts(
     facts.insert("changes_requested".into(), json!(!asked.is_empty()));
     facts.insert("changes_by".into(), json!(asked));
     facts.insert("requested".into(), json!(requested));
+    facts.insert("rereview_by".into(), json!(rereview));
     facts.insert("comments_waiting".into(), json!(waiting.len()));
     facts.insert(
         "url".into(),
@@ -984,7 +1045,10 @@ pub fn pr_facts(
         "closed"
     } else if !waiting.is_empty() {
         "comments"
-    } else if asked.iter().any(|n| !requested.contains(&n.to_lowercase())) {
+    } else if asked
+        .iter()
+        .any(|n| !requested.contains(&n.to_lowercase()) && !rereview.contains(n))
+    {
         "changes"
     } else if conflict {
         "conflict"
