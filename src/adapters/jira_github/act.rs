@@ -2298,7 +2298,8 @@ fn conflict_marker(work: &Path, merge: &str) -> Res<Option<String>> {
 
 // review.rerequest ------------------------------------------------------------------------------
 
-/// Asks each approver whose last review asked for changes for a new review.
+/// Asks each reviewer whose last review asked for changes for a new review: an approver, or
+/// another reviewer whose change request counts (see [`forge::pr_facts`]).
 fn review_rerequest(
     config: &Config,
     call: &Map<String, Value>,
@@ -2342,7 +2343,7 @@ fn review_rerequest(
     let external = format!("rerequest-{number}");
     if asked.is_empty() {
         return confirmed(
-            &format!("no approver asked for changes on #{number}"),
+            &format!("no reviewer asked for changes on #{number}"),
             external,
         );
     }

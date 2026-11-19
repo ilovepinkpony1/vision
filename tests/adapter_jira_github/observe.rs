@@ -380,6 +380,92 @@ fn ticket_a_conflict_with_the_base_is_its_own_state_in_its_order() {
     assert_eq!(facts["review"]["state"], "approved");
 }
 
+/// A review or a comment with a time at `key`, such as `submitted_at`.
+fn at(mut item: Value, key: &str, time: &str) -> Value {
+    item[key] = json!(time);
+    item
+}
+
+#[test]
+fn ticket_a_change_request_of_another_reviewer_stops_an_approved_ticket() {
+    let (t, w) = ticket_test();
+    {
+        let mut s = w.lock();
+        s.pr = Some(pull(false));
+        s.comments = vec![];
+        s.reviews = vec![
+            at(review(5, "lead", "APPROVED"), "submitted_at", "2026-11-02T12:00:00Z"),
+            at(review(6, "other", "CHANGES_REQUESTED"), "submitted_at", "2026-11-02T12:30:00Z"),
+        ];
+    }
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "changes", "{facts}");
+    assert_eq!(facts["pr"]["changes_by"], json!(["other"]));
+    assert_eq!(facts["pr"]["approved_by"], json!(["lead"]));
+
+    // While a change request stands, the approval answers no comment from before it.
+    w.lock().comments = vec![comment(10, "other", "Rename this")];
+    assert_eq!(state_of(&t), "comments");
+
+    // A login that `ignore_logins` skips in full asks for nothing.
+    {
+        let mut s = w.lock();
+        s.comments.clear();
+        s.reviews[1] = at(
+            review(6, "ci-bot", "CHANGES_REQUESTED"),
+            "submitted_at",
+            "2026-11-02T12:30:00Z",
+        );
+    }
+    let facts = observe_ticket(&t, json!(7), json!({"ignore_logins": ["ci-bot"]}));
+    assert_eq!(facts["review"]["state"], "approved", "{facts}");
+    assert_eq!(facts["pr"]["changes_by"], json!([]));
+}
+
+#[test]
+fn ticket_an_approval_answers_each_comment_before_it_and_a_later_comment_waits() {
+    let (t, w) = ticket_test();
+    {
+        let mut s = w.lock();
+        s.pr = Some(pull(false));
+        // An optional note of a review bot, a summary of a review, and a note of a CI run, each
+        // before the approval.
+        s.comments = vec![comment(10, "bot", "[P3] optional, no reply needed")];
+        s.issue_comments = vec![issue_comment(60, "lead", "Manually triggered the CI workflow")];
+        s.reviews = vec![
+            at(
+                review_with(2, "codex", "COMMENTED", "Here are some suggestions"),
+                "submitted_at",
+                "2026-11-02T10:30:00Z",
+            ),
+            at(review(5, "lead", "APPROVED"), "submitted_at", "2026-11-02T12:00:00Z"),
+        ];
+    }
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "approved", "{facts}");
+    assert_eq!(facts["pr"]["comments_waiting"], 0);
+
+    // A comment after the approval waits, such as a finding of a review of a later push.
+    w.lock().comments.push(at(
+        comment(11, "bot", "[P1] a new finding"),
+        "created_at",
+        "2026-11-02T13:00:00Z",
+    ));
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "comments");
+    assert_eq!(facts["pr"]["comments_waiting"], 1, "only the later comment");
+
+    // A later change request takes the approval back, so each old comment waits again.
+    {
+        let mut s = w.lock();
+        s.comments.pop();
+        s.reviews.push(review(6, "lead", "CHANGES_REQUESTED"));
+    }
+    let facts = observe_ticket(&t, json!(7), json!({}));
+    assert_eq!(facts["review"]["state"], "comments");
+    assert_eq!(facts["pr"]["comments_waiting"], 3);
+}
+
 #[test]
 fn ticket_each_kind_of_comment_waits_and_the_state_agrees() {
     let (t, w) = ticket_test();

@@ -1702,13 +1702,14 @@ fn rerequest_test() -> (AdapterTest, GitHubWorld) {
 }
 
 #[test]
-fn rerequest_it_asks_each_approver_who_asked_for_changes_once() {
+fn rerequest_it_asks_each_reviewer_who_asked_for_changes_once() {
     let (t, _w) = rerequest_test();
     let result = t.act("review.rerequest").field("pr", json!(7)).run();
     assert_eq!(result.state(), "confirmed", "{result:?}");
+    // The approver and the other reviewer: a change request of each one stops the ticket.
     assert_eq!(
         t.server.calls(Some("POST"), Some(&request_path()))[0].body,
-        json!({"reviewers": ["lead"]})
+        json!({"reviewers": ["lead", "outsider"]})
     );
     let again = t.act("review.rerequest").field("pr", json!(7)).run();
     assert_eq!(again.state(), "confirmed");
@@ -1716,7 +1717,7 @@ fn rerequest_it_asks_each_approver_who_asked_for_changes_once() {
 }
 
 #[test]
-fn rerequest_no_approver_asked_for_changes() {
+fn rerequest_no_reviewer_asked_for_changes() {
     let (t, w) = rerequest_test();
     w.lock().reviews = vec![review(1, "lead", "APPROVED")];
     let result = t.act("review.rerequest").field("pr", json!(7)).run();
@@ -1738,10 +1739,27 @@ fn rerequest_the_reconcile_only_reads() {
             .state(),
         "failed"
     );
+    // Only the approver is asked again: the other reviewer still waits for a request.
     w.lock().pr = Some(
         Pull {
             draft: false,
             requested: vec!["lead".into()],
+            ..Pull::default()
+        }
+        .json(),
+    );
+    assert_eq!(
+        t.act("review.rerequest")
+            .field("pr", json!(7))
+            .reconcile()
+            .run()
+            .state(),
+        "failed"
+    );
+    w.lock().pr = Some(
+        Pull {
+            draft: false,
+            requested: vec!["lead".into(), "outsider".into()],
             ..Pull::default()
         }
         .json(),

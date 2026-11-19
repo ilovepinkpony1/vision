@@ -688,6 +688,11 @@ impl Ignore {
         Ok(ignore)
     }
 
+    /// True when the entries skip each kind of comment of the login, such as a CI bot.
+    pub fn skips_every(&self, name: &str) -> bool {
+        self.every.contains(&name.to_lowercase())
+    }
+
     pub fn skips(&self, name: &str, kind: &str) -> bool {
         let name = name.to_lowercase();
         self.every.contains(&name) || self.kinds.get(kind).is_some_and(|set| set.contains(&name))
@@ -753,6 +758,7 @@ pub fn waiting_rows(
             "id": root,
             "kind": "inline",
             "mark": comment_mark("inline", root, last_id),
+            "at": last.get("created_at").cloned().unwrap_or(Value::Null),
             "author": user_of(last),
             "path": first.get("path").cloned().unwrap_or(Value::Null),
             "line": line,
@@ -800,6 +806,7 @@ pub fn waiting_rows(
             "id": id,
             "kind": "review",
             "mark": comment_mark("review", id, id),
+            "at": review.get("submitted_at").cloned().unwrap_or(Value::Null),
             "state": state,
             "author": name,
             "path": null,
@@ -829,6 +836,7 @@ pub fn waiting_rows(
             "id": id,
             "kind": "conversation",
             "mark": comment_mark("conversation", id, id),
+            "at": c.get("created_at").cloned().unwrap_or(Value::Null),
             "author": name,
             "path": null,
             "line": null,
@@ -855,6 +863,12 @@ pub fn comment_mark(kind: &str, id: i64, last: i64) -> String {
 /// A comment whose mark is in `seen` does not wait: a finished round of comments read it, and
 /// it got nothing new since then. So a note that needs no reply, such as a summary of a review
 /// or a note of a bot, makes one round and not a loop.
+///
+/// With enough approvals and no change request, a comment from before the newest approval does
+/// not wait either: the approver saw it, so the ticket goes on. A comment after the approval
+/// still waits, such as a finding of a review of a later push. A change request counts from an
+/// approver and from each other reviewer who is not one of `own_logins` and whose comments
+/// `ignore_logins` does not skip in full.
 pub fn pr_facts(
     gh: &GitHub,
     pr: &Value,
@@ -877,15 +891,31 @@ pub fn pr_facts(
     };
     let reviews = gh.reviews(number)?;
     let (last, shown) = last_states(&reviews);
+    // The newest approval of a reviewer who counts and whose last state is an approval.
+    let approved_at = reviews
+        .iter()
+        .filter(|r| text(r, "state") == "APPROVED")
+        .filter(|r| {
+            let name = user_of(r).to_lowercase();
+            counts(&name) && last.get(&name).map(String::as_str) == Some("APPROVED")
+        })
+        .filter_map(|r| r.get("submitted_at").and_then(Value::as_str))
+        .max()
+        .map(str::to_string);
     let mut approved_by: Vec<String> = last
         .iter()
         .filter(|(n, s)| s.as_str() == "APPROVED" && counts(n))
         .map(|(n, _)| shown[n].clone())
         .collect();
     approved_by.sort();
+    // A change request counts from an approver, and also from each other reviewer who is not one
+    // of `own_logins` and whose comments `ignore_logins` does not skip in full.
+    let asks = |name: &str| {
+        counts(name) || (!own.iter().any(|o| o == name) && !ignore.skips_every(name))
+    };
     let mut asked: Vec<String> = last
         .iter()
-        .filter(|(n, s)| s.as_str() == "CHANGES_REQUESTED" && counts(n))
+        .filter(|(n, s)| s.as_str() == "CHANGES_REQUESTED" && asks(n))
         .map(|(n, _)| shown[n].clone())
         .collect();
     asked.sort();
@@ -895,6 +925,13 @@ pub fn pr_facts(
             .map(|u| login(Some(u)).to_lowercase())
             .collect(),
         _ => BTreeSet::new(),
+    };
+    // With enough approvals and no change request, the newest approval answers each comment
+    // that came before it: the approver saw it. A comment after it still waits.
+    let approved = approved_by.len() >= needed && asked.is_empty();
+    let answered_by_approval = |row: &Value| match (&approved_at, row["at"].as_str()) {
+        (Some(approval), Some(at)) => approved && at <= approval.as_str(),
+        _ => false,
     };
     // Each comment that waits, of each kind: the same rows as the job comments gives.
     let waiting: Vec<Value> = waiting_rows(
@@ -906,6 +943,7 @@ pub fn pr_facts(
     )
     .into_iter()
     .filter(|row| !row["mark"].as_str().is_some_and(|m| seen.contains(m)))
+    .filter(|row| !answered_by_approval(row))
     .collect();
     let merged = truthy(pr.get("merged")).is_some() || truthy(pr.get("merged_at")).is_some();
     let closed = text(pr, "state") == "closed" && !merged;
@@ -950,7 +988,7 @@ pub fn pr_facts(
         "changes"
     } else if conflict {
         "conflict"
-    } else if approved_by.len() >= needed && asked.is_empty() {
+    } else if approved {
         "approved"
     } else {
         "waiting"
