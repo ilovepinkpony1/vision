@@ -56,6 +56,17 @@ impl Friendly {
         }
     }
 
+    /// The action for the command line: the keys of the app become the commands of the ticket.
+    pub fn action_for_command_line(&self, key: &str) -> Option<String> {
+        self.action.as_ref().map(|action| {
+            action
+                .replace("Press r ", &format!("Run `vision retry {key}` "))
+                .replace("press r", &format!("run `vision retry {key}`"))
+                .replace("Press o ", &format!("Run `vision open {key}` "))
+                .replace(", or r ", &format!(", or `vision retry {key}` "))
+        })
+    }
+
     /// The headline and the action as one text, such as for a notice of one line.
     pub fn short(&self) -> String {
         match &self.action {
@@ -67,7 +78,7 @@ impl Friendly {
 
 /// The friendly words of a raw reason.
 pub fn explain(raw: &str) -> Friendly {
-    let text = raw.trim().trim_start_matches("error: ").trim();
+    let text = without_flag(raw.trim().trim_start_matches("error: ").trim());
     if text.is_empty() {
         return Friendly::new("Something went wrong, and Vision gave no reason", None, raw);
     }
@@ -269,6 +280,19 @@ const SHORT_REASON: usize = 140;
 
 /// Names that keep their capital letter inside a sentence.
 const NAMES: [&str; 4] = ["Vision", "Jira", "GitHub", "Claude"];
+
+/// The reason without the flag that a list of needs puts first, such as `needs-you at the step
+/// comments: `.
+fn without_flag(text: &str) -> &str {
+    if let Some((head, rest)) = text.split_once(": ") {
+        if let Some((flag, _step)) = head.split_once(" at the step ") {
+            if !flag.is_empty() && flag.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+                return rest.trim();
+            }
+        }
+    }
+    text
+}
 
 /// The usual action after a stop of a step.
 const TRY_AGAIN: &str = "Press r to try the step again";
@@ -607,6 +631,36 @@ mod tests {
             commits.headline,
             "The agent finished the step but made no commit, also after a second try."
         );
+    }
+
+    #[test]
+    fn the_flag_before_a_reason_of_the_list_of_needs_is_left_out() {
+        let raw = "needs-you at the step comments: git.push was refused by the size gate: the diff changes 6000 lines, more than gates.max_diff_lines (3000). Split the change";
+        let f = explain(raw);
+        assert_eq!(
+            f.headline,
+            "Vision did not run git.push: the change has 6000 lines, and the limit is 3000."
+        );
+        assert_eq!(f.details.as_deref(), Some(raw));
+        let secret = explain("needs-you at the step regression: the job regression before the step regression did not pass: the command of the job regression failed with the exit code 1. The last lines of its standard error:\n  /x/bin/check: line 9: CI_USER: CI_USER is not in [secrets]");
+        assert_eq!(
+            secret.headline,
+            "Before the step regression, the job regression failed: it needs the secret CI_USER, and Vision cannot get it."
+        );
+    }
+
+    #[test]
+    fn the_command_line_names_commands_instead_of_keys() {
+        let f = explain("the end fact commits did not hold: the branch is still at abc");
+        assert_eq!(
+            f.action_for_command_line("DEMO-12").as_deref(),
+            Some("Run `vision open DEMO-12` to look at its session, or `vision retry DEMO-12` to try the step again.")
+        );
+        let cap = explain("the step comments reached its cap comments = 3: this is entry 4");
+        assert!(cap
+            .action_for_command_line("DEMO-12")
+            .unwrap()
+            .contains("Then run `vision retry DEMO-12` to try once more"));
     }
 
     #[test]

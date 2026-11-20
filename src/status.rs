@@ -282,10 +282,14 @@ impl StatusView {
                         "         {} {ticket} {}: {}",
                         need_word(need.kind),
                         need.id,
-                        friendly.short()
+                        friendly.headline
                     );
+                    if let Some(action) = friendly.action_for_command_line(ticket) {
+                        let _ = writeln!(out, "           to do: {action}");
+                    }
                     if let Some(details) = &friendly.details {
-                        let _ = writeln!(out, "           details: {details}");
+                        let flat: Vec<&str> = details.split_whitespace().collect();
+                        let _ = writeln!(out, "           details: {}", flat.join(" "));
                     }
                     continue;
                 }
