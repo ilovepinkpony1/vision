@@ -20,6 +20,7 @@ mod collect;
 mod control;
 mod inbox;
 mod launch;
+pub mod pane;
 mod plugins;
 mod roles;
 mod schema;
@@ -91,8 +92,9 @@ impl fmt::Display for TurnKind {
 pub fn run(ctx: &Ctx, command: TurnCommand) -> Result<()> {
     match command {
         TurnCommand::TurnRun { turn } => supervisor::run(ctx, &turn),
+        TurnCommand::TurnHook { dir, status_line } => pane::hook(&dir, status_line),
         TurnCommand::Logs { key, follow } => view::logs(ctx, key.as_ref(), follow),
-        TurnCommand::Open { key } => view::open(ctx, &key),
+        TurnCommand::Open { key, herdr } => view::open(ctx, &key, herdr),
         TurnCommand::Tell { key, text } => control::tell_command(ctx, &key, &text),
     }
 }

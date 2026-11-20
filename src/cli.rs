@@ -315,6 +315,16 @@ pub enum TurnCommand {
         turn: TurnId,
     },
 
+    /// Record one hook event of a session in a herdr pane. The hooks of the session run it
+    #[command(hide = true)]
+    TurnHook {
+        /// The folder of the turn
+        dir: std::path::PathBuf,
+        /// Keep the input of the status line, and print the line
+        #[arg(long)]
+        status_line: bool,
+    },
+
     /// Show the events of the running turn
     #[command(display_order = 16)]
     Logs {
@@ -325,11 +335,15 @@ pub enum TurnCommand {
         follow: bool,
     },
 
-    /// Attach to the running turn and type into it, or take over the session
+    /// Attach to the running turn and type into it, or take over the session. A turn in a
+    /// herdr pane opens in Herdr.app
     #[command(display_order = 17)]
     Open {
         /// The ticket key, such as DEMO-12
         key: TicketKey,
+        /// Only show the pane of the running turn in Herdr.app, and fail when it has none
+        #[arg(long)]
+        herdr: bool,
     },
 
     /// Send a message to the running turn, or to the next turn of the ticket
@@ -347,6 +361,7 @@ impl TurnCommand {
     pub fn name(&self) -> &'static str {
         match self {
             TurnCommand::TurnRun { .. } => "turn-run",
+            TurnCommand::TurnHook { .. } => "turn-hook",
             TurnCommand::Logs { .. } => "logs",
             TurnCommand::Open { .. } => "open",
             TurnCommand::Tell { .. } => "tell",

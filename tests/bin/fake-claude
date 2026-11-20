@@ -215,6 +215,11 @@ def result_event(step, session):
 
 
 def main():
+    # With no -p and with --settings, Claude Code runs as the session of a turn in a herdr pane.
+    # A take-over (`--resume` alone) stays here.
+    if "-p" not in sys.argv[1:] and "--settings" in sys.argv[1:]:
+        pane = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake-claude-pane")
+        os.execv(sys.executable, [sys.executable, pane] + sys.argv[1:])
     opts = parse_args(sys.argv[1:])
     if not opts["print"]:
         print(f"fake-claude interactive resume={opts.get('--resume')} cwd={os.getcwd()}")

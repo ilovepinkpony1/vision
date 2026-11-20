@@ -368,14 +368,38 @@ fn follow_until_done(shown: &mut [Shown], out: &mut impl Write) -> Result<()> {
     }
 }
 
-/// `vision open KEY`: with a running turn, print its events and send each typed line into its
-/// inbox until it ends; Ctrl-C leaves, and the turn continues. With no running turn, pause the
-/// ticket and replace this process with `claude --resume <session id>` in the working folder
-/// of the last turn.
-pub fn open(ctx: &Ctx, key: &TicketKey) -> Result<()> {
+/// `vision open KEY`: a running turn in a herdr pane shows in its window of Herdr.app, and it
+/// goes on (section 7.7). With another running turn, print its events and send each typed line
+/// into its inbox until it ends; Ctrl-C leaves, and the turn continues. With no running turn,
+/// pause the ticket and open `claude --resume <session id>` in the working folder of the last
+/// turn: in a tab of herdr with `[herdr] enabled`, else in this process. `herdr_only` fails
+/// when the turn is not in a pane.
+pub fn open(ctx: &Ctx, key: &TicketKey, herdr_only: bool) -> Result<()> {
     ctx.require_setup()?;
     let ledger = ctx.ledger()?;
-    if let Some(running) = control::running_turn_of(ctx, &ledger, key)? {
+    let running = control::running_turn_of(ctx, &ledger, key)?;
+    if let Some((running, pane)) = running
+        .as_ref()
+        .and_then(|r| r.pane.as_ref().map(|p| (r, p)))
+    {
+        let id = running.turn_id()?;
+        let plan = LaunchFile::read(&ctx.paths.turn(key, &id).dir)?
+            .plan
+            .pane
+            .with_context(|| format!("the launch of the turn {id} names no herdr session"))?;
+        super::pane::show(&plan, pane, key.as_str())?;
+        println!(
+            "The turn {id} of {key} runs in the tab {} of the herdr session {}. Herdr.app shows it: type into the pane to talk to the agent.",
+            pane.tab, pane.session
+        );
+        return Ok(());
+    }
+    if herdr_only {
+        bail!(
+            "{key} has no turn in a herdr pane now. Run `vision open {key}` to attach to its turn or to take over its session"
+        );
+    }
+    if let Some(running) = running {
         let id = running.turn_id()?;
         println!(
             "Attached to the turn {id} of {key}. Type a line and press Enter to send it. \
@@ -431,6 +455,7 @@ fn take_over(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<()> {
     }
     let config = ctx.config()?;
     let program = ctx.claude_bin()?;
+    let config_dir = config.claude_config_dir(&ctx.paths)?;
     ledger.add_ticket_flag(key.as_str(), PAUSED, &time::now_rfc3339())?;
     ledger.add_event(
         &LedgerEvent::now("user", "pause")
@@ -440,6 +465,31 @@ fn take_over(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<()> {
     ctx.log(&format!(
         "open: paused {key} and took over the session {session}"
     ));
+    if config.herdr.enabled {
+        use super::pane::shell_quote;
+        let env = config_dir
+            .as_ref()
+            .map(|d| {
+                format!(
+                    "env CLAUDE_CONFIG_DIR={} ",
+                    shell_quote(&d.display().to_string())
+                )
+            })
+            .unwrap_or_default();
+        let line = format!(
+            "cd {} && exec {env}{} --resume {}",
+            shell_quote(&workdir.display().to_string()),
+            shell_quote(&program),
+            shell_quote(&session)
+        );
+        let plan = super::pane::PanePlan::of(&config.herdr);
+        let pane = super::pane::take_over(&plan, key.as_str(), &workdir, &line)?;
+        println!(
+            "{key} is paused, so no new turn starts for it. The session {session} opens in the tab {} of the herdr session {}.",
+            pane.tab, pane.session
+        );
+        return Ok(());
+    }
     println!(
         "{key} is paused, so no new turn starts for it. Opening the session {session} in {}.",
         workdir.display()
@@ -447,7 +497,7 @@ fn take_over(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<()> {
     std::io::stdout().flush()?;
     let mut command = Command::new(&program);
     command.arg("--resume").arg(&session).current_dir(&workdir);
-    if let Some(dir) = config.claude_config_dir(&ctx.paths)? {
+    if let Some(dir) = config_dir {
         command.env("CLAUDE_CONFIG_DIR", dir);
     }
     let err = command.exec();

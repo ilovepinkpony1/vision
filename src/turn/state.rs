@@ -106,6 +106,9 @@ pub struct TurnState {
     /// For people: what went wrong.
     #[serde(default)]
     pub detail: Option<String>,
+    /// Where the turn runs in herdr, for a turn in a pane (section 7.7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<crate::turn::pane::PaneRef>,
 }
 
 impl TurnState {
@@ -123,6 +126,7 @@ impl TurnState {
             reason: None,
             session: None,
             detail: None,
+            pane: None,
         }
     }
 

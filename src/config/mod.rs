@@ -36,6 +36,8 @@ pub struct Config {
     pub claude: Claude,
     /// The Codex CLI of the agents whose runner is `codex` (section 7.3).
     pub codex: Codex,
+    /// The turns in panes of a herdr session (section 7.7).
+    pub herdr: Herdr,
     pub budget: Budget,
     pub time: TimeLimits,
     pub limits: Limits,
@@ -73,6 +75,7 @@ impl Default for Config {
             clones: Vec::new(),
             claude: Claude::default(),
             codex: Codex::default(),
+            herdr: Herdr::default(),
             budget: Budget::default(),
             time: TimeLimits::default(),
             limits: Limits::default(),
@@ -285,6 +288,33 @@ impl Default for Codex {
         Codex {
             bin: "codex".into(),
             price: None,
+        }
+    }
+}
+
+/// The turns in panes of a herdr session (section 7.7): each Claude turn of a work agent runs
+/// as an interactive session in a tab of the session, with one workspace for each ticket, and
+/// the person types into it in Herdr.app.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Herdr {
+    /// False: each turn runs headless, with no pane.
+    pub enabled: bool,
+    /// The named herdr session of the turns. Herdr.app shows it in a window of its own.
+    pub session: String,
+    /// The herdr CLI.
+    pub bin: String,
+    /// The program of Herdr.app, which opens and focuses its windows.
+    pub app: String,
+}
+
+impl Default for Herdr {
+    fn default() -> Herdr {
+        Herdr {
+            enabled: false,
+            session: "vision".into(),
+            bin: "herdr".into(),
+            app: "/Applications/Herdr.app/Contents/MacOS/Herdr".into(),
         }
     }
 }

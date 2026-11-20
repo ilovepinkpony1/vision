@@ -154,6 +154,11 @@ fn read_local(
         running: crate::running::read(&ctx.paths),
         jobs: crate::executor::runs::views(&ctx.paths),
         jobs_ended: crate::executor::runs::ended_count(&ctx.paths),
+        panes: running
+            .iter()
+            .filter(|t| t.pane.is_some())
+            .map(|t| t.ticket.clone())
+            .collect(),
         resets,
     })
 }

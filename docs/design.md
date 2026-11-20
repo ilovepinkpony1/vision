@@ -136,6 +136,12 @@ env = {}                          # more variables with a fixed value that a ses
 attribution = true                # false: no co-author trailer in a commit, no tool line in a pull request
 plugins = []                      # folders of Claude Code plugins for each work turn: their skills, with the tool Skill. Never writable in a turn.
 
+[herdr]                           # the turns of the work agents as interactive sessions in herdr panes (section 7.7)
+enabled = false                   # true: each Claude turn of a work agent runs in a tab of the session, and the person types into it
+session = "vision"                # the named herdr session. Herdr.app shows it in a window of its own.
+bin = "herdr"
+app = "/Applications/Herdr.app/Contents/MacOS/Herdr"
+
 [journal]                     # one entry for each turn in journal/, the source of truth, and an index over it
 mempalace_url = ""            # the MCP server of MemPalace over HTTP, such as "http://127.0.0.1:8765/mcp". "" means: no index, the search reads the files.
 wing = "vision"               # the wing of MemPalace for the entries. The room is the ticket key.
@@ -478,7 +484,8 @@ The person can type into a running turn. A test on Claude Code 2.1.321 showed th
 - `vision tell KEY "TEXT"` writes one message file to the inbox of the running turn. If no turn runs, it stores the text for the next turn of the ticket.
 - `vision tell` writes the row in `messages`, the event `told` of the person, and the message file in one transaction. If the message file cannot be written, the transaction rolls back. So no row and no line exist for a message that did not arrive. The timeline and `vision log` show each message once, at the time of its row. A message that Vision writes for the person, such as a correction, has its own event and no `told` event.
 - `vision open KEY` attaches to the running turn. It prints the events as readable lines, and it sends each line that the person types. Ctrl-C leaves the view, and the turn continues.
-- If no turn runs, `vision open KEY` pauses the ticket and starts `claude --resume <session id>` in the clone, in the terminal.
+- If no turn runs, `vision open KEY` pauses the ticket and starts `claude --resume <session id>` in the clone, in the terminal. With `[herdr] enabled`, it starts that session in a new tab `you` of the workspace of the ticket, and Herdr.app shows it (section 7.7).
+- A turn in a herdr pane takes the message as a prompt that `herdr agent prompt` types into the pane. `vision open KEY` then shows the pane in Herdr.app, and the person types into it there.
 
 A message file is JSON: `{"text": "...", "source": "user", "at": "..."}`. Write it to a temporary name first, and then rename it. The ledger keeps each message in `messages`.
 
@@ -521,6 +528,23 @@ Claude Code tests the output of a turn against a JSON schema. `agents/turn.schem
 A turn that ends with no valid result object gets one resume with the message `continue`. The same rule applies to the reasons `error` and `crash`. It does not apply to `timeout`, `contract`, and `killed`. A second failure sets the flag `needs-you`.
 
 The first input line of a turn is always the line of 7.2. A message for a resumed turn, such as the answers or `continue`, goes into the key `message` of its facts file.
+
+### 7.7 Turns in herdr panes
+
+With `[herdr] enabled = true`, each Claude turn of a work agent runs as an interactive Claude Code session in a herdr pane, as the steps of a software factory do. The person sees each session in Herdr.app and types into it at any time. The Judge, the Curator, and a turn on Codex stay headless, because they are short and only Vision reads them.
+
+- The turns use one named herdr session, `[herdr] session`. Each ticket has a workspace with the ticket key as its label. Each turn opens a tab with the name of its agent there, and the tabs of the ended turns of the ticket close. When the server of the session does not answer, the supervisor asks Herdr.app for a window on the session, which starts the server.
+- The supervisor writes `pane.sh` in the turn folder and runs it in the pane. The script writes its pid to `pane.pid`, goes to the working folder, and replaces itself with `claude`. The environment is the allow list of 7.3, with `TERM` and `COLORTERM` of the pane.
+- The start line is the line of 7.3 without the flags that work only with `-p`: `-p`, `--input-format`, `--output-format`, `--verbose`, `--replay-user-messages`, `--permission-prompts`, `--json-schema`, and `--max-budget-usd`. The first message of 7.2 is its last argument.
+- `--json-schema` works only with `-p`, so the role file of a turn in a pane ends with a section that asks for the result object as the whole last message, with the schema.
+- The settings of the turn add hooks for SessionStart, UserPromptSubmit, Stop, StopFailure, Notification, and SessionEnd, and a status line. Each runs `vision turn-hook <turn folder>`. The hook adds its input to `hooks.jsonl`, and the status line keeps its input, with the cost, in `status-line.json`.
+- SessionStart gives the path of the transcript. The supervisor copies each user and assistant message of the transcript to `stream.jsonl`, in the form of the headless stream, with an init line. So the live view, `vision logs`, and the collection read a turn in a pane as any other turn. At the end, it writes the result line with the tokens of the transcript and the cost of the status line.
+- At each Stop, the supervisor reads `last_assistant_message`. A result object that fits the schema of the agent ends the turn: the supervisor types `/exit`, and stops `claude` 10 seconds later if it still runs. Any other last message gets a reminder, at most two. A prompt that Vision did not type, and each message of the inbox, comes from the person. For 15 minutes after the last message of the person, an answer with no result object waits for the person, and gets no reminder.
+- StopFailure with `server_error` or `overloaded` gets `continue`, at most two times. `rate_limit` ends the turn with the reason `error` and the text "Claude hit a usage limit". Each other error ends it with its name.
+- The permission mode of the first UserPromptSubmit must be the one of the contract. Claude Code reports the tools and the MCP servers only with `-p`. In a pane they come from the same flags `--tools` and `--strict-mcp-config`.
+- The first start in a folder that Claude Code does not trust shows its trust dialog. The supervisor reads the screen of the pane, and when it shows that dialog with "No, exit" selected, it sends Down and Enter, which pick "Yes, I trust this folder". A headless session never asks this.
+- A session that does not start in 120 seconds, a pane that closes before the result, the time limit, and a stop end the turn as in 7.4, with the reasons `error`, `killed`, `timeout`, and `killed`.
+- `o` of the live view and `vision open KEY` show the tab of the running turn: the workspace and the tab get the focus, and the window of Herdr.app whose title ends with the ticket key gets the focus. With no such window, Herdr.app opens one on the session. The turn goes on. `vision open KEY --herdr` fails when no turn of the ticket runs in a pane.
 
 ## 8. Questions and the Judge
 

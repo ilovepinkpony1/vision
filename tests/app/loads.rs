@@ -198,6 +198,7 @@ fn old_local(paths: &Paths, wall: OffsetDateTime) -> Local {
         running: view.running,
         jobs: Vec::new(),
         jobs_ended: 0,
+        panes: Vec::new(),
         resets: [reset(Window::FiveHour), reset(Window::SevenDay)],
     }
 }

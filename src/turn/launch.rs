@@ -196,6 +196,9 @@ pub struct Plan {
     /// A turn on Codex: the price of its tokens at the launch.
     #[serde(default)]
     pub price: Option<CodexPrice>,
+    /// A turn in a herdr pane (section 7.7): the session, the CLI, and the app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane: Option<super::pane::PanePlan>,
 }
 
 fn claude_runner() -> Runner {
@@ -438,6 +441,10 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
         choice.effort = effort;
     }
     let runner = request.runner.unwrap_or(choice.runner);
+    // With `[herdr] enabled`, a Claude turn of a work agent runs in a herdr pane (section 7.7).
+    // The Judge, the Curator, and a turn on Codex stay headless.
+    let in_pane =
+        config.herdr.enabled && runner == Runner::Claude && !alone && !request.ticket.is_reserved();
     if runner == Runner::Codex && (request.kind != TurnKind::Reader || alone) {
         bail!(
             "the {} turn of {} cannot run on Codex: only a reader turn of a work agent runs there. Run `vision model set {} <model> --runner claude`",
@@ -479,19 +486,21 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
                 settings::open_git_dir(&mut rendered, &git_dir);
             }
         }
-        atomic_write(
-            &turn.settings,
-            settings::settings_text(
-                paths,
-                request.kind,
-                &rendered,
-                config.claude.attribution,
-                &protect,
-            )?
-            .as_bytes(),
+        let mut settings_text = settings::settings_text(
+            paths,
+            request.kind,
+            &rendered,
+            config.claude.attribution,
+            &protect,
         )?;
+        let mut role_text = role.clone();
+        if in_pane {
+            settings_text = super::pane::with_hooks(&settings_text, &vision_bin()?, &turn.dir)?;
+            role_text.push_str(&super::pane::result_section(&schema));
+        }
+        atomic_write(&turn.settings, settings_text.as_bytes())?;
         let role_path = turn.dir.join(ROLE_FILE);
-        atomic_write(&role_path, role.as_bytes())?;
+        atomic_write(&role_path, role_text.as_bytes())?;
         ensure_dir(&turn.inbox_sent)?;
 
         let facts = build_facts(request, &id)?;
@@ -613,6 +622,7 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             prompt_file,
             last_message,
             price: config.codex.price,
+            pane: in_pane.then(|| super::pane::PanePlan::of(&config.herdr)),
         };
         let launch_file = LaunchFile {
             request: request.clone(),

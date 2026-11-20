@@ -303,6 +303,11 @@ fn action_done(
             notice(app, text, Tone::Ok);
         }
         Action::Tell { key, .. } => super::tell::told(app, key, result),
+        Action::OpenInHerdr { key } => notice(
+            app,
+            format!("{key} is open in its Herdr window. Type into the pane to talk to the agent."),
+            Tone::Ok,
+        ),
         // A chain runs these and shows their end on its card.
         Action::TakeAt { .. }
         | Action::RetryAt { .. }

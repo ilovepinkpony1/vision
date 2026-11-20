@@ -288,6 +288,8 @@ pub enum Action {
     ModelReset { agent: String },
     /// `vision needs --read ID`: marks a notice as read.
     ReadNotice { id: String },
+    /// `vision open KEY --herdr`: shows the pane of the running turn in Herdr.app.
+    OpenInHerdr { key: String },
 }
 
 /// The answer of `vision answer`.
@@ -322,6 +324,7 @@ impl Action {
             Action::Tell { key, text } => {
                 vec!["tell".into(), key.clone(), "--".into(), text.clone()]
             }
+            Action::OpenInHerdr { key } => vec!["open".into(), key.clone(), "--herdr".into()],
             Action::Answer { id, given, why } => {
                 let mut args = vec!["answer".to_string(), id.clone()];
                 match given {
@@ -394,6 +397,7 @@ impl Action {
             Action::ModelSet { agent, .. } => format!("The pin of the model of {agent}"),
             Action::ModelReset { agent } => format!("The reset of the model of {agent}"),
             Action::ReadNotice { id } => format!("The read of the notice {id}"),
+            Action::OpenInHerdr { key } => format!("The open of {key} in Herdr"),
         }
     }
 }

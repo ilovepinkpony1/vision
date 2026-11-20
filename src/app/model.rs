@@ -388,6 +388,8 @@ pub struct Local {
     pub jobs: Vec<Running>,
     /// The jobs of the background that ended and wait for a pass to collect them.
     pub jobs_ended: usize,
+    /// The tickets whose work turn runs in a herdr pane now (section 7.7).
+    pub panes: Vec<String>,
     /// The reset time of the reading of each window that is in force, RFC 3339 UTC: the 5-hour
     /// window, then the 7-day window.
     pub resets: [Option<String>; 2],

@@ -50,7 +50,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(10);
 const TERM_GRACE: Duration = Duration::from_secs(1);
 const POLL: Duration = Duration::from_millis(50);
 
-static SIGNAL: AtomicI32 = AtomicI32::new(0);
+pub(super) static SIGNAL: AtomicI32 = AtomicI32::new(0);
 
 extern "C" fn on_signal(signal: libc::c_int) {
     SIGNAL.store(signal, Ordering::SeqCst);
@@ -110,6 +110,9 @@ pub fn run(ctx: &Ctx, id: &TurnId) -> Result<()> {
     status.write(&turn.status)?;
     if plan.runner == crate::config::Runner::Codex {
         return supervise_codex(ctx, &turn, &plan, status);
+    }
+    if let Some(pane) = &plan.pane {
+        return super::pane::supervise(ctx, &ledger, &turn, &plan, pane, status);
     }
     supervise(ctx, &ledger, &turn, &plan, status)
 }
@@ -727,7 +730,12 @@ pub fn contract_problem(
 }
 
 /// Writes `result.json` and the final `turn.json`.
-fn finish(ctx: &Ctx, turn: &TurnPaths, status: TurnState, object: Option<Value>) -> Result<()> {
+pub(super) fn finish(
+    ctx: &Ctx,
+    turn: &TurnPaths,
+    status: TurnState,
+    object: Option<Value>,
+) -> Result<()> {
     let object = object.unwrap_or(Value::Null);
     atomic_write(
         &turn.result,

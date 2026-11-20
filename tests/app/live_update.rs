@@ -519,6 +519,27 @@ fn o_on_a_running_turn_offers_tell_and_stop() {
 }
 
 #[test]
+fn o_on_a_turn_in_a_herdr_pane_opens_it_in_herdr_and_stops_nothing() {
+    let mut app = working_live(SIZE);
+    if let Some(local) = app.local.data.as_mut() {
+        local.panes = vec!["DEMO-12".into()];
+    }
+    let fx = key(&mut app, 3.0, Key::Char('o'));
+    assert_eq!(app.card, None, "no card: the turn goes on");
+    let started = actions(&fx);
+    let action = Action::OpenInHerdr {
+        key: "DEMO-12".into(),
+    };
+    assert_eq!(started[0].1, action);
+    assert_eq!(action.args(), ["open", "DEMO-12", "--herdr"]);
+    done(&mut app, 3.1, started[0].0, action, "");
+    assert_eq!(
+        notice(&app),
+        "DEMO-12 is open in its Herdr window. Type into the pane to talk to the agent."
+    );
+}
+
+#[test]
 fn o_on_a_resting_ticket_opens_the_session_and_the_card_after_it_retries() {
     let mut app = resting_live("build", &[]);
     key(&mut app, 3.0, Key::Char('o'));

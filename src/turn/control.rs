@@ -32,6 +32,8 @@ pub struct RunningTurn {
     pub started: Option<String>,
     pub phase: Phase,
     pub supervisor_pid: Option<u32>,
+    /// Where the turn runs in herdr, for a turn in a pane (section 7.7).
+    pub pane: Option<crate::turn::pane::PaneRef>,
 }
 
 impl RunningTurn {
@@ -76,7 +78,8 @@ pub fn running_turns(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<RunningTurn>> {
                 kind: row.kind,
                 started: row.started,
                 phase,
-                supervisor_pid: current.and_then(|s| s.pid),
+                supervisor_pid: current.as_ref().and_then(|s| s.pid),
+                pane: current.and_then(|s| s.pane),
             });
         }
     }

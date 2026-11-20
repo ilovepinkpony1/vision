@@ -18,7 +18,7 @@ use super::super::feed::{Filter, FILTERS, KEEP_LEDGER};
 use super::super::live::{Live, TicketData};
 use super::super::model::{App, Card, OpenCard, RetryCard, Run, Screen, StopCard, Tone};
 use super::super::moments::{in_feed, moment};
-use super::super::msg::{Effect, Key};
+use super::super::msg::{Action, Effect, Key};
 use super::super::now::Kind;
 use super::super::pager::{Pager, PagerKind, PagerState};
 use super::super::view::live::layout::Layout;
@@ -455,6 +455,18 @@ fn open_card(app: &mut App) {
             format!("{key} has no turn yet, so there is no session to open."),
             Tone::Info,
         );
+        return;
+    }
+    // A turn in a herdr pane opens in Herdr.app, and it goes on (section 7.7).
+    if data.facts.work.is_some()
+        && app
+            .local
+            .data
+            .as_ref()
+            .is_some_and(|l| l.panes.contains(&data.view.key))
+    {
+        let key = data.view.key.clone();
+        super::engine::queue_action(app, Action::OpenInHerdr { key });
         return;
     }
     let card = OpenCard {
