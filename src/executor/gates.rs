@@ -6,7 +6,8 @@
 //!   private key, and the common forms of access keys and tokens. Its error names the file and
 //!   the line, never the value. It also reads the patch of each commit, because a push sends
 //!   each commit: a secret that one commit adds and a later commit removes still leaves.
-//! - [`size_gate`] refuses a diff with more changed lines than `gates.max_diff_lines`.
+//! - [`size_gate`] refuses a diff with more changed lines than `gates.max_diff_lines`. For a
+//!   ticket taken from outside Vision, the executor gives it the diff after the take.
 //! - [`sensitive_gate`] gives the paths of `gates.sensitive` that the diff touches and that the
 //!   approved plan does not name. The executor holds such a diff for the person.
 

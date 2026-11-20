@@ -1,7 +1,7 @@
 //! The `events` table: one row for each thing that happened, with an optional external id.
 
 use anyhow::Result;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -74,6 +74,24 @@ impl Ledger {
             params![event.at, event.actor, event.ticket, event.kind, detail, event.external_id],
         )?;
         Ok((added == 1).then(|| self.conn().last_insert_rowid()))
+    }
+
+    /// The detail of the newest take of a ticket that started it in a clone: a take whose detail
+    /// names its branch. A take that starts a ticket again at a step names no branch.
+    pub fn latest_clone_take(&self, ticket: &str) -> Result<Option<Value>> {
+        let detail: Option<Option<String>> = self
+            .conn()
+            .query_row(
+                "SELECT detail FROM events WHERE ticket = ?1 AND kind = 'take'
+                   AND CASE WHEN json_valid(detail) THEN json_extract(detail, '$.branch') END IS NOT NULL
+                 ORDER BY id DESC LIMIT 1",
+                [ticket],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(detail
+            .flatten()
+            .and_then(|text| serde_json::from_str(&text).ok()))
     }
 
     /// The newest events first, of one ticket or of all.

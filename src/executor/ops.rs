@@ -387,7 +387,9 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
         }
         Mode::Shadow => {
             let gates = if verb.leaves {
-                match test_gates(ctx, config, &adapter, &ticket, &call, &secrets, false) {
+                match test_gates(
+                    ctx, ledger, config, &adapter, &ticket, &call, &secrets, false,
+                ) {
                     Ok(verdict) => verdict.describe(),
                     Err(e) => format!("could not test the gates: {e:#}"),
                 }
@@ -408,7 +410,9 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
         }
         Mode::Ask | Mode::Auto => {
             if verb.leaves {
-                match test_gates(ctx, config, &adapter, &ticket, &call, &secrets, false)? {
+                match test_gates(
+                    ctx, ledger, config, &adapter, &ticket, &call, &secrets, false,
+                )? {
                     Verdict::Refuse { gate, reason } => {
                         return refuse(ctx, ledger, &row, stored, gate.as_str(), reason)
                     }
@@ -604,9 +608,9 @@ pub fn approve(
             continue;
         }
         if verb.leaves {
-            if let Verdict::Refuse { gate, reason } =
-                test_gates(ctx, config, &adapter, &ticket, &call, &secrets, true)?
-            {
+            if let Verdict::Refuse { gate, reason } = test_gates(
+                ctx, ledger, config, &adapter, &ticket, &call, &secrets, true,
+            )? {
                 results.push(refuse(ctx, ledger, row, stored, gate.as_str(), reason)?);
                 continue;
             }
@@ -897,8 +901,10 @@ impl Verdict {
 /// The gates of section 12 on what leaves: the diff from the base to the commit of the call,
 /// and each text of the arguments. `approved` is true after the approval of the person, which
 /// covers the sensitive paths.
+#[allow(clippy::too_many_arguments)]
 fn test_gates(
     ctx: &Ctx,
+    ledger: &Ledger,
     config: &Config,
     adapter: &Adapter,
     ticket: &TicketContext,
@@ -931,7 +937,29 @@ fn test_gates(
             reason,
         });
     }
-    if let Err(reason) = gates::size_gate(&files, config.gates.max_diff_lines) {
+    // The size gate counts the change of Vision. A ticket that the person took from outside
+    // Vision brings the lines of its branch, and the forge holds them already, so the gate
+    // counts only the change after the take.
+    let taken = match (&ticket.clone, call.head.is_empty()) {
+        (Some(clone), false) => match ticket.taken_from(ledger, &call.head)? {
+            Some(start) => Some((gates::parse_diff(&diff(clone, &start, &call.head)?), start)),
+            None => None,
+        },
+        _ => None,
+    };
+    let sized = taken.as_ref().map_or(files.as_slice(), |(own, _)| own);
+    if let Err(reason) = gates::size_gate(sized, config.gates.max_diff_lines) {
+        let reason = match &taken {
+            Some((_, start)) => reason.replacen(
+                "the diff changes",
+                &format!(
+                    "the diff after the take of the branch at {} changes",
+                    short(start)
+                ),
+                1,
+            ),
+            None => reason,
+        };
         return Ok(Verdict::Refuse {
             gate: Gate::Size,
             reason,

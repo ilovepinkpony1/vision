@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
+use serde_json::Value;
 
 use crate::adapter::Adapter;
 use crate::ledger::{Ledger, TicketRow};
@@ -106,6 +107,33 @@ impl TicketContext {
             )
         })?;
         Ok(Some(base))
+    }
+
+    /// The commit where the work of Vision on the branch starts, when the person took the
+    /// ticket from outside Vision: the newest take that started the ticket in a clone was from
+    /// outside Vision, it named the branch of the ticket, and its commit is an ancestor of
+    /// `head`. The branch up to that commit is work of the person that the forge holds already.
+    /// `None` in each other case.
+    pub fn taken_from(&self, ledger: &Ledger, head: &str) -> Result<Option<String>> {
+        let Some(clone) = &self.clone else {
+            return Ok(None);
+        };
+        let Some(take) = ledger.latest_clone_take(self.key.as_str())? else {
+            return Ok(None);
+        };
+        let outside = take.get("outside").and_then(Value::as_bool) == Some(true);
+        let branch = take.get("branch").and_then(Value::as_str);
+        let start = take
+            .get("base")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        let Some(start) = start.filter(|_| outside && branch == Some(self.branch.as_str())) else {
+            return Ok(None);
+        };
+        if git::run(clone, &["merge-base", "--is-ancestor", start, head]).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(start.to_string()))
     }
 }
 

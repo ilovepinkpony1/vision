@@ -4,9 +4,10 @@
 mod common;
 mod executor_support;
 
-use executor_support::{job, key, op, Demo, BRANCH, KEY};
+use executor_support::{git, job, key, op, Demo, BRANCH, KEY};
 use serde_json::{json, Value};
 use vision::executor::{self, OpState, Outcome};
+use vision::ledger::Event;
 
 #[test]
 fn git_push_and_pr_open_run_in_the_mode_auto() {
@@ -507,6 +508,117 @@ fn a_diff_that_is_too_large_is_refused() {
     assert!(demo.remote_branch(BRANCH).is_none());
     let run = demo.run(&["status", "--json"]);
     run.expect_code(0);
+}
+
+/// Records the take of DEMO-12 as `vision take --step` records a ticket that is in progress
+/// outside Vision: its branch and the head of that branch at the take.
+fn take_from_outside(demo: &Demo, branch: &str, head: &str) {
+    demo.ledger()
+        .add_event(&Event::now("user", "take").ticket(KEY).detail(json!({
+            "base": head, "branch": branch, "clone": demo.clone.display().to_string(),
+            "outside": true, "pr": 7, "seq": 1, "step": "comments",
+        })))
+        .unwrap();
+}
+
+fn lines(count: usize, word: &str) -> String {
+    (1..=count).map(|n| format!("{word} {n}\n")).collect()
+}
+
+#[test]
+fn the_size_gate_counts_only_the_change_after_a_take_from_outside() {
+    let demo = Demo::new();
+    demo.edit_config(|doc| doc["gates"]["max_diff_lines"] = toml_edit::value(5));
+    // The person made a branch of 12 lines by hand, and the ticket came into Vision there.
+    let taken = demo.commit(&[("big.txt", &lines(12, "line"))], "A big file by hand");
+    take_from_outside(&demo, BRANCH, &taken);
+    // A restart at a step later names no branch, so the take above still counts.
+    demo.ledger()
+        .add_event(
+            &Event::now("user", "take")
+                .ticket(KEY)
+                .detail(json!({"restart": true, "step": "comments", "seq": 2})),
+        )
+        .unwrap();
+    let head = demo.commit(
+        &[("fix.txt", &lines(3, "fix"))],
+        "A fix of a review comment",
+    );
+    let push = executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
+    assert_eq!(push.outcome, Outcome::Confirmed, "{push:?}");
+    assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));
+
+    // The change of Vision after the take still has its limit.
+    demo.commit(&[("more.txt", &lines(3, "more"))], "A second fix");
+    let refused =
+        executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
+    assert_eq!(
+        refused.outcome,
+        Outcome::Refused {
+            gate: "size".into()
+        },
+        "{refused:?}"
+    );
+    assert!(
+        refused.detail.contains(&format!(
+            "the diff after the take of the branch at {} changes 6 lines, more than gates.max_diff_lines (5)",
+            &taken[..12]
+        )),
+        "{refused:?}"
+    );
+    assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));
+}
+
+#[test]
+fn the_size_gate_counts_from_the_base_after_a_take_of_another_branch() {
+    let demo = Demo::new();
+    demo.edit_config(|doc| doc["gates"]["max_diff_lines"] = toml_edit::value(5));
+    let taken = demo.commit(&[("big.txt", &lines(12, "line"))], "A big file by hand");
+    // `vision retry --new-branch` moved the ticket away from the branch of the take.
+    take_from_outside(&demo, "someone/old-branch", &taken);
+    demo.commit(&[("fix.txt", "fix\n")], "A fix");
+    let result =
+        executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
+    assert_eq!(
+        result.outcome,
+        Outcome::Refused {
+            gate: "size".into()
+        },
+        "{result:?}"
+    );
+    assert!(
+        result
+            .detail
+            .contains("the diff changes 13 lines, more than gates.max_diff_lines (5)"),
+        "{result:?}"
+    );
+    assert!(demo.remote_branch(BRANCH).is_none());
+}
+
+#[test]
+fn the_size_gate_counts_from_the_base_when_the_take_is_not_in_the_history() {
+    let demo = Demo::new();
+    demo.edit_config(|doc| doc["gates"]["max_diff_lines"] = toml_edit::value(5));
+    let taken = demo.commit(&[("big.txt", &lines(12, "line"))], "A big file by hand");
+    take_from_outside(&demo, BRANCH, &taken);
+    // The branch was made again without the commit of the take, such as after a rebase.
+    git(&demo.clone, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    demo.commit(&[("other.txt", &lines(8, "other"))], "Another change");
+    let result =
+        executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
+    assert_eq!(
+        result.outcome,
+        Outcome::Refused {
+            gate: "size".into()
+        },
+        "{result:?}"
+    );
+    assert!(
+        result
+            .detail
+            .contains("the diff changes 8 lines, more than gates.max_diff_lines (5)"),
+        "{result:?}"
+    );
 }
 
 #[test]
