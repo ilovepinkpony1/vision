@@ -9,7 +9,8 @@ turn; `fake.pane` there is a list of replies. Each prompt, the first one and eac
 fake-herdr types into the pane (the file that .fake-herdr-typed names), takes the next reply: an object with "message", the last
 assistant message, and an optional "sleep" in seconds before it. The prompt "/exit" ends the
 session with the hook SessionEnd. With no reply left, the session waits for the next prompt.
-A reply {"fail": "<error>"} runs the hook StopFailure instead of Stop.
+A reply {"fail": "<error>"} runs the hook StopFailure instead of Stop. `fake.dialogs` is a
+number of folder dialogs that wait on the screen of the pane before the session starts.
 """
 import json
 import os
@@ -55,8 +56,22 @@ def main():
     facts = json.load(open(os.path.join(".vision", "turns", m.group(1), "facts.json"))) if m else {}
     replies = list(facts.get("fake", {}).get("pane", []))
     status = settings.get("statusLine", {}).get("command")
-    hook("SessionStart", {"source": "startup", "model": model})
     typed_file = open(".fake-herdr-typed").read().strip() if os.path.exists(".fake-herdr-typed") else None
+    # Each folder dialog waits on the screen until fake-herdr writes the answer there.
+    if typed_file:
+        screen = typed_file[: -len(".typed")] + ".screen"
+        for i in range(facts.get("fake", {}).get("dialogs", 0)):
+            with open(screen, "w") as f:
+                f.write(" Adding a new directory:\n\n /plugins/p%d\n\n This session hasn't worked here before. "
+                        "Is this a directory you created or one you trust?\n\n \u276f No, exit\n   Yes, add it\n\n"
+                        " Enter to confirm \u00b7 Esc to cancel\n" % i)
+            while open(screen).read() not in ("accepted", "refused"):
+                time.sleep(0.05)
+            if open(screen).read() == "refused":
+                with open(screen, "w") as f:
+                    f.write("To go on without it, start again without --add-dir /plugins/p%d.\n$ \n" % i)
+                return 1
+    hook("SessionStart", {"source": "startup", "model": model})
     pending = [first]
     seen = 0
     n = 0

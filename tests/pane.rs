@@ -282,3 +282,32 @@ fn open_with_herdr_refuses_a_ticket_with_no_turn_in_a_pane() {
         run.stderr
     );
 }
+
+#[test]
+fn each_folder_dialog_gets_down_and_then_enter_only_with_yes_selected() {
+    let (home, state) = pane_home();
+    let scenario = home.scenario("unused", json!([[]]));
+    let mut request = home.request("DEMO-12", "scout", "refine", TurnKind::Reader, &scenario);
+    request.facts["fake"]["dialogs"] = json!(3);
+    request.facts["fake"]["pane"] =
+        json!([{"message": result_object("After three folders.").to_string()}]);
+    let launched = home.launch(&request);
+    let ended = home.wait_ended(&launched);
+    assert_eq!(ended.reason, Some(Reason::Result), "{ended:?}");
+    let keys: Vec<String> = calls(&state)
+        .into_iter()
+        .filter(|c| c[..2] == ["agent", "send-keys"])
+        .map(|c| c[3..].join(" "))
+        .collect();
+    assert_eq!(
+        keys,
+        ["down", "enter", "down", "enter", "down", "enter"],
+        "{keys:?}"
+    );
+    let log = std::fs::read_to_string(home.vision.join("log/vision.log")).unwrap_or_default();
+    assert_eq!(
+        log.matches("trusted a folder in the dialog of Claude Code")
+            .count(),
+        3
+    );
+}

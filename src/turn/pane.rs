@@ -80,6 +80,10 @@ const POLL: Duration = Duration::from_millis(200);
 const HERDR_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long the server of the session can take to start after Herdr.app opens a window.
 const SERVER_WAIT: Duration = Duration::from_secs(20);
+/// The most keys for the folder dialogs of one start: two for each dialog.
+const DIALOG_ANSWERS: u32 = 60;
+/// How often the screen is read for a folder dialog before the session starts.
+const DIALOG_EVERY: Duration = Duration::from_millis(700);
 
 /// The herdr session, the CLI, and the app of a turn in a pane, resolved at launch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,7 +450,7 @@ impl Herdr {
             Command::new(&self.plan.bin)
                 .arg("--session")
                 .arg(&self.plan.session)
-                .args(["agent", "read", pane]),
+                .args(["pane", "read", pane]),
             HERDR_TIMEOUT,
         )?;
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -577,18 +581,65 @@ fn run_with_timeout(command: &mut Command, limit: Duration) -> Result<std::proce
     })
 }
 
-/// True when the screen shows the folder trust dialog of Claude Code with "No, exit" selected,
-/// so that one Down and one Enter pick "Yes, I trust this folder".
-pub fn trust_dialog(screen: &str) -> bool {
-    let lines: Vec<&str> = screen.lines().map(str::trim).collect();
-    let no = lines
-        .iter()
-        .position(|l| l.starts_with('❯') && l.contains("No, exit"));
-    let yes = lines
-        .iter()
-        .position(|l| l.contains("Yes, I trust this folder"));
-    screen.contains("Is this a project you created or one you trust")
-        && matches!((no, yes), (Some(n), Some(y)) if y == n + 1)
+/// The state of a folder dialog of Claude Code on the screen of a pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dialog {
+    /// No folder dialog waits at the bottom of the screen.
+    None,
+    /// A folder dialog waits with "No, exit" selected: Down selects "Yes".
+    NoSelected,
+    /// A folder dialog waits with "Yes" selected: Enter confirms it.
+    YesSelected,
+}
+
+/// The folder dialog at the bottom of the screen, if one waits. Claude Code asks before an
+/// interactive session works in a folder that it does not trust: the working folder ("Yes, I
+/// trust this folder") and each folder of `--add-dir` ("Yes, add it"). A headless session never
+/// asks. Only a dialog whose "Enter to confirm" line is among the last lines counts, so an old
+/// dialog above the prompt of the shell is no dialog.
+pub fn dialog(screen: &str) -> Dialog {
+    let lines: Vec<&str> = screen
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let Some(confirm) = lines.iter().rposition(|l| l.contains("Enter to confirm")) else {
+        return Dialog::None;
+    };
+    if confirm + 3 < lines.len() {
+        return Dialog::None;
+    }
+    let above = &lines[..confirm];
+    let known = above.iter().any(|l| {
+        l.contains("Is this a project you created or one you trust")
+            || l.contains("Adding a new directory")
+    });
+    let Some(no) = above.iter().rposition(|l| l.contains("No, exit")) else {
+        return Dialog::None;
+    };
+    let Some(yes) = above.get(no + 1) else {
+        return Dialog::None;
+    };
+    if !known || !(yes.contains("Yes, add it") || yes.contains("Yes, I trust this folder")) {
+        return Dialog::None;
+    }
+    if above[no].starts_with('❯') {
+        Dialog::NoSelected
+    } else if yes.starts_with('❯') {
+        Dialog::YesSelected
+    } else {
+        Dialog::None
+    }
+}
+
+/// The last lines of a screen, for the detail of a session that did not start.
+pub fn screen_tail(screen: &str) -> String {
+    let lines: Vec<&str> = screen
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(3)..].join(" ")
 }
 
 // The transcript --------------------------------------------------------------------------------
@@ -1031,7 +1082,7 @@ impl Watch {
     ) -> Outcome {
         let started = Instant::now();
         let mut session_started = false;
-        let mut trusted = false;
+        let mut answers = 0u32;
         let mut last_screen: Option<Instant> = None;
         let mut last_inbox: Option<Instant> = None;
         let mut person_at: Option<Instant> = None;
@@ -1229,17 +1280,39 @@ impl Watch {
                             ),
                         );
                     }
-                    if !trusted
-                        && last_screen.is_none_or(|at| at.elapsed() >= Duration::from_secs(2))
+                    // A folder dialog: Down selects "Yes", and Enter goes only after a new read
+                    // of the screen shows "Yes" selected, so a late key never picks "No, exit".
+                    if answers < DIALOG_ANSWERS
+                        && last_screen.is_none_or(|at| at.elapsed() >= DIALOG_EVERY)
                     {
                         last_screen = Some(Instant::now());
-                        if herdr.read(pane).is_ok_and(|screen| trust_dialog(&screen)) {
-                            trusted = true;
-                            let _ = herdr.send_keys(pane, &["down", "enter"]);
-                            ctx.log(&format!(
-                                "turn {}: trusted the working folder in the dialog of Claude Code",
-                                status.turn
-                            ));
+                        let screen = herdr.read(pane).unwrap_or_default();
+                        match dialog(&screen) {
+                            Dialog::NoSelected => {
+                                answers += 1;
+                                let _ = herdr.send_keys(pane, &["down"]);
+                            }
+                            Dialog::YesSelected => {
+                                answers += 1;
+                                let _ = herdr.send_keys(pane, &["enter"]);
+                                ctx.log(&format!(
+                                    "turn {}: trusted a folder in the dialog of Claude Code",
+                                    status.turn
+                                ));
+                            }
+                            Dialog::None => {}
+                        }
+                        if self
+                            .read_pid()
+                            .is_some_and(|pid| !crate::util::process::pid_alive(pid))
+                        {
+                            return force(
+                                Reason::Error,
+                                format!(
+                                    "the session in the pane exited before it started: {}",
+                                    screen_tail(&screen)
+                                ),
+                            );
                         }
                     }
                 }
@@ -1391,15 +1464,22 @@ mod tests {
     }
 
     #[test]
-    fn only_the_trust_dialog_with_no_selected_gets_the_keys() {
-        let dialog = " Quick safety check: Is this a project you created or one you trust? (Like your own code)\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel";
-        assert!(trust_dialog(dialog));
-        let moved = dialog.replace("❯ No, exit\n   Yes", "  No, exit\n ❯ Yes");
-        assert!(!trust_dialog(&moved), "another selection gets no keys");
-        assert!(
-            !trust_dialog("❯ No, exit\n  Yes, I trust this folder"),
-            "another text gets no keys"
+    fn a_folder_dialog_at_the_bottom_of_the_screen_gets_down_then_enter() {
+        let add = " Adding a new directory:\n\n /home/me/.claude/skills/qa\n\n This session hasn't worked here before. Is this a directory you created or one you trust?\n\n Security guide\n\n ❯ No, exit\n   Yes, add it\n\n Enter to confirm · Esc to cancel\n";
+        assert_eq!(dialog(add), Dialog::NoSelected);
+        let picked = add.replace("❯ No, exit\n   Yes", "  No, exit\n ❯ Yes");
+        assert_eq!(dialog(&picked), Dialog::YesSelected);
+        let trust = " Quick safety check: Is this a project you created or one you trust? (Like your own code)\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel";
+        assert_eq!(dialog(trust), Dialog::NoSelected);
+        // An old dialog above the prompt of the shell is no dialog.
+        let old = format!("{add}To go on without it, start again with the same flags.\nAdd --resume to pick up an earlier conversation.\n➜  clone git:(main)\n");
+        assert_eq!(dialog(&old), Dialog::None);
+        assert_eq!(
+            dialog("❯ No, exit\n  Yes, add it\nEnter to confirm"),
+            Dialog::None,
+            "another text"
         );
+        assert_eq!(screen_tail("a\n\nb\nc\nd\n"), "b c d");
     }
 
     #[test]

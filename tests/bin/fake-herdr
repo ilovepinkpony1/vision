@@ -5,8 +5,8 @@ The session name is the folder of its state: `herdr --session <folder> <command>
 commands that Vision runs: workspace list, create, and focus; tab create, rename, close, and
 focus; pane run (the line runs in the background in the folder of the tab, and the file
 .fake-herdr-typed there names the file of the typed text of the pane); agent prompt (the text
-goes to that file); agent send-keys; agent read (the file
-<pane>.screen). Each call goes to calls.jsonl.
+goes to that file); agent send-keys (down and enter answer a folder dialog in the file
+<pane>.screen); pane read (that file). Each call goes to calls.jsonl.
 """
 import json
 import os
@@ -95,8 +95,18 @@ def main():
             f.write(text + "\n")
         return ok({"type": "ok"})
     if cmd == ["agent", "send-keys"]:
+        # A folder dialog of the fake claude on the screen: down moves the selection, enter
+        # answers with the selected option.
+        path = os.path.join(state, args[2].replace(":", "_") + ".screen")
+        for k in args[3:]:
+            screen = open(path).read() if os.path.exists(path) else ""
+            if k == "down" and "\u276f No, exit" in screen:
+                screen = screen.replace("\u276f No, exit\n   Yes", "  No, exit\n \u276f Yes")
+            elif k == "enter" and "Enter to confirm" in screen:
+                screen = "accepted" if "\u276f Yes" in screen else "refused"
+            open(path, "w").write(screen)
         return ok({"type": "ok"})
-    if cmd == ["agent", "read"]:
+    if cmd == ["pane", "read"]:
         path = os.path.join(state, args[2].replace(":", "_") + ".screen")
         sys.stdout.write(open(path).read() if os.path.exists(path) else "")
         return 0
