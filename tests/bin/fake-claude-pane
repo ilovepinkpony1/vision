@@ -3,7 +3,7 @@
 Standard library only. fake-claude runs it when the start line has no -p.
 
 It reads --settings (the hooks), --session-id, --permission-mode, and the first prompt (the
-last argument). It writes a transcript to $HOME/fake-transcripts/<session>.jsonl and runs the
+word after --, else the last argument). It writes a transcript to $HOME/fake-transcripts/<session>.jsonl and runs the
 hooks with the input that Claude Code gives them. The first prompt names the facts file of the
 turn; `fake.pane` there is a list of replies. Each prompt, the first one and each one that
 fake-herdr types into the pane (the file that .fake-herdr-typed names), takes the next reply: an object with "message", the last
@@ -33,7 +33,15 @@ def main():
     session = arg(argv, "--session-id") or arg(argv, "--resume")
     mode = arg(argv, "--permission-mode")
     model = arg(argv, "--model")
-    first = argv[-1]
+    if "--" in argv:
+        first = argv[argv.index("--") + 1]
+    else:
+        # As Claude Code does: each word after a folder flag is one more folder, not the prompt.
+        flags = [i for i, a in enumerate(argv) if a.startswith("--")]
+        if flags and argv[flags[-1]] in ("--add-dir", "--plugin-dir"):
+            sys.stderr.write("the prompt was read as a value of %s, not as a prompt\n" % argv[flags[-1]])
+            return 3
+        first = argv[-1]
     home = os.environ.get("HOME", "/tmp")
     folder = os.path.join(home, "fake-transcripts")
     os.makedirs(folder, exist_ok=True)

@@ -6,8 +6,8 @@
 //!
 //! 1. It makes sure that the herdr session answers. If not, it opens a window of Herdr.app on
 //!    the session, which starts its server.
-//! 2. It opens a tab with the name of the agent in the workspace of the ticket, and it closes
-//!    the tabs of the ended turns of the ticket. It runs `pane.sh` in the tab: the script writes
+//! 2. It opens a tab with the name of the agent in the workspace of the ticket, and then it
+//!    closes the tabs of the ended turns of the ticket. It runs `pane.sh` in the tab: the script writes
 //!    its pid, and replaces itself with `claude` and the environment of the allow list.
 //! 3. The hooks of the session run `vision turn-hook`, which adds each hook event to
 //!    `hooks.jsonl`. The status line writes the cost of the session to `status-line.json`.
@@ -266,6 +266,9 @@ pub fn script_text(
     }
     words.push(shell_quote(&plan.program));
     words.extend(interactive_args(&plan.args).iter().map(|a| shell_quote(a)));
+    // `--add-dir` and `--plugin-dir` take more than one value, so the first message goes after
+    // `--`: else Claude Code reads it as one more folder.
+    words.push("--".to_string());
     words.push(shell_quote(first_message));
     format!(
         "#!/bin/sh\n# Written by vision for the turn {turn}. It runs in a pane of herdr.\necho $$ > {pid}\ncd {dir} || exit 1\n{line}\n",
@@ -832,7 +835,6 @@ pub fn supervise(
     if let Err(e) = herdr.ensure_running() {
         return end(status, Reason::Error, format!("{e:#}"));
     }
-    close_ended_tabs(ctx, ledger, &herdr, &plan.ticket, &plan.turn);
     let (workspace, tab, pane) = match herdr.open_tab(&plan.ticket, &plan.agent, &plan.workdir) {
         Ok(ids) => ids,
         Err(e) => {
@@ -852,6 +854,8 @@ pub fn supervise(
         tab,
         pane: pane.clone(),
     });
+    // After the new tab: herdr closes a workspace with its last tab.
+    close_ended_tabs(ctx, ledger, &herdr, &plan.ticket, &plan.turn);
     let pid_file = turn.dir.join(PID_FILE);
     let script = turn.dir.join(SCRIPT_FILE);
     let env = settings::session_env_of_process(&plan.env_pass);
@@ -1538,7 +1542,7 @@ mod tests {
         let text = script_text(&plan, &env, Path::new("/t/pane.pid"), "Turn T-1.");
         assert!(text.contains("echo $$ > '/t/pane.pid'\n"), "{text}");
         assert!(text.contains(r"cd '/w/it'\''s' || exit 1"), "{text}");
-        assert!(text.contains(r#"exec env -i TERM="${TERM:-xterm-256color}" COLORTERM="${COLORTERM:-}" 'PATH=/bin' 'GIT_CONFIG_GLOBAL=/g' '/bin/claude' '--model' 'm' 'Turn T-1.'"#), "{text}");
+        assert!(text.contains(r#"exec env -i TERM="${TERM:-xterm-256color}" COLORTERM="${COLORTERM:-}" 'PATH=/bin' 'GIT_CONFIG_GLOBAL=/g' '/bin/claude' '--model' 'm' -- 'Turn T-1.'"#), "{text}");
         assert!(!text.contains("dumb"), "TERM comes from the pane");
         assert!(
             !text.contains("/other"),

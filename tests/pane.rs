@@ -311,3 +311,32 @@ fn each_folder_dialog_gets_down_and_then_enter_only_with_yes_selected() {
         3
     );
 }
+
+#[test]
+fn the_next_turn_opens_its_tab_first_and_then_closes_the_tab_of_the_ended_turn() {
+    let (home, state) = pane_home();
+    let first = launch(
+        &home,
+        json!([{"message": result_object("One.").to_string()}]),
+    );
+    let one = home.wait_ended(&first).pane.unwrap();
+    let second = launch(
+        &home,
+        json!([{"message": result_object("Two.").to_string()}]),
+    );
+    let two = home.wait_ended(&second).pane.unwrap();
+    assert_eq!(
+        two.workspace, one.workspace,
+        "the ticket keeps its workspace"
+    );
+    let all = calls(&state);
+    let opened = all
+        .iter()
+        .position(|c| c[..2] == ["tab", "create"])
+        .expect("the second turn opens a tab");
+    let closed = all
+        .iter()
+        .position(|c| c[..2] == ["tab", "close"] && c[2] == one.tab)
+        .expect("the tab of the first turn closes");
+    assert!(opened < closed, "{all:?}");
+}
