@@ -622,6 +622,38 @@ fn the_size_gate_counts_from_the_base_when_the_take_is_not_in_the_history() {
 }
 
 #[test]
+fn the_sensitive_gate_reads_only_the_change_after_a_take_from_outside() {
+    let demo = Demo::new();
+    // The person wrote a workflow by hand, and the ticket came into Vision on that branch.
+    let taken = demo.commit(
+        &[(".github/workflows/ci.yml", "on: push\n")],
+        "Run the CI on push",
+    );
+    take_from_outside(&demo, BRANCH, &taken);
+    let head = demo.commit(&[("fix.txt", "fix\n")], "A fix of a review comment");
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let push = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert_eq!(push.outcome, Outcome::Confirmed, "{push:?}");
+    assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));
+
+    // A sensitive path that Vision changes after the take is still held.
+    let again = demo.commit(
+        &[(".github/workflows/ci.yml", "on: pull_request\n")],
+        "Run the CI on pull requests",
+    );
+    let held = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert_eq!(
+        held.outcome,
+        Outcome::Waiting {
+            command: format!("vision approve {KEY} git.push {again}")
+        },
+        "{held:?}"
+    );
+    assert_eq!(held.held, [".github/workflows/ci.yml"]);
+}
+
+#[test]
 fn a_sensitive_path_is_held_unless_the_approved_plan_names_it() {
     let demo = Demo::new();
     let head = demo.commit(

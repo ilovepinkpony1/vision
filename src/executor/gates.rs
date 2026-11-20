@@ -9,7 +9,8 @@
 //! - [`size_gate`] refuses a diff with more changed lines than `gates.max_diff_lines`. For a
 //!   ticket taken from outside Vision, the executor gives it the diff after the take.
 //! - [`sensitive_gate`] gives the paths of `gates.sensitive` that the diff touches and that the
-//!   approved plan does not name. The executor holds such a diff for the person.
+//!   approved plan does not name. The executor holds such a diff for the person. For a ticket
+//!   taken from outside Vision, it also gets the diff after the take.
 
 use std::collections::BTreeSet;
 use std::fmt;

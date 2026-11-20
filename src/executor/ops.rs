@@ -937,9 +937,9 @@ fn test_gates(
             reason,
         });
     }
-    // The size gate counts the change of Vision. A ticket that the person took from outside
-    // Vision brings the lines of its branch, and the forge holds them already, so the gate
-    // counts only the change after the take.
+    // The size gate and the sensitive gate read the change of Vision. A ticket that the person
+    // took from outside Vision brings its branch, and the forge holds that branch already, so
+    // these gates read only the change after the take.
     let taken = match (&ticket.clone, call.head.is_empty()) {
         (Some(clone), false) => match ticket.taken_from(ledger, &call.head)? {
             Some(start) => Some((gates::parse_diff(&diff(clone, &start, &call.head)?), start)),
@@ -967,7 +967,7 @@ fn test_gates(
     }
     if !approved {
         let plan = read_optional(&ctx.paths.ticket_doc(&ticket.key, APPROVED_PLAN))?;
-        let held = gates::sensitive_gate(&files, &config.gates.sensitive, plan.as_deref());
+        let held = gates::sensitive_gate(sized, &config.gates.sensitive, plan.as_deref());
         if !held.is_empty() {
             return Ok(Verdict::Hold(held));
         }
