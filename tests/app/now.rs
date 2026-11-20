@@ -20,6 +20,8 @@ struct Case {
     facts: StateFacts,
     needs: Vec<Need>,
     running: Option<Running>,
+    /// The jobs of the background.
+    jobs: Vec<Running>,
     pass: Pass,
     kind: Kind,
     tone: Tone,
@@ -66,6 +68,7 @@ fn case(name: &'static str, view: vision::pipeline::TicketView, facts: StateFact
         facts,
         needs: Vec::new(),
         running: None,
+        jobs: Vec::new(),
         pass: Pass::Idle,
         kind: Kind::Next,
         tone: Tone::Wait,
@@ -134,6 +137,42 @@ fn cases() -> Vec<Case> {
         title: "the job proof runs",
         lines: &["A pass of the engine runs it now. No agent works on the ticket in this time."],
         ..case("a job runs inside a pass", v, f)
+    });
+
+    let (v, f) = base("turn", "build");
+    out.push(Case {
+        jobs: vec![Running {
+            what: "job".into(),
+            name: "proof".into(),
+            ticket: "DEMO-12".into(),
+            started: minutes_ago(3),
+            pid: 7,
+        }],
+        kind: Kind::Runs,
+        tone: Tone::Work,
+        short: "the job proof runs · 3:00",
+        title: "the job proof runs",
+        lines: &[
+            "It runs in the background, so your actions and the other tickets do not wait for it.",
+        ],
+        ..case("a job runs in the background", v, f)
+    });
+
+    let (v, f) = base("turn", "build");
+    out.push(Case {
+        jobs: vec![Running {
+            what: "queued job".into(),
+            name: "precheck".into(),
+            ticket: "DEMO-12".into(),
+            started: minutes_ago(1),
+            pid: 0,
+        }],
+        kind: Kind::Runs,
+        tone: Tone::Work,
+        short: "the job precheck waits for a place · 1:00",
+        title: "the job precheck waits for a place",
+        lines: &["Other jobs run now. It starts when one of them ends."],
+        ..case("a job waits for a place in the background", v, f)
     });
 
     let (mut v, f) = base("turn", "plan");
@@ -696,6 +735,7 @@ fn each_state_and_each_need_has_its_own_words() {
             facts: &c.facts,
             needs: &c.needs,
             running: c.running.as_ref(),
+            jobs: &c.jobs,
             pass: c.pass,
             wall,
             offset_seconds: 0,
@@ -729,6 +769,7 @@ fn a_wait_before_its_time_names_the_local_time() {
         facts: &f,
         needs: &[],
         running: None,
+        jobs: &[],
         pass: Pass::Idle,
         wall,
         offset_seconds: 2 * 3600,

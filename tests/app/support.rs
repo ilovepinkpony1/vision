@@ -315,6 +315,8 @@ pub fn local(tickets: Vec<Held>, needs: Vec<Need>) -> Local {
         },
         timer: false,
         running: None,
+        jobs: Vec::new(),
+        jobs_ended: 0,
         resets: [Some("2026-11-16T18:00:00Z".into()), None],
     }
 }

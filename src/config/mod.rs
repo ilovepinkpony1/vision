@@ -431,6 +431,9 @@ pub struct Caps {
     pub merge: u32,
     pub comments: u32,
     pub judge_minutes: u32,
+    /// The most jobs that run in the background at one time. Each runs in the clone of its
+    /// ticket, so two jobs of different clones do not meet.
+    pub jobs_at_once: u32,
 }
 
 impl Default for Caps {
@@ -442,6 +445,7 @@ impl Default for Caps {
             merge: 3,
             comments: 3,
             judge_minutes: 15,
+            jobs_at_once: 2,
         }
     }
 }

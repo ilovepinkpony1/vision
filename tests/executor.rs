@@ -1420,6 +1420,8 @@ fn the_proof_reads_the_plan_and_a_job_runs_again_when_its_arguments_change() {
 
 #[test]
 fn the_tick_hooks_run_a_job_and_an_operation() {
+    // The job runs in the background, as `vision job-run`.
+    vision::turn::set_vision_bin(env!("CARGO_BIN_EXE_vision"));
     let demo = Demo::new();
     let head = demo.commit_subtract();
     let ctx = demo.ctx();
@@ -1429,6 +1431,24 @@ fn the_tick_hooks_run_a_job_and_an_operation() {
         now: vision::util::time::now(),
     };
     executor::run_job(&mut pass, &job("second-review", json!({}))).unwrap();
+    // The job runs in the background, and a later pass collects its result.
+    assert_eq!(
+        executor::job_passed(&pass.ledger, KEY, "second-review", &head).unwrap(),
+        None
+    );
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while executor::runs::all(&ctx.paths)
+        .iter()
+        .any(|r| r.phase != executor::runs::RunPhase::Ended)
+    {
+        assert!(std::time::Instant::now() < until, "the job did not end");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    executor::collect_runs(&mut pass).unwrap();
+    assert!(
+        executor::runs::all(&ctx.paths).is_empty(),
+        "the pass removed the run"
+    );
     executor::run_operation(&mut pass, &op("git.push", json!({}))).unwrap();
     executor::reconcile_operations(&mut pass).unwrap();
     assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));

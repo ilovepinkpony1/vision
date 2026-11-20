@@ -84,6 +84,8 @@ pub enum KindFacts {
     Job {
         /// The result of the job of the step at the commit of now: `None` before it ran.
         passed: Option<bool>,
+        /// A run of the job waits or runs in the background: what it does, for the person.
+        running: Option<String>,
         detail: String,
         after: Vec<(String, OpFact)>,
     },
@@ -290,9 +292,11 @@ pub fn decide(facts: &Facts) -> Next {
         },
         KindFacts::Job {
             passed,
+            running,
             detail,
             after,
         } => match passed {
+            None if running.is_some() => Next::Nothing(running.clone().unwrap_or_default()),
             None => Next::RunJob,
             Some(false) => flag(format!(
                 "the job of the step {} did not pass: {detail}",
@@ -638,6 +642,8 @@ pub(crate) fn cap_text(step: &str, name: &str, value: u32, n: u32, open: &[Strin
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobFact {
     NotRun,
+    /// A run of the job waits or runs in the background.
+    Running,
     Passed,
     Failed(String),
 }
@@ -670,6 +676,8 @@ pub enum Check {
     },
     /// A job of an end fact has no run at the commit of now: run it, then test again.
     RunJob(String),
+    /// A job of an end fact runs in the background: test again when it ended.
+    Waits(String),
 }
 
 /// What is wrong with the document `name` of a result: missing, empty, or only a pointer to a
@@ -750,6 +758,7 @@ pub fn check_end_facts(expects: &[Expect], inputs: &FactInputs) -> Check {
         let Expect::Job(name) = expect else { continue };
         match inputs.jobs.get(name).unwrap_or(&JobFact::NotRun) {
             JobFact::NotRun => return Check::RunJob(name.clone()),
+            JobFact::Running => return Check::Waits(name.clone()),
             JobFact::Passed => {}
             JobFact::Failed(detail) => {
                 return Check::Failed {
@@ -1705,18 +1714,29 @@ kind = "end"
         let mut facts = turn_facts(None, Vec::new());
         facts.kind = KindFacts::Job {
             passed: None,
+            running: None,
             detail: String::new(),
             after: vec![],
         };
         assert_eq!(decide(&facts), Next::RunJob);
+        // While its run is in the background, the step waits and asks for no second run.
+        facts.kind = KindFacts::Job {
+            passed: None,
+            running: Some("the job proof runs".into()),
+            detail: String::new(),
+            after: vec![],
+        };
+        assert_eq!(decide(&facts), Next::Nothing("the job proof runs".into()));
         facts.kind = KindFacts::Job {
             passed: Some(false),
+            running: None,
             detail: "two tests fail".into(),
             after: vec![],
         };
         assert!(is_flag(&decide(&facts), NEEDS_YOU, "two tests fail"));
         facts.kind = KindFacts::Job {
             passed: Some(true),
+            running: None,
             detail: String::new(),
             after: vec![],
         };
@@ -1740,6 +1760,8 @@ kind = "end"
             .collect();
         let mut i = inputs();
         assert_eq!(check_end_facts(&expects, &i), Check::RunJob("proof".into()));
+        i.jobs.insert("proof".into(), JobFact::Running);
+        assert_eq!(check_end_facts(&expects, &i), Check::Waits("proof".into()));
         i.jobs.insert("proof".into(), JobFact::Passed);
         assert_eq!(check_end_facts(&expects, &i), Check::Held);
         i.jobs

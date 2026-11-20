@@ -9,14 +9,14 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::clean::{self, object_args, Document, DETAIL_MAX};
 use super::context::{short, TicketContext};
 use super::ops::args_hash;
-use super::scripts::{Answer, Runner, Script, Secrets, DEFAULT_TIMEOUT};
-use crate::adapter;
+use super::scripts::{Answer, Runner, Script, ScriptError, Secrets, DEFAULT_TIMEOUT};
+use crate::adapter::{self, JobEnv};
 use crate::ctx::Ctx;
 use crate::exit::Stop;
 use crate::ledger::operations::CheckRow;
@@ -65,10 +65,30 @@ pub fn job_source(job: &str) -> String {
     format!("job:{job}")
 }
 
-/// Runs a job at the last commit of the ticket, and stores its checks and its documents.
-/// A script that fails or refuses gives a result with `ok` false and a `failure`; an error is
-/// only for a call that could not be made.
-pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
+/// The call of `bin/job` for one run of a job. The pass builds it from the adapter and the
+/// ticket, so that a run in the background ([`super::runs`]) and a run in the pass give the
+/// script the same input. It holds no secret.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JobCall {
+    /// The input of `bin/job`.
+    pub input: Value,
+    /// The time limit in seconds.
+    pub timeout: u64,
+    /// The key `secrets` of the job: the script gets the secrets.
+    pub secrets: bool,
+    /// The key `env` of the job, such as `plain`.
+    pub env: String,
+    /// The clone of the ticket, if it has one.
+    pub clone: Option<String>,
+    /// The last commit that the job runs at. Empty for a ticket with no commit.
+    pub head: String,
+    /// The arguments of the job, as an object.
+    pub args: Value,
+}
+
+/// Builds the call of a job at the last commit of the ticket. An error is a call that cannot
+/// be made, such as a missing `bin/job`.
+pub fn prepare(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobCall> {
     let config = ctx.config()?;
     let adapter = adapter::load_with(config, &ctx.paths)?;
     let spec = adapter.job(&run.job)?.clone();
@@ -76,8 +96,8 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
     let ticket = TicketContext::load(ledger, &adapter, &run.ticket)?;
     let base = ticket.base(&adapter)?;
     let head = ticket.head_text();
-    let secrets = Secrets::read(config)?;
-    let runner = Runner::new(&adapter, config, &secrets, ticket.clone.as_deref());
+    let none = Secrets::default();
+    let runner = Runner::new(&adapter, config, &none, ticket.clone.as_deref());
     if !runner.has(Script::Job) {
         bail!(
             "{} does not exist or is not executable, so the job {} cannot run. Fix the adapter",
@@ -116,11 +136,47 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
             "timeout": timeout.as_secs(),
         });
     }
-    let started = Instant::now();
-    let record = crate::running::start(&ctx.paths, "job", &run.job, run.ticket.as_str());
-    let answer = runner.job(input, timeout, spec.secrets, spec.env);
-    drop(record);
-    let seconds = i64::try_from(started.elapsed().as_secs()).unwrap_or(i64::MAX);
+    Ok(JobCall {
+        input,
+        timeout: timeout.as_secs(),
+        secrets: spec.secrets,
+        env: spec.env.as_str().to_string(),
+        clone: ticket.clone.as_ref().map(|c| c.display().to_string()),
+        head,
+        args,
+    })
+}
+
+/// Runs the script of a call and waits for its answer. The answer is masked: each value of
+/// `secrets` is replaced by its name. `Err` in the inner result holds why the script failed,
+/// did not start, or was stopped.
+pub fn call(ctx: &Ctx, call: &JobCall, secrets: &Secrets) -> Result<Result<Answer, ScriptError>> {
+    let config = ctx.config()?;
+    let adapter = adapter::load_with(config, &ctx.paths)?;
+    let clone = call.clone.as_ref().map(std::path::PathBuf::from);
+    let runner = Runner::new(&adapter, config, secrets, clone.as_deref());
+    let env = JobEnv::parse(&call.env).unwrap_or_default();
+    Ok(runner.job(
+        call.input.clone(),
+        Duration::from_secs(call.timeout),
+        call.secrets,
+        env,
+    ))
+}
+
+/// Stores what one run of a job gave: its documents in the ticket folder, its checks, the row
+/// of the kind `job`, and one line of the log. `answer` is masked already, and `secrets` masks
+/// the documents once more.
+pub fn finish(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    run: &JobRun,
+    call: &JobCall,
+    answer: Result<Answer, String>,
+    seconds: i64,
+    secrets: &Secrets,
+) -> Result<JobResult> {
+    let head = call.head.clone();
     let at = time::now_rfc3339();
     let source = job_source(&run.job);
     let mut result = JobResult {
@@ -142,7 +198,7 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
             }
             let (docs, dropped) = clean::documents(map.get("documents"));
             notes.extend(dropped);
-            result.documents = write_documents(&ctx.paths, &run.ticket, &docs, &secrets)?;
+            result.documents = write_documents(&ctx.paths, &run.ticket, &docs, secrets)?;
             let (checks, bad) = checks(map.get("checks"), &run.ticket, &head, &source, &at);
             notes.extend(bad);
             result.checks = checks;
@@ -160,7 +216,7 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
                 clean::text(map.get("detail"), DETAIL_MAX)
             ));
         }
-        Err(e) => result.failure = Some(e.to_string()),
+        Err(e) => result.failure = Some(e),
     }
     for check in &result.checks {
         ledger.add_check(check)?;
@@ -175,7 +231,7 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
             (None, false) => "fail",
         }
         .into(),
-        command: job_command(&run.job, &args),
+        command: job_command(&run.job, &call.args),
         seconds,
         cause: if result.failure.is_some() {
             "infra"
@@ -199,6 +255,21 @@ pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
         }
     ));
     Ok(result)
+}
+
+/// Runs a job at the last commit of the ticket in this process, and stores its checks and its
+/// documents. A script that fails or refuses gives a result with `ok` false and a `failure`; an
+/// error is only for a call that could not be made. The pipeline runs a job in the background
+/// with [`super::runs`]; this is for a caller that needs the result at once.
+pub fn job(ctx: &Ctx, ledger: &Ledger, run: &JobRun) -> Result<JobResult> {
+    let prepared = prepare(ctx, ledger, run)?;
+    let secrets = Secrets::read(ctx.config()?)?;
+    let started = Instant::now();
+    let record = crate::running::start(&ctx.paths, "job", &run.job, run.ticket.as_str());
+    let answer = call(ctx, &prepared, &secrets)?.map_err(|e| e.to_string());
+    drop(record);
+    let seconds = i64::try_from(started.elapsed().as_secs()).unwrap_or(i64::MAX);
+    finish(ctx, ledger, run, &prepared, answer, seconds, &secrets)
 }
 
 /// The `command` of the check row of a whole job: the job name, and a hash of its arguments

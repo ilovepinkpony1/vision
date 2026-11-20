@@ -767,7 +767,7 @@ pub fn vision_bin() -> Result<PathBuf> {
         .unwrap_or_default();
     if !stem.starts_with("vision") {
         bail!(
-            "this program ({}) is not the vision binary, so it cannot start a supervisor. \
+            "this program ({}) is not the vision binary, so it cannot start a supervisor or a job runner. \
              Call vision::turn::set_vision_bin with the path of the vision binary first",
             exe.display()
         );

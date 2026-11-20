@@ -23,6 +23,7 @@ use super::state::{
 use crate::adapter::when::Holds;
 use crate::adapter::{self, Adapter, Entry, EntryKind, Expect, GateRule, Step, StepKind};
 use crate::ctx::Ctx;
+use crate::executor::runs::{self, RunState};
 use crate::executor::{self, Outcome, Secrets};
 use crate::ledger::memory_use::MemoryUse;
 use crate::ledger::notices::{notice_name, NewNotice, NoticeIssue};
@@ -464,47 +465,57 @@ fn test_turn_of(
         human: human_actions(ledger, &ticket.key)?,
     };
     let mut job_args = BTreeMap::new();
+    let mut job_docs = Vec::new();
     for expect in &step.expects {
         if let Expect::Job(job) = expect {
             let args = end_fact_args(ctx, &ticket.key, step, job);
-            // A job that did not pass at this commit with these arguments runs again: a result
-            // is tested once, and a job can fail for a reason outside the commit, such as a
-            // slow machine.
-            let fact =
-                match executor::job_passed_with(ledger, ticket.key.as_str(), job, &head, &args)? {
-                    Some(true) => JobFact::Passed,
-                    None | Some(false) => JobFact::NotRun,
-                };
+            // A job runs in the background (section 11.1). The run that this test asked for
+            // gives its outcome once. Before it, a pass at this commit with these arguments
+            // counts. A job that did not pass at this commit runs again for a new result,
+            // because a job can fail for a reason outside the commit, such as a slow machine.
+            let fact = match runs::state(&ctx.paths, ledger, &end_fact_mark(&last.id, job, &args))?
+            {
+                RunState::Ended(outcome) if outcome.ok => JobFact::Passed,
+                RunState::Ended(outcome) => {
+                    job_docs.extend(outcome.documents.clone());
+                    JobFact::Failed(outcome.why())
+                }
+                RunState::InFlight(_) => JobFact::Running,
+                RunState::None => {
+                    match executor::job_passed_with(ledger, ticket.key.as_str(), job, &head, &args)?
+                    {
+                        Some(true) => JobFact::Passed,
+                        None | Some(false) => JobFact::NotRun,
+                    }
+                }
+            };
             inputs.jobs.insert(job.clone(), fact);
             job_args.insert(job.clone(), args);
         }
     }
-    let mut job_docs = Vec::new();
-    let check = loop {
-        match check_end_facts(&step.expects, &inputs) {
-            Check::RunJob(job) => {
-                let run = JobRun {
-                    ticket: ticket.key.clone(),
-                    step: step.id.clone(),
-                    job: job.clone(),
-                    args: job_args
-                        .get(&job)
-                        .cloned()
-                        .unwrap_or_else(|| Value::Object(Map::new())),
-                };
-                let result = executor::job(ctx, ledger, &run)?;
-                let fact = match (&result.failure, result.ok) {
-                    (None, true) => JobFact::Passed,
-                    (Some(failure), _) => JobFact::Failed(failure.clone()),
-                    (None, false) => JobFact::Failed(result.detail.clone()),
-                };
-                if fact != JobFact::Passed {
-                    job_docs.extend(result.documents.clone());
-                }
-                inputs.jobs.insert(job, fact);
-            }
-            other => break other,
+    let check = match check_end_facts(&step.expects, &inputs) {
+        Check::RunJob(job) => {
+            let args = job_args
+                .get(&job)
+                .cloned()
+                .unwrap_or_else(|| Value::Object(Map::new()));
+            let run = JobRun {
+                ticket: ticket.key.clone(),
+                step: step.id.clone(),
+                job: job.clone(),
+                args: args.clone(),
+            };
+            // The next passes test the end facts again; this one does not wait for the job.
+            runs::request(
+                ctx,
+                ledger,
+                &run,
+                Some(&end_fact_mark(&last.id, &job, &args)),
+            )?;
+            return Ok(());
         }
+        Check::Waits(_) => return Ok(()),
+        other => other,
     };
     let now = time::now_rfc3339();
     let (value, detail) = match &check {
@@ -528,7 +539,7 @@ fn test_turn_of(
                 }),
             )
         }
-        Check::RunJob(_) => return Ok(()),
+        Check::RunJob(_) | Check::Waits(_) => return Ok(()),
     };
     if let Check::Failed { .. } = &check {
         if let Some(visit) = ticket.counts.visit.as_mut() {
@@ -1397,6 +1408,34 @@ pub(crate) fn end_fact_args(ctx: &Ctx, key: &TicketKey, step: &Step, job: &str) 
 }
 
 /// The arguments of an entry, with each `{doc:NAME}` replaced by the document of the ticket.
+/// The mark of the run of a job that the end facts of a turn ask for: one outcome for each turn,
+/// job, and arguments.
+fn end_fact_mark(turn: &str, job: &str, args: &Value) -> String {
+    format!("job-run:{turn}:{}", executor::job_command(job, args))
+}
+
+/// A run in the background in words, such as `the job proof runs since 10:37`.
+fn run_words(run: &runs::RunRecord) -> String {
+    let at = |text: &Option<String>| {
+        text.as_deref()
+            .and_then(|t| time::parse_rfc3339(t).ok())
+            .map(time::local_hm)
+            .unwrap_or_default()
+    };
+    match run.phase {
+        runs::RunPhase::Queued => format!(
+            "the job {} waits for a free place to run (since {})",
+            run.job,
+            at(&Some(run.queued.clone()))
+        ),
+        _ => format!(
+            "the job {} runs since {}",
+            run.job,
+            at(&run.launched.clone().or_else(|| Some(run.queued.clone())))
+        ),
+    }
+}
+
 pub(crate) fn entry_args(ctx: &Ctx, key: &TicketKey, entry: &Entry) -> Result<Value, String> {
     let read = |name: &str| {
         read_optional(&ctx.paths.ticket_doc(key, name))
@@ -1468,6 +1507,17 @@ pub(crate) fn op_facts(
             }
             EntryKind::Job => {
                 let head = ticket.head();
+                if let Some(run) = runs::in_flight_of(&ctx.paths, ticket.key.as_str(), &entry.name)
+                {
+                    out.push((
+                        entry.label(),
+                        OpFact::Known {
+                            outcome: Outcome::Executing,
+                            detail: run_words(&run),
+                        },
+                    ));
+                    continue;
+                }
                 match head
                     .map(|h| executor::job_passed(ledger, ticket.key.as_str(), &entry.name, &h))
                 {
@@ -1678,6 +1728,8 @@ pub(crate) fn gather(
         StepKind::Job(job) => {
             let head = head_of(&ticket.clone_dir()?)?;
             let passed = executor::job_passed(ledger, key.as_str(), &job.job, &head)?;
+            let running =
+                runs::in_flight_of(&ctx.paths, key.as_str(), &job.job).map(|run| run_words(&run));
             let after = if passed == Some(true) {
                 op_facts(ctx, ledger, ticket, &step.after, None)?
             } else {
@@ -1685,6 +1737,7 @@ pub(crate) fn gather(
             };
             KindFacts::Job {
                 passed,
+                running,
                 detail: format!(
                     "see the documents of the job {} in the ticket folder",
                     job.job
@@ -1978,9 +2031,23 @@ pub(crate) fn run_before(
                     job: entry.name.clone(),
                     args,
                 };
-                let result = executor::job(ctx, ledger, &run)?;
-                if result.failure.is_some() || !result.ok {
-                    let why = result.failure.unwrap_or(result.detail);
+                // The job runs in the background; the visit waits for its outcome.
+                let mark = format!(
+                    "job-run:{}:{}:before:{index}:{}",
+                    ticket.key,
+                    ticket.visit().seq,
+                    entry.name
+                );
+                let outcome = match runs::state(&ctx.paths, ledger, &mark)? {
+                    RunState::Ended(outcome) => outcome,
+                    RunState::InFlight(_) => return Ok(Before::Wait),
+                    RunState::None => {
+                        runs::request(ctx, ledger, &run, Some(&mark))?;
+                        return Ok(Before::Wait);
+                    }
+                };
+                if !outcome.ok {
+                    let why = outcome.why();
                     return Ok(Before::Flag(flag_action(
                         ticket,
                         super::state::NEEDS_YOU,

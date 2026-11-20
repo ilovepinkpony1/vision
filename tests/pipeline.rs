@@ -1445,6 +1445,144 @@ fn a_job_step_moves_on_after_its_job_passes() {
     assert!(world.flags().is_empty());
 }
 
+/// The run records of the jobs of the background, as `vision::executor::runs` writes them.
+fn job_records(world: &World) -> Vec<vision::executor::runs::RunRecord> {
+    vision::executor::runs::all(&world.ctx().paths)
+}
+
+/// Ticks until a run of the job has a runner that holds its lock. Gives the record.
+fn tick_until_job_runs(world: &World, job: &str) -> vision::executor::runs::RunRecord {
+    let paths = world.ctx().paths;
+    let until = Instant::now() + LONG;
+    loop {
+        world.tick();
+        if let Some(record) = job_records(world).into_iter().find(|r| {
+            r.job == job && r.ran.is_some() && vision::executor::runs::runner_lives(&paths, &r.id)
+        }) {
+            return record;
+        }
+        assert!(
+            Instant::now() < until,
+            "the job {job} never ran:\n{}",
+            world.log_text()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_pass_does_not_wait_for_a_slow_job_and_a_later_pass_collects_it() {
+    let world = World::new();
+    check_step_adapter(&world, "second-review");
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    std::fs::write(world.world.join("job-delay"), "4").unwrap();
+    let record = tick_until_job_runs(&world, "second-review");
+    assert_eq!(record.ticket, KEY);
+    assert_eq!(world.step().as_deref(), Some("check"));
+    // While the job runs, a pass ends at once and stores nothing of the job.
+    let started = Instant::now();
+    world.tick();
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "a pass waited {:?} for the job",
+        started.elapsed()
+    );
+    assert!(job_runs(&world, "second-review", &base).is_empty());
+    let status = world.run(&["status"]).stdout;
+    assert!(status.contains("second-review"), "{status}");
+    world.tick_to("build");
+    assert_eq!(job_runs(&world, "second-review", &base), ["pass"]);
+    assert!(job_records(&world).is_empty(), "the pass removed the run");
+    let log = world.log_text();
+    assert!(
+        log.contains("job second-review of DEMO-12 at")
+            && log.contains("it runs in the background as"),
+        "{log}"
+    );
+}
+
+#[test]
+fn a_stop_ends_the_job_of_the_ticket_and_stores_no_result() {
+    let world = World::new();
+    check_step_adapter(&world, "second-review");
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    std::fs::write(world.world.join("job-delay"), "60").unwrap();
+    let record = tick_until_job_runs(&world, "second-review");
+    let started = Instant::now();
+    let stop = world.run(&["stop", KEY]);
+    stop.expect_code(0);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the stop waited {:?}",
+        started.elapsed()
+    );
+    assert!(
+        stop.stdout
+            .contains(&format!("Stopped the job(s) {}", record.id)),
+        "{stop:?}"
+    );
+    let paths = world.ctx().paths;
+    vision::executor::runs::wait_stopped(&paths, KEY, Duration::from_secs(10));
+    assert!(!vision::executor::runs::runner_lives(&paths, &record.id));
+    world.tick();
+    assert!(job_records(&world).is_empty(), "the pass removed the run");
+    assert!(
+        job_runs(&world, "second-review", &base).is_empty(),
+        "a stopped job stores no result"
+    );
+    assert!(world
+        .log_text()
+        .contains("job second-review of DEMO-12: stopped, so it stores no result"));
+    // The job runs again when the ticket goes on.
+    std::fs::remove_file(world.world.join("job-delay")).unwrap();
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_to("build");
+    assert_eq!(job_runs(&world, "second-review", &base), ["pass"]);
+}
+
+#[test]
+fn a_job_whose_runner_dies_runs_once_more_and_then_fails() {
+    let world = World::new();
+    check_step_adapter(&world, "second-review");
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    let base = git(world.clone(), &["rev-parse", "HEAD"]);
+    std::fs::write(world.world.join("job-delay"), "8").unwrap();
+    let kill = |record: &vision::executor::runs::RunRecord| {
+        let pid = record.pid.expect("the runner wrote its pid");
+        let killed = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status()
+            .unwrap();
+        assert!(killed.success());
+        let paths = world.ctx().paths;
+        let until = Instant::now() + Duration::from_secs(10);
+        while vision::executor::runs::runner_lives(&paths, &record.id) {
+            assert!(Instant::now() < until, "the runner did not end");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let first = tick_until_job_runs(&world, "second-review");
+    kill(&first);
+    world.tick();
+    assert!(world
+        .log_text()
+        .contains("its runner ended without an answer, so it runs one more time"));
+    assert!(job_runs(&world, "second-review", &base).is_empty());
+    let second = tick_until_job_runs(&world, "second-review");
+    assert_eq!(second.id, first.id, "the same run starts again");
+    kill(&second);
+    world.tick_until("the flag of the failed job", LONG, |w| {
+        !w.flags().is_empty()
+    });
+    assert_eq!(job_runs(&world, "second-review", &base), ["error"]);
+    assert_eq!(world.step().as_deref(), Some("check"));
+}
+
 #[test]
 fn a_job_step_whose_job_fails_needs_you_and_does_not_move() {
     let world = World::new();

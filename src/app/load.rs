@@ -152,6 +152,8 @@ fn read_local(
         },
         timer: crate::install::is_installed(&ctx.paths),
         running: crate::running::read(&ctx.paths),
+        jobs: crate::executor::runs::views(&ctx.paths),
+        jobs_ended: crate::executor::runs::ended_count(&ctx.paths),
         resets,
     })
 }

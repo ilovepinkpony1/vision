@@ -49,7 +49,8 @@ $VISION_HOME/
   heartbeat              the time of the last tick, RFC 3339 UTC
   lock                   the lock file of the tick
   off                    the kill switch. Its presence stops each action.
-  running.json           the job or the operation that a pass runs now. It is gone when nothing runs.
+  running.json           the operation or the read that a pass runs now. It is gone when nothing runs.
+  jobs/<run-id>/         one job that runs in the background: run.json, answer.json, runner.lock, runner.log
   log/vision.log         one line for each tick action
   log/app.err            what library code prints to standard error while the app runs
   loader.ans             optional: your picture for the loader of the app, at most 240 x 120 cells (section 15.3)
@@ -191,6 +192,7 @@ qa_fix = 2
 merge = 3
 comments = 3
 judge_minutes = 15
+jobs_at_once = 2              # the most jobs that run in the background at one time
 
 [judge]
 answer_when_sure = true       # the Judge also answers alone from its own inference
@@ -316,9 +318,9 @@ Each time is RFC 3339 in UTC. Each JSON value is stored as text. The ledger reco
 1. Take the lock. If a different tick holds it, exit with code 0.
 2. Write the heartbeat. If the `off` file exists, write the snapshot and exit.
 3. Reconcile each operation in the state `executing` or `uncertain`.
-4. Collect each turn that ended. Write its row, its result file, and the limit reading. Then give the slots to the tickets that need one (section 11.3).
+4. Collect each turn that ended. Write its row, its result file, and the limit reading. Collect each job of the background that ended, and start the jobs that wait for a place (section 11.1). Then give the slots to the tickets that need one (section 11.3).
 5. For each ticket, read the facts of its step and test the end fact.
-6. Select the next action of each ticket: start a turn, run a job, run an operation, set a flag, or nothing.
+6. Select the next action of each ticket: start a turn, ask for a job, run an operation, set a flag, or nothing.
 7. If its mode and the limits allow the action, do it.
 8. Write the snapshot. Release the lock.
 
@@ -850,6 +852,17 @@ job      {"job": "proof", "key": "DEMO-12", "clone": "/path", "branch": "vision/
 - Each run of a job also writes one row in `checks` with the kind `job` and the source `job:<name>`. Its result is `pass`, `fail`, or `error`. The end fact `job:<name>` reads that row at the last commit.
 - A job with arguments writes the command `<name> <hash>` in that row. The hash is the first 16 hex characters of the SHA-256 of its arguments as JSON with sorted keys. An end fact with arguments reads only a row with the same command. So the job runs again after its arguments change at the same commit.
 
+A job runs in the background, because a job such as the proof can run for many minutes. A pass holds the lock of the tick, and each action of the person and each other ticket waits for that lock. So a pass never waits for a job:
+
+1. A pass asks for a run. The run gets the folder `jobs/<run-id>/` with `run.json`. That file holds the call of `bin/job` with no secret, and the phase `queued`.
+2. The pass starts `vision job-run <run-id>` as a detached process for each queued run that has a place. At most `caps.jobs_at_once` runs run at a time, and one run for each ticket. Each ticket has its own clone, so two runs never share a work tree.
+3. The runner holds the lock `runner.lock` while it lives. It reads the secrets, runs the script, and writes the masked answer to `answer.json`.
+4. A later pass collects the run. It stores the checks, the documents, and the row of the kind `job`, as above. It stores one event whose external id is the mark of the run, and it removes the folder.
+
+The mark names who waits for the outcome. The end facts of a turn have one mark for each turn, job, and set of arguments. A `before` entry has one mark for each visit and entry. A job entry and a job step have one mark for each commit. While a run of a mark waits or runs, the ticket waits too, and the app and `vision status` name the job. The engine starts a pass when a run ends.
+
+`vision stop KEY` and `vision off` stop the runs. A runner kills the process group of its script and stores no outcome, so the job runs again when the ticket goes on. A runner that dies without an answer, as when the Mac restarts, runs one more time. A second death is a failure of the job with the cause `infra`.
+
 ### 11.2 The steps
 
 ```toml
@@ -1103,7 +1116,7 @@ The count table of a QA report checks the issues. If the table counts more issue
 
 The ticket row holds the id of its step in `state`, its flags, and its counters. One tick moves a ticket at most one step.
 
-- Entry of a turn step. The runner runs each `before` entry in order: a job or a verb. A job that does not pass sets the flag `needs-you`. A verb must reach the state `confirmed`. The visit remembers each entry that is done, so each one runs one time in a visit. The runner then asks `observe` for the ticket and writes `issue.json`. It writes `related.md` (section 16), builds the facts file, and starts the turn.
+- Entry of a turn step. The runner runs each `before` entry in order: a job or a verb. A job runs in the background (section 11.1), and the visit waits for its outcome. A job that does not pass sets the flag `needs-you`. A verb must reach the state `confirmed`. The visit remembers each entry that is done, so each one runs one time in a visit. The runner then asks `observe` for the ticket and writes `issue.json`. It writes `related.md` (section 16), builds the facts file, and starts the turn.
 - If each end fact holds and a gate qa has `notify = true`, the issues of its report that do not block become one notice for the person. A notice never stops a ticket and never sets a flag.
 - A turn that ends with `questions`. The cards go to the Judge. After each card has an answer, a new turn resumes the session with the answers.
 - A turn that ends with `requests`. The executor serves each read verb, and a new turn resumes the session with the files.
@@ -1288,7 +1301,7 @@ No session can call the executor. It runs after a rule in code, after a typed co
 - A job with `env = "full"` gets the environment of the tick, with no variable that has the name or the value of a secret, unless the job has `secrets = true`. Each other script gets the plain environment. The executor passes the table of a job with `command` in the call, so the adapter needs no second reader of `adapter.toml`. At the time limit of a call, the executor kills its process group, and the command of a job runs in that group, so it stops too.
 - The executor calls a built-in adapter in the same way as a script of `bin/`: the same environment, process group, time limit, masking, and exit codes. An error text names it as `bin/observe`, `bin/act`, or `bin/job`.
 
-A pass can take minutes, and the ledger says nothing about a script until the script ends. So the executor writes `running.json` right before it runs a script. This holds for a job, an operation, a read verb, and the check of an uncertain operation. The file holds the kind, the name, the ticket, the start time, and the process id of the pass. When the script ends, the executor removes the file. A reader trusts the file only while that process holds the lock of the tick. The next tick removes a file that a crash left. The ledger stays the evidence.
+A script that a pass runs can take a while, and the ledger says nothing about a script until the script ends. So the executor writes `running.json` right before it runs a script. This holds for an operation, a read verb, and the check of an uncertain operation. A job runs in the background instead, and its folder in `jobs/` shows it (section 11.1). The file holds the kind, the name, the ticket, the start time, and the process id of the pass. When the script ends, the executor removes the file. A reader trusts the file only while that process holds the lock of the tick. The next tick removes a file that a crash left. The ledger stays the evidence.
 
 ## 13. Commands
 
@@ -1384,12 +1397,13 @@ The worker is one thread that runs one job at a time. A job is a pass or an acti
 - The app starts.
 - An action ends.
 - A turn ends. This holds for a turn of the Judge and of the Curator too.
+- A job of the background ends.
 - One minute passed since the last pass.
 - A pass changed a ticket, and the next pass has work for a ticket.
 
 One pass does one thing for a ticket: it collects a turn, or moves the ticket to its next step, or starts the next turn. So the last rule starts the next pass at once, and a ticket does not wait a minute between two steps. A pass that changed nothing starts no such pass. At most 12 such passes run in a row, and the pass of the minute starts the count again. So a ticket that cannot move never makes the engine spin.
 
-An action of the person goes before a pass that waits. A pass that finds the lock of a different tick is not an error, so the timer of section 6 can run too. A pass can take minutes, because a job of the adapter runs inside it. The screen stays live in that time. The header shows the pass with its time, and the state of the ticket names the job or the operation from `running.json`. The header shows a pass after it ran for 2 seconds. Before that time, the screen does not move for the pass.
+An action of the person goes before a pass that waits. A pass that finds the lock of a different tick is not an error, so the timer of section 6 can run too. A job of the adapter runs in the background (section 11.1), so a pass waits only for an operation or a read. The screen stays live in that time. The header shows the pass with its time. The state of the ticket names the operation from `running.json`, or its job of the background, such as "the job proof runs · 3:10". The header shows a pass after it ran for 2 seconds. Before that time, the screen does not move for the pass.
 
 The person can pause the engine. Then no pass starts, and actions still run. One exception is the pass that a key of a card asks for (section 15.3): it runs while the engine is paused too. The pause lives only in the memory of the app. The kill switch of section 3 is a different thing: the app shows it and can switch it.
 

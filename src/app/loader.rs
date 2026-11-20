@@ -169,6 +169,8 @@ struct Check {
     folders: Vec<(String, Vec<(OsString, Stamp)>)>,
     /// The job or the operation that a pass runs now.
     running: Option<Running>,
+    /// Each job of the background with its phase, and the number of ended ones.
+    jobs: (Vec<Running>, usize),
     /// Each turn that runs, with its phase and its minutes so far.
     turns: Vec<(String, Phase, i64)>,
     timer: bool,
@@ -476,6 +478,10 @@ impl State {
             adapter: self.adapter.clone(),
             folders,
             running: crate::running::read(&self.paths),
+            jobs: (
+                crate::executor::runs::views(&self.paths),
+                crate::executor::runs::ended_count(&self.paths),
+            ),
             turns,
             timer: crate::install::is_installed(&self.paths),
             proposals,

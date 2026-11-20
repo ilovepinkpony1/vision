@@ -611,6 +611,11 @@ def job(request):
     name = request.get("job")
     if name not in jobs:
         raise Failure("the demo adapter has no job %r" % (name,))
+    # A test can make each job slow: the file `job-delay` of the world holds the seconds.
+    delay = os.path.join(world.root, "job-delay")
+    if os.path.isfile(delay):
+        with open(delay) as handle:
+            time.sleep(float(handle.read().strip() or "0"))
     return jobs[name](world, request)
 
 

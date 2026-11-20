@@ -44,6 +44,7 @@ pub fn on_local(app: &mut App, result: Result<Local, String>, fx: &mut Vec<Effec
     // The turns that ran at the last load: the work turns, and the turns of the Judge and the
     // Curator, which no ticket shows as its work.
     let turns_before = app.local.data.as_ref().map_or(0, |l| l.turns);
+    let jobs_ended_before = app.local.data.as_ref().map_or(0, |l| l.jobs_ended);
     app.local.since = None;
     app.local.at = Some(app.clock.elapsed);
     match result {
@@ -66,7 +67,9 @@ pub fn on_local(app: &mut App, result: Result<Local, String>, fx: &mut Vec<Effec
                 }
             );
             // A turn that ran before and runs no more: a pass collects it now.
+            // A job of the background that ended: a pass collects it now too.
             let ended = local.turns < turns_before
+                || local.jobs_ended > jobs_ended_before
                 || working.iter().any(|key| {
                     local
                         .tickets

@@ -77,6 +77,8 @@ pub struct Input<'a> {
     pub needs: &'a [Need],
     /// The record of what a pass runs now, when it is for this ticket.
     pub running: Option<&'a Running>,
+    /// The jobs that run or wait in the background.
+    pub jobs: &'a [Running],
     pub pass: Pass,
     pub wall: OffsetDateTime,
     /// The offset of the local time from UTC, in seconds.
@@ -190,6 +192,31 @@ pub fn now(input: &Input) -> Now {
         now.agent = Some(turn.agent.clone());
         now.seconds = seconds;
         now.key = Some(("t", "tell"));
+        return now;
+    }
+    if let Some(record) = input.jobs.iter().find(|r| r.ticket == view.key) {
+        let seconds = seconds_since(Some(&record.started), input.wall).unwrap_or(0);
+        let queued = record.what == "queued job";
+        let (short, title, line) = if queued {
+            (
+                format!(
+                    "the job {} waits for a place · {}",
+                    record.name,
+                    mmss(seconds)
+                ),
+                format!("the job {} waits for a place", record.name),
+                "Other jobs run now. It starts when one of them ends.",
+            )
+        } else {
+            (
+                format!("the job {} runs · {}", record.name, mmss(seconds)),
+                format!("the job {} runs", record.name),
+                "It runs in the background, so your actions and the other tickets do not wait for it.",
+            )
+        };
+        let mut now = Now::new(Kind::Runs, Tone::Work, short, title, vec![line.into()]);
+        now.seconds = Some(seconds);
+        now.spinner = true;
         return now;
     }
     if let Some(record) = input.running.filter(|r| r.ticket == view.key) {

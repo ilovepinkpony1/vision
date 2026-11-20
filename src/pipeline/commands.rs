@@ -1124,6 +1124,9 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
             killed.push(running.id);
         }
     }
+    // A job of the ticket in the background stops too: it stores no result and runs again
+    // when the ticket goes on.
+    let jobs = crate::executor::runs::stop(&ctx.paths, Some(key.as_str()));
     let seconds = ticket
         .counts
         .reasons
@@ -1163,7 +1166,7 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
         ledger.add_event(
             &Event::now("user", "stop")
                 .ticket(key.as_str())
-                .detail(json!({"step": ticket.state(), "killed": killed})),
+                .detail(json!({"step": ticket.state(), "killed": killed, "jobs": jobs})),
         )?;
         Ok(())
     })?;
@@ -1178,10 +1181,15 @@ pub fn stop(ctx: &Ctx, key: &TicketKey) -> Result<()> {
     println!(
         "Stopped {key} at the step {}.{}{place} Run `vision take {key}` to start it again.",
         ticket.state(),
-        if killed.is_empty() {
-            String::new()
-        } else {
-            format!(" Killed the turn(s) {}.", killed.join(", "))
+        match (killed.is_empty(), jobs.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => format!(" Killed the turn(s) {}.", killed.join(", ")),
+            (true, false) => format!(" Stopped the job(s) {}.", jobs.join(", ")),
+            (false, false) => format!(
+                " Killed the turn(s) {}, and stopped the job(s) {}.",
+                killed.join(", "),
+                jobs.join(", ")
+            ),
         }
     );
     Ok(())

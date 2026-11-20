@@ -24,6 +24,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -52,6 +53,21 @@ const STDERR_KEEP: usize = 64 * 1024;
 const STDOUT_MAX: usize = 32 * 1024 * 1024;
 /// The wait for the pipes after a kill.
 const GRACE: Duration = Duration::from_secs(2);
+
+/// Set by the signal handler of `vision job-run` when a person stops the run: the script that
+/// runs now is killed with its process group, and its call ends with [`ScriptError::Stopped`].
+/// No other process sets it.
+static STOP: AtomicBool = AtomicBool::new(false);
+
+/// Asks the script that runs now in this process to stop. Safe to call from a signal handler.
+pub fn request_stop() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+/// True after [`request_stop`].
+pub fn stop_requested() -> bool {
+    STOP.load(Ordering::SeqCst)
+}
 
 /// The three scripts of an adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -311,6 +327,8 @@ pub enum ScriptError {
         why: String,
         tail: String,
     },
+    #[error("{script} was stopped, because the person stopped the ticket or turned Vision off")]
+    Stopped { script: String },
 }
 
 impl ScriptError {
@@ -506,6 +524,11 @@ impl<'a> Runner<'a> {
         })?;
         let script_name = script.to_string();
         let tail = self.tail(&output.stderr);
+        if output.stopped {
+            return Err(ScriptError::Stopped {
+                script: script_name,
+            });
+        }
         if output.timed_out {
             return Err(ScriptError::Timeout {
                 script: script_name,
@@ -620,6 +643,8 @@ struct ChildOutput {
     /// `None` when it timed out, or when its pipes did not end.
     status: Option<ExitStatus>,
     timed_out: bool,
+    /// The run was stopped with [`request_stop`].
+    stopped: bool,
     stdout: Vec<u8>,
     stdout_overflow: bool,
     /// The last bytes of standard error.
@@ -665,10 +690,18 @@ fn run_child(
         });
     }
     let mut timed_out = false;
+    let mut stopped = false;
     let mut pause = Duration::from_millis(2);
     let mut status = loop {
         if let Some(status) = child.try_wait()? {
             break Some(status);
+        }
+        if stop_requested() {
+            kill_group(pgid);
+            let _ = child.kill();
+            let _ = child.wait();
+            stopped = true;
+            break None;
         }
         let now = Instant::now();
         if now >= deadline {
@@ -682,13 +715,13 @@ fn run_child(
         pause = (pause * 2).min(Duration::from_millis(50));
     };
     // The output ends when each process of the group closed it.
-    let pipes_by = if timed_out {
+    let pipes_by = if timed_out || stopped {
         Instant::now() + GRACE
     } else {
         deadline.max(Instant::now() + Duration::from_millis(100))
     };
     let mut stdout = recv_until(&out_rx, pipes_by);
-    if stdout.is_none() && !timed_out {
+    if stdout.is_none() && !timed_out && !stopped {
         kill_group(pgid);
         stdout = recv_until(&out_rx, Instant::now() + GRACE);
         status = None;
@@ -699,6 +732,7 @@ fn run_child(
     Ok(ChildOutput {
         status,
         timed_out,
+        stopped,
         stdout,
         stdout_overflow,
         stderr,

@@ -384,6 +384,10 @@ pub struct Local {
     pub timer: bool,
     /// The job or the operation that a pass runs now.
     pub running: Option<Running>,
+    /// The jobs that run or wait in the background (section 11.1).
+    pub jobs: Vec<Running>,
+    /// The jobs of the background that ended and wait for a pass to collect them.
+    pub jobs_ended: usize,
     /// The reset time of the reading of each window that is in force, RFC 3339 UTC: the 5-hour
     /// window, then the 7-day window.
     pub resets: [Option<String>; 2],
@@ -819,11 +823,17 @@ impl App {
     /// The state of a ticket in the words of the app.
     pub fn now_of(&self, view: &TicketView, facts: &StateFacts) -> Now {
         let running = self.local.data.as_ref().and_then(|l| l.running.as_ref());
+        let jobs = self
+            .local
+            .data
+            .as_ref()
+            .map_or(&[][..], |l| l.jobs.as_slice());
         now::now(&now::Input {
             view,
             facts,
             needs: self.needs(),
             running,
+            jobs,
             pass: self.pass(),
             wall: self.clock.wall,
             offset_seconds: self.clock.offset_seconds,

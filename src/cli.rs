@@ -827,6 +827,13 @@ pub enum ExecutorCommand {
         /// The verb, such as git.push
         verb: String,
     },
+
+    /// Run one job in the background. The tick starts it as a detached process
+    #[command(hide = true)]
+    JobRun {
+        /// The run id, such as 20261120T083753Z-DEMO-12-proof
+        id: String,
+    },
 }
 
 impl ExecutorCommand {
@@ -836,6 +843,7 @@ impl ExecutorCommand {
             ExecutorCommand::Approve { .. } => "approve",
             ExecutorCommand::Promote { .. } => "promote",
             ExecutorCommand::Demote { .. } => "demote",
+            ExecutorCommand::JobRun { .. } => "job-run",
         }
     }
 }

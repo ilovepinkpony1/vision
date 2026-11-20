@@ -200,6 +200,7 @@ fn run_steps(pass: &mut Pass, done: &mut Vec<String>) -> Result<()> {
     executor::reconcile_operations(pass).context("step 3, reconcile the operations")?;
     done.push("reconcile".into());
     turn::collect_ended_turns(pass).context("step 4, collect the ended turns")?;
+    executor::collect_runs(pass).context("step 4, collect the jobs of the background")?;
     questions::tick(pass).context("step 4, the cards and the Judge")?;
     pipeline::slots::tick(pass).context("step 4, the slots")?;
     done.push("collect".into());

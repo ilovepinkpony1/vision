@@ -196,6 +196,8 @@ fn old_local(paths: &Paths, wall: OffsetDateTime) -> Local {
         },
         timer: vision::install::is_installed(paths),
         running: view.running,
+        jobs: Vec::new(),
+        jobs_ended: 0,
         resets: [reset(Window::FiveHour), reset(Window::SevenDay)],
     }
 }

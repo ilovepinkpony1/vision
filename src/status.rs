@@ -31,6 +31,8 @@ pub struct StatusView {
     pub tickets: Vec<TicketView>,
     /// The job or the operation that a pass runs now, or `None`.
     pub running: Option<Running>,
+    /// The jobs that run or wait in the background (section 11.1).
+    pub jobs: Vec<Running>,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,6 +160,19 @@ fn kill_turns(ctx: &Ctx) {
         }
         Err(e) => eprintln!("warning: could not kill each running turn: {e:#}"),
     }
+    // The jobs of the background stop too, and run again after `vision on`.
+    let stopped = crate::executor::runs::stop(&ctx.paths, None);
+    if !stopped.is_empty() {
+        ctx.log(&format!(
+            "off: stopped the job run(s) {}",
+            stopped.join(", ")
+        ));
+        println!(
+            "Stopped {} job(s) of the background: {}. They run again after `vision on`.",
+            stopped.len(),
+            stopped.join(", ")
+        );
+    }
 }
 
 impl StatusView {
@@ -191,6 +206,7 @@ impl StatusView {
             needs,
             tickets,
             running: crate::running::read(&ctx.paths),
+            jobs: crate::executor::runs::views(&ctx.paths),
         })
     }
 
@@ -220,6 +236,21 @@ impl StatusView {
                 running.label(),
                 running.ticket,
                 running.started
+            );
+        }
+        for (n, job) in self.jobs.iter().enumerate() {
+            let what = if job.what == "queued job" {
+                "waits for a place"
+            } else {
+                "runs"
+            };
+            let _ = writeln!(
+                out,
+                "{}the job {} of {} {what} in the background since {}",
+                if n == 0 { "jobs     " } else { "         " },
+                job.name,
+                job.ticket,
+                job.started
             );
         }
         let _ = writeln!(

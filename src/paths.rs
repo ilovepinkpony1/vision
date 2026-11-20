@@ -76,6 +76,12 @@ impl Paths {
         self.home.join("running.json")
     }
 
+    /// The folders of the jobs that run in the background, one for each run. See
+    /// [`crate::executor::runs`].
+    pub fn jobs_dir(&self) -> PathBuf {
+        self.home.join("jobs")
+    }
+
     pub fn log_dir(&self) -> PathBuf {
         self.home.join("log")
     }

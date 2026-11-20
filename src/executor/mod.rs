@@ -30,6 +30,7 @@ pub mod gates;
 mod jobs;
 mod observe;
 mod ops;
+pub mod runs;
 mod scripts;
 
 use anyhow::Result;
@@ -43,8 +44,8 @@ use crate::tick::{JobRun, OperationRun, Pass};
 pub use clean::{Document, RESERVED_DOCUMENTS};
 pub use context::{diff, short, TicketContext};
 pub use jobs::{
-    job, job_command, job_passed, job_passed_with, job_source, read, write_documents, JobResult,
-    ReadAnswer, JOB_CHECK,
+    job, job_command, job_passed, job_passed_with, job_source, read, write_documents, JobCall,
+    JobResult, ReadAnswer, JOB_CHECK,
 };
 pub use observe::{
     observe_outside, observe_queue, observe_ticket, seen_comments, CiFacts, PrFacts, QueueTicket,
@@ -71,6 +72,7 @@ pub fn run(ctx: &Ctx, command: ExecutorCommand) -> Result<()> {
         } => commands::approve(ctx, &key, &verb, &commit, op.as_deref()),
         ExecutorCommand::Promote { verb } => commands::ladder(ctx, &verb, true),
         ExecutorCommand::Demote { verb } => commands::ladder(ctx, &verb, false),
+        ExecutorCommand::JobRun { id } => runs::run_command(ctx, &id),
     }
 }
 
@@ -81,11 +83,20 @@ pub fn reconcile_operations(pass: &mut Pass) -> Result<()> {
     Ok(())
 }
 
-/// Tick step 7 for [`crate::tick::Action::RunJob`]: run one job of the adapter, and store its
-/// checks and its documents. A job that does not pass is a result, not an error.
+/// Tick step 7 for [`crate::tick::Action::RunJob`]: ask for a run of the job in the background,
+/// unless one of the same job of the ticket waits or runs. A later pass collects its checks and
+/// its documents ([`runs::collect`]). A job that does not pass is a result, not an error.
 pub fn run_job(pass: &mut Pass, run: &JobRun) -> Result<()> {
-    job(pass.ctx, &pass.ledger, run)?;
+    if runs::in_flight_of(&pass.ctx.paths, run.ticket.as_str(), &run.job).is_some() {
+        return Ok(());
+    }
+    runs::request(pass.ctx, &pass.ledger, run, None)?;
     Ok(())
+}
+
+/// Tick step 4: collect each job that ended in the background, and start the waiting ones.
+pub fn collect_runs(pass: &mut Pass) -> Result<()> {
+    runs::collect(pass.ctx, &pass.ledger)
 }
 
 /// Tick step 7 for [`crate::tick::Action::RunOperation`]: record the operation as `pending`
