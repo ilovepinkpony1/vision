@@ -32,6 +32,9 @@ pub const NONE: &str = "none";
 /// The key of `on` of a turn step for a turn after which the branch head differs from the
 /// head at the entry into the step.
 pub const COMMITS: &str = "commits";
+/// The key of `on` of a turn step with `fixes` for a turn with commits whose document of fixes
+/// lists only findings that are MINOR or NIT and not BLOCKING.
+pub const MINOR: &str = "minor";
 /// The effort of an agent of `[agents.<name>]` when `effort` is missing.
 pub const DEFAULT_AGENT_EFFORT: Effort = Effort::High;
 /// The turns that one visit of a turn step gets for failed end facts when `rounds` is missing:
@@ -284,6 +287,7 @@ impl Step {
                 with,
                 findings: None,
                 team: Vec::new(),
+                fixes: None,
             }),
             next: self.next.clone(),
             on: BTreeMap::new(),
@@ -378,6 +382,9 @@ pub struct TurnStep {
     /// `team`: the members that work in parallel, each in its own turn and session. Empty for
     /// a step of one agent.
     pub team: Vec<Member>,
+    /// `fixes`: the document of the step that lists the findings that its turn fixed, such as
+    /// `cr-fixed.md`. With the key `minor` of `on`, fixes of minor findings only go there.
+    pub fixes: Option<String>,
 }
 
 impl TurnStep {
@@ -1917,6 +1924,7 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
             "next",
             "cap",
             "findings",
+            "fixes",
             "on",
             "rounds",
             "fail",
@@ -2205,6 +2213,14 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
         }
         _ => BTreeMap::new(),
     };
+    if let StepKind::Turn(turn) = &kind {
+        if turn.fixes.is_some() && !on.contains_key(COMMITS) {
+            problems.add(
+                &at,
+                "fixes is read only for the key minor of on, such as on = { commits = \"review-lanes\", minor = \"qa-local\", none = \"qa-local\" }",
+            );
+        }
+    }
     match &kind {
         StepKind::End => {}
         StepKind::Ask(_) => {
@@ -2228,14 +2244,25 @@ fn parse_step(index: usize, mut table: Table, problems: &mut Problems) -> Option
                         &at,
                         "on moves a turn step by its commits or by its findings, never by both",
                     );
-                } else if keys != [COMMITS, NONE] {
+                } else if keys != [COMMITS, NONE] && keys != [COMMITS, MINOR, NONE] {
                     problems.add(
                         &at,
                         format!(
-                            "on of a turn step that moves by its commits has exactly the keys commits and none, such as on = {{ commits = \"review-lanes\", none = \"ci\" }}, not {}",
+                            "on of a turn step that moves by its commits has exactly the keys commits and none, such as on = {{ commits = \"review-lanes\", none = \"ci\" }}, or also minor with fixes, not {}",
                             keys.join(", ")
                         ),
                     );
+                }
+                match (on.contains_key(MINOR), turn.fixes.is_some()) {
+                    (true, false) => problems.add(
+                        &at,
+                        "the key minor of on needs fixes, the document that lists the fixed findings, such as fixes = \"cr-fixed.md\"",
+                    ),
+                    (false, true) => problems.add(
+                        &at,
+                        "fixes is read only for the key minor of on, such as on = { commits = \"review-lanes\", minor = \"qa-local\", none = \"qa-local\" }",
+                    ),
+                    _ => {}
                 }
                 if !turn.team.is_empty() {
                     problems.add(
@@ -2735,6 +2762,12 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems, rounds: u32) 
         let reads = document_names(table.remove("reads"), at, problems);
         let with = object(table.remove("with"), &format!("{at} with"), problems);
         let findings = string(table.remove("findings"), at, problems);
+        if table.remove("fixes").is_some() {
+            problems.add(
+                at,
+                "a step with team moves by next when each member is done, so it has no fixes",
+            );
+        }
         return TurnStep {
             agent: String::new(),
             turn: TurnKind::Reader,
@@ -2742,6 +2775,7 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems, rounds: u32) 
             with,
             findings,
             team: members,
+            fixes: None,
         };
     }
     let agent = string(table.remove("agent"), at, problems).unwrap_or_default();
@@ -2765,6 +2799,15 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems, rounds: u32) 
             );
         }
     }
+    let fixes = string(table.remove("fixes"), at, problems);
+    if let Some(doc) = &fixes {
+        if doc.contains('/') || !doc.ends_with(".md") {
+            problems.add(
+                at,
+                format!("fixes names a document of the ticket folder, such as fixes = \"cr-fixed.md\", not `{doc}`"),
+            );
+        }
+    }
     TurnStep {
         agent,
         turn,
@@ -2772,6 +2815,7 @@ fn turn_step(table: &mut Table, at: &str, problems: &mut Problems, rounds: u32) 
         with,
         findings,
         team: Vec::new(),
+        fixes,
     }
 }
 
@@ -3965,6 +4009,17 @@ url = "http://localhost:3000"
             "findings = \"review\"\non = { commits = \"refine\", none = \"ci\" }",
         );
         parse(&with_findings).unwrap();
+        // Commits that fix only minor findings can go to a step of their own.
+        let minor = with(
+            build,
+            "cap = \"review_rounds\"\nfixes = \"cr-fixed.md\"\non = { commits = \"refine\", minor = \"ci\", none = \"ci\" }",
+        );
+        let adapter = parse(&minor).unwrap();
+        let step = adapter.step("build").unwrap();
+        assert_eq!(step.on[MINOR], "ci");
+        assert!(
+            matches!(&step.kind, StepKind::Turn(t) if t.fixes.as_deref() == Some("cr-fixed.md"))
+        );
         for (new, expected) in [
             (
                 "on = { commits = \"refine\" }",
@@ -3989,6 +4044,22 @@ url = "http://localhost:3000"
             (
                 "on = { commits = \"refine\", none = \"gone\" }",
                 "on.none names the step `gone`, which does not exist",
+            ),
+            (
+                "on = { commits = \"refine\", minor = \"ci\", none = \"ci\" }",
+                "the key minor of on needs fixes",
+            ),
+            (
+                "fixes = \"cr-fixed.md\"\non = { commits = \"refine\", none = \"ci\" }",
+                "fixes is read only for the key minor of on",
+            ),
+            (
+                "fixes = \"cr-fixed.md\"\nnext = \"ci\"",
+                "fixes is read only for the key minor of on",
+            ),
+            (
+                "fixes = \"notes/cr-fixed.txt\"\non = { commits = \"refine\", minor = \"ci\", none = \"ci\" }",
+                "fixes names a document of the ticket folder",
             ),
         ] {
             let err = error(&with(build, &format!("cap = \"review_rounds\"\n{new}")));

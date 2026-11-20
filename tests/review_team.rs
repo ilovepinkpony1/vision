@@ -500,6 +500,79 @@ fn a_review_team_reviews_challenges_fixes_and_looks_again_at_the_new_head() {
     );
 }
 
+/// The review step with `fixes`: commits that fix only minor findings go on to open-pr.
+fn with_minor_route(world: &World) {
+    let path = world.vision.join("adapters/demo/adapter.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let old = "on = { commits = \"review-lanes\", none = \"open-pr\" }";
+    assert!(text.contains(old), "the demo review team changed");
+    let text = text.replace(
+        old,
+        "fixes = \"cr-fixed.md\"\non = { commits = \"review-lanes\", minor = \"open-pr\", none = \"open-pr\" }",
+    );
+    std::fs::write(&path, text).unwrap();
+}
+
+/// The turn of the lead that fixes calc.py and commits, with a list of fixed findings.
+fn lead_fixes_listed(text: &str, fixed: &str) -> Value {
+    runs_then(
+        &format!("printf '{text}\\n' >> calc.py && git add calc.py && git commit -q -m 'fix: keep the fraction'"),
+        result(
+            "Fixed the findings.",
+            &[("cr.md", "No open finding."), ("cr-fixed.md", fixed)],
+        ),
+    )
+}
+
+#[test]
+fn a_fix_of_minor_findings_only_goes_on_without_a_new_round() {
+    let (world, _, _) = team_world();
+    with_minor_route(&world);
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([lead_fixes_listed(
+            "# a nit",
+            "## Fixed\n\n1. [MINOR][FOLLOW-UP] calc.py:5\n   The fraction.\n\n2. [NIT][FOLLOW-UP] calc.py:7\n   A name."
+        )]),
+    );
+    take_and_approve(&world);
+    world.tick_until("the move after the review", LONG, |w| {
+        events(w, "step").iter().any(|e| e["from"] == "review")
+    });
+    let moves: Vec<Value> = events(&world, "step")
+        .into_iter()
+        .filter(|e| e["from"] == "review")
+        .collect();
+    assert_eq!(moves[0]["to"], "open-pr", "{moves:?}");
+    assert_eq!(moves[0]["how"], "on minor");
+    assert_eq!(moves[0]["way"], "minor");
+}
+
+#[test]
+fn a_fix_of_a_major_finding_starts_a_new_round_of_review() {
+    let (world, _, _) = team_world();
+    with_minor_route(&world);
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([lead_fixes_listed(
+            "# a major fix",
+            "## Fixed\n\n1. [MAJOR][FOLLOW-UP] calc.py:5\n   The fraction.\n\n2. [NIT][FOLLOW-UP] calc.py:7\n   A name."
+        )]),
+    );
+    take_and_approve(&world);
+    world.tick_until("the move after the review", LONG, |w| {
+        events(w, "step").iter().any(|e| e["from"] == "review")
+    });
+    let moves: Vec<Value> = events(&world, "step")
+        .into_iter()
+        .filter(|e| e["from"] == "review")
+        .collect();
+    assert_eq!(moves[0]["to"], "review-lanes", "{moves:?}");
+    assert_eq!(moves[0]["way"], "commits");
+}
+
 #[test]
 fn the_cap_of_the_lanes_stops_the_third_round() {
     let (world, _, _) = team_world();

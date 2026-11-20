@@ -240,6 +240,7 @@ mod tests {
                 with: Default::default(),
                 findings: None,
                 team: Vec::new(),
+                fixes: None,
             }),
             next: Some("done".into()),
             on: BTreeMap::new(),

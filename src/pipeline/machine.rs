@@ -1709,7 +1709,7 @@ pub(crate) fn gather(
                 .filter(|t| t.end_fact.as_deref() == Some("held"))
             {
                 if step.on.contains_key(crate::adapter::COMMITS) {
-                    branch = Some(commits_branch(ticket, step)?);
+                    branch = Some(commits_branch(ctx, ticket, step)?);
                 } else if !step.on.is_empty() {
                     branch = Some(turn_branch(ctx, ledger, step, &t.id)?);
                 }
@@ -1906,11 +1906,26 @@ fn turn_branch(ctx: &Ctx, ledger: &Ledger, step: &Step, turn_id: &str) -> Result
 /// the head of the branch now differs from the head at the entry into the step, else `none`.
 /// A visit with no head at its entry goes by `commits`, so the branch gets a fresh look. The
 /// detail names the way and the two heads, for the event of the move.
-fn commits_branch(ticket: &Ticket, step: &Step) -> Result<Branch> {
+fn commits_branch(ctx: &Ctx, ticket: &Ticket, step: &Step) -> Result<Branch> {
     let head = head_of(&ticket.clone_dir()?)?;
     let entry = ticket.visit().base;
+    let fixes = match &step.kind {
+        StepKind::Turn(turn) => turn.fixes.as_deref(),
+        _ => None,
+    };
     let way = if entry.as_deref() == Some(head.as_str()) {
         crate::adapter::NONE
+    } else if step.on.contains_key(crate::adapter::MINOR)
+        && fixes
+            .and_then(|doc| {
+                read_optional(&ctx.paths.ticket_doc(&ticket.key, doc))
+                    .ok()
+                    .flatten()
+            })
+            .is_some_and(|text| super::gates::only_minor_fixes(&text))
+    {
+        // The commits fix only findings that do not block: no new round of review for them.
+        crate::adapter::MINOR
     } else {
         crate::adapter::COMMITS
     };

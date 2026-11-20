@@ -31,8 +31,8 @@ pub use model::{
     Gate, GateRule, HumanStep, Job, JobEnv, JobStep, Kinds, LocalTime, Member, ResumeRule,
     Severity, Step, StepKind, TurnStep, Verb, WaitStep, Width, CHANGED, COMMITS, CR_NET_MAX,
     DEFAULT_AGENT_EFFORT, DEFAULT_BASE, DEFAULT_BRANCH, DEFAULT_EVERY, DEFAULT_ROUNDS,
-    DEFAULT_WIDTH_DOC, DEFAULT_WIDTH_FILES, FINDINGS, HEAD_STATE, HEAD_STATES, MAX_ROUNDS, NARROW,
-    NONE, QA_BLOCK, SAME, WIDE,
+    DEFAULT_WIDTH_DOC, DEFAULT_WIDTH_FILES, FINDINGS, HEAD_STATE, HEAD_STATES, MAX_ROUNDS, MINOR,
+    NARROW, NONE, QA_BLOCK, SAME, WIDE,
 };
 
 /// The name of the step list in an adapter folder.

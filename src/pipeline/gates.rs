@@ -136,6 +136,52 @@ pub fn cr_findings(text: &str) -> Vec<CrFinding> {
     cr_report(text).findings
 }
 
+/// True when a document of fixes, such as `cr-fixed.md`, lists at least one fixed finding, and
+/// each one is MINOR or NIT and not tagged BLOCKING. The findings are the numbered items of the
+/// section whose heading starts with `Fixed`, or of the whole document when it has no such
+/// heading. A finding whose first line names no severity counts as one that can block.
+pub fn only_minor_fixes(text: &str) -> bool {
+    let findings = cr_findings(&fixed_section(text));
+    !findings.is_empty()
+        && findings.iter().all(|f| {
+            matches!(f.severity.as_deref(), Some("MINOR" | "NIT")) && f.blocking != Some(true)
+        })
+}
+
+/// The lines under the heading that starts with `Fixed`, up to the next heading of the same
+/// level or higher. The whole text when no heading starts with `Fixed`.
+fn fixed_section(text: &str) -> String {
+    let heading = |line: &str| -> Option<(usize, String)> {
+        let t = line.trim_start();
+        let level = t.chars().take_while(|c| *c == '#').count();
+        (level > 0 && t[level..].starts_with(' '))
+            .then(|| (level, t[level..].trim().to_lowercase()))
+    };
+    let mut out = Vec::new();
+    let mut inside: Option<usize> = None;
+    let mut found = false;
+    for line in text.lines() {
+        if let Some((level, title)) = heading(line) {
+            if inside.is_some_and(|l| level <= l) {
+                inside = None;
+            }
+            if inside.is_none() && title.starts_with("fixed") {
+                inside = Some(level);
+                found = true;
+                continue;
+            }
+        }
+        if inside.is_some() {
+            out.push(line);
+        }
+    }
+    if found {
+        out.join("\n")
+    } else {
+        text.to_string()
+    }
+}
+
 /// Reads the first line of a finding: `N. [SEVERITY][TAG] path:line`. `None` for a line that
 /// does not start a finding.
 fn cr_header(line: &str) -> Option<CrFinding> {
@@ -605,6 +651,27 @@ pub fn notice_issues(block: &[Severity], text: &str) -> Vec<QaIssue> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_minor_fixes_reads_the_section_fixed() {
+        let doc = "# Review round 4: fixed findings and decisions\n\n## Fixed\n\n1. [MINOR][FOLLOW-UP] a.rb:1 (F2)\n   The link.\n\n2. [NIT][FOLLOW-UP] b.rb:2\n   A name.\n\n## Still open\n\n1. [MAJOR][BLOCKING] c.rb:3\n";
+        assert!(only_minor_fixes(doc), "the open finding is not a fix");
+        let major = doc.replace("2. [NIT][FOLLOW-UP]", "2. [MAJOR][FOLLOW-UP]");
+        assert!(!only_minor_fixes(&major));
+        let blocking = doc.replace("1. [MINOR][FOLLOW-UP]", "1. [MINOR][BLOCKING]");
+        assert!(!only_minor_fixes(&blocking));
+        assert!(
+            !only_minor_fixes("## Fixed\n\nNothing.\n"),
+            "no fixed finding"
+        );
+        assert!(!only_minor_fixes(
+            "## Fixed\n\n1. [x] a.rb:1 a fix with no severity\n"
+        ));
+        assert!(
+            only_minor_fixes("1. [NIT][FOLLOW-UP] a.rb:1\n"),
+            "no heading: the whole text"
+        );
+    }
 
     fn cr(net_max: f64) -> Gate {
         Gate {
