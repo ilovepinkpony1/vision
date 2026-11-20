@@ -128,6 +128,9 @@ pub fn explain(raw: &str) -> Friendly {
     if let Some(friendly) = shadow(text, raw) {
         return friendly;
     }
+    if let Some(friendly) = unrouted(text, raw) {
+        return friendly;
+    }
     if let Some((verb, rest)) = text.split_once(" was refused by the size gate: ") {
         let (lines, limit) = numbers_of(rest);
         let headline = match (lines, limit) {
@@ -379,6 +382,32 @@ fn cap(text: &str, raw: &str) -> Option<Friendly> {
     Some(Friendly::new(headline, Some(action), raw))
 }
 
+/// `the step S watches W, and its value `V` is in neither on nor wait, so nothing moves the
+/// ticket`. The value `conflict` of the review is a pull request that conflicts with its base.
+fn unrouted(text: &str, raw: &str) -> Option<Friendly> {
+    let rest = text.strip_prefix("the step ")?;
+    let (step, rest) = rest.split_once(" watches ")?;
+    let (watch, rest) = rest.split_once(", and its value `")?;
+    let (value, rest) = rest.split_once('`')?;
+    if !rest.starts_with(" is in neither on nor wait") {
+        return None;
+    }
+    if value == "conflict" {
+        return Some(Friendly::new(
+            format!("The pull request conflicts with its base branch, so the step {step} cannot go on"),
+            Some("Merge the base branch into the branch of the ticket, resolve each conflict, and push the branch. Then press r".into()),
+            raw,
+        ));
+    }
+    Some(Friendly::new(
+        format!("The step {step} got the value `{value}` of {watch}, and no route of the step names it, so the ticket does not move"),
+        Some(format!(
+            "Fix the outside state, or add `{value}` to on or wait of the step {step} in adapter.toml. Then press r"
+        )),
+        raw,
+    ))
+}
+
 /// `V is in the mode shadow: ... Run `vision promote V` ...`.
 fn shadow(text: &str, raw: &str) -> Option<Friendly> {
     let at = text.find(" is in the mode shadow")?;
@@ -610,6 +639,34 @@ mod tests {
         assert_eq!(
             explain("the secrets of [secrets] could not be read, so no entry is written: the command of the secret FORGE_TOKEN did not end in 30 s. Fix it in [secrets] of config.toml").headline,
             "Vision could not read the secret FORGE_TOKEN: its command did not answer in time."
+        );
+    }
+
+    #[test]
+    fn a_watched_value_that_no_route_names_says_what_to_do() {
+        let raw = "needs-you at the step ready-to-merge: the step ready-to-merge watches review.state, and its value `conflict` is in neither on nor wait, so nothing moves the ticket. Fix the outside state or adapter.toml, then run vision retry";
+        let f = explain(raw);
+        assert_eq!(
+            f.headline,
+            "The pull request conflicts with its base branch, so the step ready-to-merge cannot go on."
+        );
+        assert_eq!(
+            f.action.as_deref(),
+            Some("Merge the base branch into the branch of the ticket, resolve each conflict, and push the branch. Then press r.")
+        );
+        assert_eq!(f.details.as_deref(), Some(raw));
+        assert_eq!(
+            f.action_for_command_line("DEMO-12").as_deref(),
+            Some("Merge the base branch into the branch of the ticket, resolve each conflict, and push the branch. Then run `vision retry DEMO-12`.")
+        );
+        let other = explain("the step look watches pr.draft, and its value `none` is in neither on nor wait, so nothing moves the ticket. Fix the outside state or adapter.toml, then run vision retry");
+        assert_eq!(
+            other.headline,
+            "The step look got the value `none` of pr.draft, and no route of the step names it, so the ticket does not move."
+        );
+        assert_eq!(
+            other.action.as_deref(),
+            Some("Fix the outside state, or add `none` to on or wait of the step look in adapter.toml. Then press r.")
         );
     }
 
