@@ -1,7 +1,8 @@
 //! `job`: one job, such as the proof (design section 11.1).
 //!
-//! A job gets no secret, unless its table in adapter.toml sets `secrets = true`. Only `ci-log`
-//! and `comments` do, because they only read GitHub and run no code of the project. Each command
+//! A job gets no secret, unless its table in adapter.toml sets `secrets = true`. Only `ci-log`,
+//! `comments`, and `base-merge` do, because they only read GitHub or run git, and run no code of
+//! the project. Each command
 //! of the project (the tests, the linter, the second reviewer, the app) runs with a plain
 //! environment, in its own session and process group, with a time limit. A file name from the
 //! diff reaches it only as one item of an argument list, never inside the text of a shell
@@ -36,8 +37,9 @@ const USER_AGENT: &str = "vision-jira-github-adapter";
 
 type Job = fn(&Config, &Map<String, Value>) -> Res<Value>;
 
-const JOBS: [(&str, Job); 6] = [
+const JOBS: [(&str, Job); 7] = [
     ("app-start", app_start),
+    ("base-merge", base_merge),
     ("ci-log", ci_log),
     ("comments", comments),
     ("precheck", super::precheck::precheck),
@@ -956,6 +958,191 @@ pub(super) fn last_lines(text: &str, count: usize) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// base-merge ------------------------------------------------------------------------------------
+
+/// The document of the job base-merge, for Merger.
+const BASE_MERGE_DOC: &str = "base-merge.md";
+
+/// The ref that the job base-merge fetches the base branch into: the base ref of the adapter,
+/// such as `refs/remotes/origin/main` for `origin/main`, so that the gates, the precheck, and
+/// the review diff read the change of the ticket against the new base. A base ref of another
+/// form gets `refs/vision/base`.
+fn base_target(config: &Config, base: &str) -> String {
+    match config
+        .base_ref
+        .as_deref()
+        .map(str::trim)
+        .and_then(|r| r.split_once('/'))
+    {
+        Some((remote, branch))
+            if branch == base
+                && !remote.is_empty()
+                && remote
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                && !remote.starts_with('.') =>
+        {
+            format!("refs/remotes/{remote}/{branch}")
+        }
+        _ => "refs/vision/base".into(),
+    }
+}
+
+/// Starts the merge of the base branch into the branch of the ticket, in the clone itself, for
+/// a pull request that conflicts with its base. It fetches the base branch from the forge into
+/// the base ref of the adapter (see [`base_target`]), then runs `git merge` with no commit. The
+/// merge waits in the clone with its conflicts, and Merger resolves them and commits the merge.
+/// The job never commits and never pushes, and git runs no hook of the project. A merge that
+/// waits from an earlier run goes first. The job refuses a clone with other changes that no
+/// commit holds, and a branch that holds the tip of the base already.
+fn base_merge(config: &Config, call: &Map<String, Value>) -> Res<Value> {
+    let why = "the job base-merge";
+    let clone = match call.get("clone") {
+        Some(Value::String(c)) if Path::new(c).is_dir() => PathBuf::from(c),
+        _ => return fail(format!("{why} needs the clone of the ticket")),
+    };
+    let key = check_key(call.get("key"), "the ticket key")?;
+    let base = config.base_branch()?;
+    if super::act::bad_ref(&base) {
+        return fail(format!(
+            "{why} cannot fetch the base branch {}: it is not a valid branch name",
+            py_repr_str(&base)
+        ));
+    }
+    let branch = match call.get("branch") {
+        Some(Value::String(b)) if !b.trim().is_empty() => b.trim().to_string(),
+        _ => "the branch of the ticket".into(),
+    };
+    if super::act::merge_waits(&clone)? {
+        Git::new(&["merge", "--abort"], Some(&clone)).run()?;
+    }
+    let dirty = super::act::names(
+        &Git::new(
+            &["status", "--porcelain", "--untracked-files=no"],
+            Some(&clone),
+        )
+        .text()?,
+    );
+    if !dirty.is_empty() {
+        let shown: Vec<&str> = dirty.iter().take(5).map(String::as_str).collect();
+        return fail(format!(
+            "{why} needs a clean clone, and {} has changes that no commit holds: {}. Commit or remove them, then run the step again",
+            clone.display(),
+            shown.join(", ")
+        ));
+    }
+    let url = super::act::remote_url(config, why)?;
+    let settings = [
+        super::act::NO_REDIRECT.to_string(),
+        super::act::auth_config(&url, &super::core::secret("FORGE_TOKEN", why)?),
+    ];
+    let target = base_target(config, &base);
+    let refspec = format!("+refs/heads/{base}:{target}");
+    Git::new(
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-recurse-submodules",
+            &url,
+            &refspec,
+        ],
+        Some(&clone),
+    )
+    .timeout(450)
+    .config(&settings)
+    .run()?;
+    let tip = Git::new(
+        &["rev-parse", "--verify", &format!("{target}^{{commit}}")],
+        Some(&clone),
+    )
+    .text()?;
+    let head = Git::new(&["rev-parse", "--verify", "HEAD^{commit}"], Some(&clone)).text()?;
+    let holds = Git::new(&["merge-base", "--is-ancestor", &tip, &head], Some(&clone))
+        .unchecked()
+        .run()?;
+    if holds.code == Some(0) {
+        return fail(format!(
+            "{branch} already holds {base} at {}, so there is nothing to merge. If the pull request still shows a conflict, GitHub did not see the last push yet: run the step again in a few minutes",
+            short(&tip)
+        ));
+    }
+    let message = format!("Merge {base} ({}) into {branch}", short(&tip));
+    // The merge records no identity, because Merger commits it. git asks for one all the same.
+    let mut identity = super::act::identity_settings(call);
+    if identity.is_empty() {
+        identity = vec![
+            "user.name=Vision".to_string(),
+            "user.email=vision@localhost".to_string(),
+        ];
+    }
+    let merged = Git::new(
+        &["merge", "--no-ff", "--no-commit", "-m", &message, &tip],
+        Some(&clone),
+    )
+    .unchecked()
+    .timeout(600)
+    .config(&identity)
+    .run()?;
+    let said = clean(
+        format!("{}{}", merged.stdout_text(), merged.stderr_text()).trim(),
+        4000,
+    );
+    if !super::act::merge_waits(&clone)? {
+        return fail(format!(
+            "git merge of {base} at {} did not start: {}",
+            short(&tip),
+            clean(&said, 300)
+        ));
+    }
+    let files = super::act::names(
+        &Git::new(&["diff", "--name-only", "--diff-filter=U"], Some(&clone)).text()?,
+    );
+    let list = if files.is_empty() {
+        "None: git merged each file. Make sure that the merged code still works with the change of the ticket, then commit the merge.".to_string()
+    } else {
+        files
+            .iter()
+            .map(|f| format!("- `{f}`"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let content = format!(
+        "# The merge of {base} into the branch of {key}\n\n\
+         The pull request of {key} conflicts with its base branch. Vision fetched the base branch and started its merge into the branch of the ticket, in the clone itself. The merge waits there.\n\n\
+         - Base branch: `{base}`\n\
+         - Tip of the base branch: `{tip}`\n\
+         - Branch of the ticket: `{branch}`\n\
+         - Head of the ticket before the merge: `{head}`\n\
+         - Merge message: `{message}`\n\n\
+         ## Files with a conflict\n\n{list}\n\n\
+         Resolve each conflict in the clone. Then stage the files and commit the merge with `git commit --no-edit`, which keeps the merge message above. Do not abort the merge, rebase, reset, or push: after the turn, Vision runs the precheck and pushes the branch.\n\n\
+         ## What git merge said\n\n```text\n{said}\n```\n"
+    );
+    let detail = if files.is_empty() {
+        format!(
+            "the merge of {base} at {} waits in the clone with no conflict",
+            short(&tip)
+        )
+    } else {
+        let shown: Vec<&str> = files.iter().take(5).map(String::as_str).collect();
+        let more = files.len().saturating_sub(shown.len());
+        let mut names = shown.join(", ");
+        if more > 0 {
+            names.push_str(&format!(" and {more} more"));
+        }
+        format!(
+            "the merge of {base} at {} waits in the clone with a conflict in {names}",
+            short(&tip)
+        )
+    };
+    Ok(json!({
+        "ok": true,
+        "detail": detail,
+        "documents": [{"name": BASE_MERGE_DOC, "content": content}],
+    }))
 }
 
 // second-review ---------------------------------------------------------------------------------

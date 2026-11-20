@@ -1,4 +1,4 @@
-//! job: proof, second-review, comments, ci-log, app-start, and a job with a command.
+//! job: proof, second-review, comments, ci-log, app-start, base-merge, and a job with a command.
 //!
 //! The tests of the project in these tests are shell scripts: `sh <file>` passes when the
 //! script exits with 0. The app of app-start is this test binary (see [`serve_test_app`]).
@@ -18,7 +18,10 @@ use vision::adapters::jira_github::jobs::{
 use crate::fixtures::{
     comment_at, issue_comment, pull, reply, review_with, run_ended, GitHubWorld, HEAD, REPO_PATH,
 };
-use crate::jira_github_support::{all_secrets, git, secret, AdapterTest, Outcome, Reply, BRANCH};
+use crate::jira_github_support::{
+    all_secrets, git, git_output, secret, secrets_without, AdapterTest, Outcome, Reply, Repos,
+    BRANCH,
+};
 
 const TEST_COMMAND: &str = "sh";
 const CALC: &str = "add() { echo $(($1 + $2)); }\n";
@@ -1577,5 +1580,191 @@ fn command_a_failed_command_gives_its_exit_code_and_its_last_lines() {
             .detail()
             .contains("it wrote nothing to its standard error"),
         "{quiet:?}"
+    );
+}
+
+// base-merge ------------------------------------------------------------------------------------
+
+/// A clone on the branch of the ticket and its bare remote, where `main` moved after the branch
+/// started. `conflict` makes the new commit of `main` change the same lines of app.py as the
+/// head of the ticket.
+struct BaseMerge {
+    t: AdapterTest,
+    repos: Repos,
+    tip: String,
+}
+
+impl BaseMerge {
+    fn new(conflict: bool) -> BaseMerge {
+        let t = AdapterTest::new();
+        let repos = Repos::new(&t.path("repos"));
+        let remote = repos.remote.display().to_string();
+        git(&["checkout", "--quiet", "-b", "side", "main"], &repos.clone);
+        if conflict {
+            repos.write(&[(
+                "app.py",
+                "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n",
+            )]);
+        } else {
+            repos.write(&[("notes.md", "Notes of another ticket.\n")]);
+        }
+        let tip = repos.commit("a change of another ticket");
+        git(
+            &["push", "--quiet", &remote, "side:refs/heads/main"],
+            &repos.clone,
+        );
+        git(&["checkout", "--quiet", BRANCH], &repos.clone);
+        git(&["branch", "--quiet", "-D", "side"], &repos.clone);
+        BaseMerge { t, repos, tip }
+    }
+
+    fn run_with(&self, secrets: Vec<(String, String)>) -> Outcome {
+        let config = self.t.config(json!({
+            "git_remote_url": self.repos.remote.display().to_string(),
+        }));
+        self.t
+            .job("base-merge")
+            .config(config)
+            .secrets(secrets)
+            .field("clone", json!(self.repos.clone.display().to_string()))
+            .field("head", json!(self.repos.head))
+            .field(
+                "git",
+                json!({"name": "app[bot]", "email": "7+app[bot]@users.noreply.github.com"}),
+            )
+            .run()
+    }
+
+    fn run(&self) -> Outcome {
+        self.run_with(all_secrets())
+    }
+
+    fn rev(&self, reference: &str) -> Option<String> {
+        let output = git_output(
+            &["rev-parse", "--verify", "--quiet", reference],
+            &self.repos.clone,
+        );
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!text.is_empty()).then_some(text)
+    }
+
+    fn doc(result: &Outcome) -> String {
+        assert_eq!(
+            result.json["documents"][0]["name"], "base-merge.md",
+            "{result:?}"
+        );
+        result.json["documents"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+}
+
+#[test]
+fn base_merge_fetches_the_base_and_leaves_the_merge_with_its_conflicts_for_merger() {
+    let m = BaseMerge::new(true);
+    let result = m.run();
+    assert_eq!(result.code, 0, "{result:?}");
+    assert_eq!(result.json["ok"], true, "{result:?}");
+    let short = &m.tip[..12];
+    assert_eq!(
+        result.detail(),
+        format!("the merge of main at {short} waits in the clone with a conflict in app.py")
+    );
+    let doc = BaseMerge::doc(&result);
+    for part in [
+        "# The merge of main into the branch of DEMO-12".to_string(),
+        format!("- Tip of the base branch: `{}`", m.tip),
+        format!("- Head of the ticket before the merge: `{}`", m.repos.head),
+        format!("- Merge message: `Merge main ({short}) into {BRANCH}`"),
+        "- `app.py`".to_string(),
+        "`git commit --no-edit`".to_string(),
+    ] {
+        assert!(doc.contains(&part), "{part}\n{doc}");
+    }
+    // The base ref of the adapter holds the new tip, the merge waits, and the branch did not move.
+    assert_eq!(
+        m.rev("refs/remotes/origin/main").as_deref(),
+        Some(m.tip.as_str())
+    );
+    assert_eq!(m.rev("MERGE_HEAD").as_deref(), Some(m.tip.as_str()));
+    assert_eq!(m.rev("HEAD").as_deref(), Some(m.repos.head.as_str()));
+
+    // Merger resolves app.py and commits the merge with the message of the job.
+    m.repos.write(&[(
+        "app.py",
+        "def add(a, b):\n    return a + b\n\n\ndef mul(a, b):\n    return a * b\n\n\ndef sub(a, b):\n    return a - b\n",
+    )]);
+    git(&["add", "app.py"], &m.repos.clone);
+    git(&["commit", "--quiet", "--no-edit"], &m.repos.clone);
+    let merge = m.rev("HEAD").unwrap();
+    assert_eq!(
+        git(&["log", "-1", "--format=%s %P", &merge], &m.repos.clone),
+        format!(
+            "Merge main ({short}) into {BRANCH} {} {}",
+            m.repos.head, m.tip
+        )
+    );
+
+    // The branch holds the base now, so a second run has nothing to merge.
+    let again = m.run();
+    assert_eq!(again.code, 1, "{again:?}");
+    assert!(
+        again.stderr.contains(&format!(
+            "{BRANCH} already holds main at {short}, so there is nothing to merge"
+        )),
+        "{again:?}"
+    );
+}
+
+#[test]
+fn base_merge_with_no_conflict_leaves_the_merge_for_merger_to_commit() {
+    let m = BaseMerge::new(false);
+    let result = m.run();
+    assert_eq!(result.code, 0, "{result:?}");
+    assert_eq!(
+        result.detail(),
+        format!(
+            "the merge of main at {} waits in the clone with no conflict",
+            &m.tip[..12]
+        )
+    );
+    assert!(BaseMerge::doc(&result).contains("None: git merged each file."));
+    assert_eq!(m.rev("MERGE_HEAD").as_deref(), Some(m.tip.as_str()));
+    assert_eq!(m.rev("HEAD").as_deref(), Some(m.repos.head.as_str()));
+}
+
+#[test]
+fn base_merge_starts_again_over_an_old_merge_and_refuses_other_changes() {
+    let m = BaseMerge::new(true);
+    assert_eq!(m.run().code, 0);
+    // A merge of an earlier run waits with a half resolved file: the job starts it again.
+    m.repos.write(&[("app.py", "half resolved\n")]);
+    let again = m.run();
+    assert_eq!(again.code, 0, "{again:?}");
+    assert_eq!(m.rev("MERGE_HEAD").as_deref(), Some(m.tip.as_str()));
+
+    // A change that no commit holds, with no merge, is refused.
+    git(&["merge", "--abort"], &m.repos.clone);
+    m.repos.write(&[("app.py", "a change by hand\n")]);
+    let dirty = m.run();
+    assert_eq!(dirty.code, 1, "{dirty:?}");
+    assert!(
+        dirty
+            .stderr
+            .contains("has changes that no commit holds: M app.py"),
+        "{dirty:?}"
+    );
+    assert_eq!(m.rev("MERGE_HEAD"), None);
+
+    // The fetch needs the token of the forge.
+    git(&["checkout", "--quiet", "--", "app.py"], &m.repos.clone);
+    let no_token = m.run_with(secrets_without(&["FORGE_TOKEN"]));
+    assert_eq!(no_token.code, 1, "{no_token:?}");
+    assert!(
+        no_token
+            .stderr
+            .contains("the job base-merge needs the secret FORGE_TOKEN"),
+        "{no_token:?}"
     );
 }

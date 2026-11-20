@@ -378,7 +378,7 @@ fn tracker_move(
 // git.push --------------------------------------------------------------------------------------
 
 /// True for a text that is not a valid branch name.
-fn bad_ref(branch: &str) -> bool {
+pub(super) fn bad_ref(branch: &str) -> bool {
     branch.starts_with(['-', '/', '.'])
         || branch.contains("..")
         || branch
@@ -432,7 +432,7 @@ fn check_push_branch(
     Ok(branch)
 }
 
-fn remote_url(config: &Config, why: &str) -> Res<String> {
+pub(super) fn remote_url(config: &Config, why: &str) -> Res<String> {
     let url = match config.text("git_remote_url")? {
         Some(url) => url,
         None => {
@@ -459,13 +459,13 @@ fn remote_url(config: &Config, why: &str) -> Res<String> {
 }
 
 /// The one git configuration value that carries the token: a header for this address only.
-fn auth_config(url: &str, token: &str) -> String {
+pub(super) fn auth_config(url: &str, token: &str) -> String {
     let value = crate::util::base64::encode(format!("x-access-token:{token}").as_bytes());
     format!("http.{url}.extraheader=Authorization: Basic {value}")
 }
 
 /// A redirect never takes the header to a different address.
-const NO_REDIRECT: &str = "http.followRedirects=false";
+pub(super) const NO_REDIRECT: &str = "http.followRedirects=false";
 
 fn temp(prefix: &str) -> Res<TempDir> {
     TempDir::new(prefix).map_err(|e| Error::Unexpected(format!("OSError: {e}")))
@@ -1801,7 +1801,7 @@ fn merge_message(key: &str, head: &str, branch: &str) -> String {
 /// `user.name` and `user.email` from the `git` object of the call (the identity of the commits
 /// of a session), as values for [`Git::config`]. With no such object, git makes its own guess,
 /// and that guess fails on a host whose name has no domain.
-fn identity_settings(call: &Map<String, Value>) -> Vec<String> {
+pub(super) fn identity_settings(call: &Map<String, Value>) -> Vec<String> {
     let text = |key: &str| {
         call.get("git")?
             .get(key)?
@@ -1819,7 +1819,7 @@ fn identity_settings(call: &Map<String, Value>) -> Vec<String> {
 }
 
 /// The non-empty lines of a text, trimmed, such as the file names that git gives.
-fn names(text: &str) -> Vec<String> {
+pub(super) fn names(text: &str) -> Vec<String> {
     splitlines(text)
         .into_iter()
         .map(str::trim)
@@ -1829,7 +1829,7 @@ fn names(text: &str) -> Vec<String> {
 }
 
 /// True when a merge waits in the worktree `work`: git has a MERGE_HEAD there.
-fn merge_waits(work: &Path) -> Res<bool> {
+pub(super) fn merge_waits(work: &Path) -> Res<bool> {
     let found = Git::new(
         &["rev-parse", "--quiet", "--verify", "MERGE_HEAD"],
         Some(work),

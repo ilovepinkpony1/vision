@@ -85,6 +85,8 @@ fn the_adapter_loads_through_the_loader_of_the_core() {
             "fix-ci-review",
             "rerequest",
             "ready-to-merge",
+            "merge-base-review",
+            "merge-base-ready",
             "done"
         ]
     );
@@ -168,9 +170,16 @@ fn only_the_jobs_that_read_the_forge_get_the_secrets() {
     let names: BTreeSet<&str> = adapter.jobs.keys().map(String::as_str).collect();
     assert_eq!(
         names,
-        BTreeSet::from(["app-start", "ci-log", "comments", "proof", "second-review"])
+        BTreeSet::from([
+            "app-start",
+            "base-merge",
+            "ci-log",
+            "comments",
+            "proof",
+            "second-review"
+        ])
     );
-    for job in ["ci-log", "comments"] {
+    for job in ["ci-log", "comments", "base-merge"] {
         assert!(adapter.jobs[job].secrets, "{job}");
     }
     for job in ["proof", "app-start", "second-review"] {
@@ -278,6 +287,8 @@ fn the_path_goes_through_ci_again_after_the_comments_and_each_loop_has_a_cap() {
             "rerequest",
             "in-review",
             "ready-to-merge",
+            "merge-base-review",
+            "merge-base-ready",
             "done"
         ])
     );
@@ -290,6 +301,27 @@ fn the_path_goes_through_ci_again_after_the_comments_and_each_loop_has_a_cap() {
         assert_eq!(step(id).on["comments"], "comments");
     }
     assert_eq!(step("in-review").on["approved"], "ready-to-merge");
+    // A pull request that conflicts with its base: Merger merges the base into the branch, the
+    // branch goes out with a CI run, and the ticket goes back to the step that it came from.
+    for (wait, merge) in [
+        ("in-review", "merge-base-review"),
+        ("ready-to-merge", "merge-base-ready"),
+    ] {
+        assert_eq!(step(wait).on["conflict"], merge);
+        let m = step(merge);
+        let StepKind::Turn(turn) = &m.kind else {
+            panic!("{merge} is a turn step: {m:?}")
+        };
+        assert_eq!(turn.agent, "merger");
+        assert_eq!(turn.turn, TurnKind::Worker);
+        assert_eq!(turn.reads[0], "base-merge.md");
+        let before: Vec<String> = m.before.iter().map(|e| e.label()).collect();
+        assert_eq!(before, ["job:base-merge"]);
+        let after: Vec<String> = m.after.iter().map(|e| e.label()).collect();
+        assert_eq!(after, ["git.push", "ci.run"]);
+        assert_eq!(m.cap.as_deref(), Some("merge"));
+        assert_eq!(m.next.as_deref(), Some(wait));
+    }
 }
 
 #[test]

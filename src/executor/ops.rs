@@ -920,9 +920,10 @@ fn test_gates(
         .collect();
     // The diff from the base to the commit, and the patch of each commit between them. The size
     // gate and the sensitive gate read the diff. The secrets gate reads both.
+    let mut base = String::new();
     let (files, commits) = match (&ticket.clone, call.head.is_empty()) {
         (Some(clone), false) => {
-            let base = ticket.base(adapter)?.unwrap_or_default();
+            base = ticket.base(adapter)?.unwrap_or_default();
             (
                 gates::parse_diff(&diff(clone, &base, &call.head)?),
                 gates::parse_diff(&history(clone, &base, &call.head)?),
@@ -939,10 +940,26 @@ fn test_gates(
     }
     // The size gate and the sensitive gate read the change of Vision. A ticket that the person
     // took from outside Vision brings its branch, and the forge holds that branch already, so
-    // these gates read only the change after the take.
+    // these gates read only the change after the take. A merge of the base branch after the
+    // take brings the changes of other tickets, and the base holds them already: so only a file
+    // that also differs from the base counts.
     let taken = match (&ticket.clone, call.head.is_empty()) {
         (Some(clone), false) => match ticket.taken_from(ledger, &call.head)? {
-            Some(start) => Some((gates::parse_diff(&diff(clone, &start, &call.head)?), start)),
+            Some(start) => {
+                let mut own = gates::parse_diff(&diff(clone, &start, &call.head)?);
+                let merged_base = !base.is_empty()
+                    && crate::util::git::run(
+                        clone,
+                        &["merge-base", "--is-ancestor", &base, &start],
+                    )
+                    .is_err();
+                if merged_base {
+                    let changed: std::collections::BTreeSet<&str> =
+                        files.iter().map(|f| f.path.as_str()).collect();
+                    own.retain(|f| changed.contains(f.path.as_str()));
+                }
+                Some((own, start))
+            }
             None => None,
         },
         _ => None,

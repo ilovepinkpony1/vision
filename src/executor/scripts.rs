@@ -380,7 +380,8 @@ pub struct Runner<'a> {
     pub session: SessionEnv,
     /// The name and the address of a commit that a verb makes, such as the merge commit of
     /// `deploy.merge`, as `{"name": ..., "email": ...}`: the identity of the commits of a
-    /// session. `bin/act` gets it as `git`. Null sends nothing.
+    /// session. `bin/act` and `bin/job` get it as `git`, so that the job base-merge can start a
+    /// merge. Null sends nothing.
     pub git: Value,
 }
 
@@ -496,7 +497,7 @@ impl<'a> Runner<'a> {
         };
         input.insert("config".into(), self.config.clone());
         input.insert("base_ref".into(), Value::String(self.base_ref.clone()));
-        if script == Script::Act && !self.git.is_null() {
+        if matches!(script, Script::Act | Script::Job) && !self.git.is_null() {
             input.insert("git".into(), self.git.clone());
         }
         let bytes = serde_json::to_vec(&Value::Object(input)).unwrap_or_default();

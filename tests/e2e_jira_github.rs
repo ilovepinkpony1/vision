@@ -1087,27 +1087,75 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     );
     p.tick_to("ready-to-merge");
 
-    // The base moved on, and the pull request conflicts with it: review.state is conflict, which
-    // the step names in neither on nor wait, so the person is needed at once.
+    // The base moved on: another ticket put multiply on main, at the place where this ticket
+    // adds subtract. The pull request conflicts with its base, so ready-to-merge sends the
+    // ticket to merge-base-ready. The job base-merge fetches main and starts the merge in the
+    // clone. Merger keeps both functions and commits the merge, the proof holds, and the branch
+    // goes out with a CI run.
+    let team = TempDir::new().unwrap();
+    let work = team.path().join("team");
+    git(
+        team.path(),
+        &[
+            "clone",
+            "--quiet",
+            p.remote.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    let multiply = "\n# Gives a times b.\nmultiply() { echo $(($1 * $2)); }\n";
+    std::fs::write(work.join("calc.sh"), format!("{TOY_CALC}{multiply}")).unwrap();
+    git(&work, &["commit", "--quiet", "-am", "Add multiply"]);
+    git(&work, &["push", "--quiet", "origin", "HEAD:main"]);
+    let tip = git(&work, &["rev-parse", "HEAD"]);
+    let approved = p.head();
+    let addition = team.path().join("multiply.sh");
+    std::fs::write(&addition, multiply).unwrap();
+    p.scenario(
+        "merger",
+        "merge-base-ready",
+        json!([runs_then(
+            &format!(
+                "git checkout --ours calc.sh && cat '{}' >> calc.sh && git add calc.sh && git commit -q --no-edit",
+                addition.display()
+            ),
+            result(
+                "Merged.",
+                &[(
+                    "merge.md",
+                    "# Merge of main into the branch of DEMO-12\n\n## calc.sh\n\nmain added multiply, and the ticket added subtract: both stay.\n"
+                )]
+            )
+        )]),
+    );
     p.server
         .team("conflict", json!({"number": 7, "conflict": true}));
-    p.tick_until_flag("needs-you");
-    assert_eq!(p.step().as_deref(), Some("ready-to-merge"));
-    let reason = p.counts()["reasons"]["needs-you"]["reason"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(
-        reason.contains("watches review.state") && reason.contains("`conflict`"),
-        "{reason}"
-    );
-    // The person merges the base into the branch and pushes; then vision retry: it goes on.
+    p.tick_until("the merge of main", |p| {
+        p.step().as_deref() == Some("merge-base-ready")
+    });
+    // GitHub sees the merge after the push, and the conflict is gone.
     p.server
         .team("conflict", json!({"number": 7, "conflict": false}));
-    p.run(&["retry", KEY]).expect_code(0);
-    p.tick();
-    assert!(p.flags().is_empty(), "{:?}", p.flags());
-    assert_eq!(p.step().as_deref(), Some("ready-to-merge"));
+    p.tick_until("the way back from the merge of main", |p| {
+        p.step().as_deref() == Some("ready-to-merge")
+    });
+    assert!(p.flags().is_empty(), "{:?} {}", p.flags(), p.report());
+    let merged = p.head();
+    assert_eq!(
+        git(&p.clone, &["rev-list", "--parents", "-n", "1", &merged]),
+        format!("{merged} {approved} {tip}")
+    );
+    assert_eq!(
+        git(&p.clone, &["log", "-1", "--format=%s", &merged]),
+        format!("Merge main ({}) into {BRANCH}", &tip[..12])
+    );
+    assert_eq!(p.remote_branch().as_deref(), Some(merged.as_str()));
+    assert_eq!(p.verbs_at(&merged), ["git.push", "ci.run"]);
+    let doc = p
+        .doc("base-merge.md")
+        .expect("the document of the merge of main");
+    assert!(doc.contains("- `calc.sh`") && doc.contains(&tip), "{doc}");
+    assert!(p.doc("merge.md").is_some());
 
     // A late round: after the approval, the lead asks for one more change, so ready-to-merge
     // goes to comments, and the round takes the same path. Its fix leaves TODO.txt, so CI is
@@ -1235,6 +1283,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             "rerequest",
             "in-review",
             "ready-to-merge",
+            "merge-base-ready",
             "ready-to-merge",
             "comments",
             "ci-review",
@@ -1256,6 +1305,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
                 "rerequest",
                 "in-review",
                 "ready-to-merge",
+                "merge-base-ready",
                 "done"
             ]
             .contains(&step.as_str()),
@@ -1274,8 +1324,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         by_verb,
         BTreeMap::from([
             ("ci.rerun", 1),
-            ("ci.run", 5),
-            ("git.push", 5),
+            ("ci.run", 6),
+            ("git.push", 6),
             ("pr.open", 1),
             ("review.reply", 2),
             ("review.rerequest", 2),
@@ -1295,7 +1345,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
             ),
             (
                 "POST /repos/acme/widgets/actions/workflows/ci.yml/dispatches".to_string(),
-                5
+                6
             ),
             ("POST /repos/acme/widgets/issues/7/comments".to_string(), 3),
             ("POST /repos/acme/widgets/pulls".to_string(), 1),
@@ -1326,7 +1376,7 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
         .iter()
         .map(|r| r["head_sha"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(dispatched.len(), 5, "one run for each commit");
+    assert_eq!(dispatched.len(), 6, "one run for each commit");
     let requests = p.server.requests();
     for r in &requests {
         let path = r["path"].as_str().unwrap();
@@ -1441,7 +1491,7 @@ fn a_private_adapter_with_the_built_in_scripts_keeps_each_write_in_shadow() {
     let text = check.to_string();
     assert!(
         text.contains(&p.vision.join("adapters/jira-github").display().to_string())
-            && text.contains("17 steps")
+            && text.contains("19 steps")
             && text.contains("with the built-in scripts builtin:jira-github"),
         "{text}"
     );

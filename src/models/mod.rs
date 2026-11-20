@@ -111,7 +111,7 @@ pub const AGENTS: [AgentSpec; 16] = [
         name: "merger",
         model: "claude-opus-5-5",
         effort: Effort::High,
-        reason: "It resolves the merge conflicts of a deploy. A wrong merge breaks an env that the whole team uses.",
+        reason: "It resolves the merge conflicts of a deploy and of the base branch. A wrong merge breaks an env that the whole team uses.",
         alone: false,
         schema: TURN_SCHEMA,
         runner: Runner::Claude,

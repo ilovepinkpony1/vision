@@ -16,7 +16,7 @@
     shepherd     claude-opus-5-5        high    default                                no turn yet
                  It gives verdicts on review comments and fixes the valid ones.
     merger       claude-opus-5-5        high    default                                no turn yet
-                 It resolves the merge conflicts of a deploy. A wrong merge breaks an env that t…
+                 It resolves the merge conflicts of a deploy and of the base branch. A wrong mer…
     judge        claude-fable-5-2       high    default                                no turn yet
                  It can answer alone, so a wrong answer costs the most. Its turns are short.
   ╭─ recommendation for scout ───────────────────────────────────────────────────────── ▼ 9 more ╮

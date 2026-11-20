@@ -147,14 +147,16 @@
 #   ci-rerun:  green -> ready, red -> fix-ci -> ci
 #   ready:     the person marks the pull request ready -> in-review
 #   in-review: review.state approved -> ready-to-merge, changes or comments -> comments,
-#              merged -> done
+#              conflict -> merge-base-review, merged -> done
 #   comments:  the Shepherd fixes and answers the comments. git.push, then review.reply
 #              -> ci-review
 #   ci-review: CI runs at the new head. green -> rerequest, red -> fix-ci-review -> ci-review
 #   rerequest: an act step, with no turn: review.rerequest asks the reviewers again
 #              -> in-review
 #   ready-to-merge: merged -> done, changes or comments -> comments (a late round takes the
-#              same path)
+#              same path), conflict -> merge-base-ready
+#   merge-base-review, merge-base-ready: Merger merges the base branch into the branch.
+#              git.push, then ci.run -> back to in-review or ready-to-merge
 #
 # Nothing leaves the machine before the review and the local QA hold: the commits of build,
 # review, and fix-qa stay in the clone until open-pr. The steps after open-pr push their own
@@ -166,11 +168,15 @@
 #
 # review.state is the first value that holds of: merged, closed, comments (a comment waits),
 # changes (a reviewer asks for changes and is not asked again), conflict (the open pull request
-# conflicts with its base), approved, and waiting. Neither in-review nor ready-to-merge names
-# conflict in `on` or `wait`, so a conflict gives the ticket the flag needs-you at once, with
-# the value in the reason. The person then merges the base into the branch in the clone,
-# resolves the conflict, commits, pushes the branch, and runs `vision retry KEY`: the step looks
-# again, and the ticket goes on.
+# conflicts with its base), approved, and waiting. in-review and ready-to-merge send conflict to
+# a merge step. Its job base-merge fetches the base branch into the base ref, such as
+# origin/main, and starts the merge of its tip into the branch in the clone, with no commit. The
+# job writes base-merge.md with each file with a conflict. Merger resolves the conflicts and
+# commits the merge in the clone. Then the proof runs, git.push pushes the branch, ci.run starts
+# CI at the new head, and the ticket goes back to the step that it came from. The cap merge
+# stops the fourth merge of the base in a ticket. A conflict that needs a decision of the
+# person ends the turn of Merger with questions. A wait step with no `conflict` in `on` gives
+# the ticket the flag needs-you at once, with the value in the reason.
 #
 # Each turn step of a loop has a cap: fix-ci and fix-ci-review (ci_fix), qa and fix-qa
 # (qa_fix), comments (comments), review (review_rounds). Each wait step names the values that
@@ -463,7 +469,7 @@ every = 120
 id = "in-review"
 kind = "wait"
 watch = "review.state"
-on = { approved = "ready-to-merge", changes = "comments", comments = "comments", merged = "done" }
+on = { approved = "ready-to-merge", changes = "comments", comments = "comments", conflict = "merge-base-review", merged = "done" }
 wait = ["waiting"]
 limit = 1209600
 every = 120
@@ -515,10 +521,34 @@ next = "in-review"
 id = "ready-to-merge"
 kind = "wait"
 watch = "review.state"
-on = { merged = "done", changes = "comments", comments = "comments" }
+on = { merged = "done", changes = "comments", comments = "comments", conflict = "merge-base-ready" }
 wait = ["approved", "waiting"]
 limit = 1209600
 every = 120
+
+[[step]]                      # the pull request conflicts with its base: Merger merges the base in
+id = "merge-base-review"
+kind = "turn"
+agent = "merger"
+turn = "worker"
+before = ["job:base-merge"]
+reads = ["base-merge.md", "approved-plan.md"]
+expects = ["commits", "clean", "doc:merge.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push", "ci.run"]
+cap = "merge"
+next = "in-review"
+
+[[step]]                      # the same merge for a pull request that waits for its merge
+id = "merge-base-ready"
+kind = "turn"
+agent = "merger"
+turn = "worker"
+before = ["job:base-merge"]
+reads = ["base-merge.md", "approved-plan.md"]
+expects = ["commits", "clean", "doc:merge.md", { job = "proof", args = { plan = "{doc:approved-plan.md}" } }]
+after = ["git.push", "ci.run"]
+cap = "merge"
+next = "ready-to-merge"
 
 [[step]]
 id = "done"
@@ -725,4 +755,10 @@ secrets = true
 
 [jobs.ci-log]
 timeout = 300
+secrets = true
+
+# base-merge fetches the base branch with FORGE_TOKEN and starts its merge in the clone. It runs
+# git only, with no hook of the project.
+[jobs.base-merge]
+timeout = 900
 secrets = true

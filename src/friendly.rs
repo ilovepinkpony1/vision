@@ -346,6 +346,14 @@ fn job_cause(job: &str, text: &str) -> (String, Option<String>) {
             None => (format!("its command ended with the exit code {code}"), None),
         };
     }
+    // The job base-merge on a branch that holds the base already.
+    if text.contains("so there is nothing to merge") {
+        let cause = text.split(". ").next().unwrap_or(text);
+        return (
+            trim_period(cause).to_string(),
+            Some("GitHub can show an old conflict for a few minutes after a push. Wait a few minutes, then press r".into()),
+        );
+    }
     // `the precheck failed at abc123: jest failed ...` -> `jest failed ...`
     let cause = text
         .strip_prefix(&format!("the {job} failed at "))
@@ -556,6 +564,19 @@ mod tests {
             Some("Add CI_USER to [secrets] in ~/.vision/config.toml, such as CI_USER = { env = \"VARIABLE\" }, then press r.")
         );
         assert_eq!(f.details.as_deref(), Some(raw));
+    }
+
+    #[test]
+    fn a_base_merge_with_nothing_to_merge_says_to_wait_for_github() {
+        let f = explain("needs-you at the step merge-base-review: the job base-merge before the step merge-base-review did not pass: vision-DEMO-3 already holds main at 0123456789ab, so there is nothing to merge. If the pull request still shows a conflict, GitHub did not see the last push yet: run the step again in a few minutes");
+        assert_eq!(
+            f.headline,
+            "Before the step merge-base-review, the job base-merge failed: vision-DEMO-3 already holds main at 0123456789ab, so there is nothing to merge."
+        );
+        assert_eq!(
+            f.action.as_deref(),
+            Some("GitHub can show an old conflict for a few minutes after a push. Wait a few minutes, then press r.")
+        );
     }
 
     #[test]

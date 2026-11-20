@@ -654,6 +654,55 @@ fn the_sensitive_gate_reads_only_the_change_after_a_take_from_outside() {
 }
 
 #[test]
+fn a_merge_of_the_base_after_a_take_brings_no_change_of_the_base_into_the_gates() {
+    let demo = Demo::new();
+    let taken = demo.commit(&[("work.txt", "work by hand\n")], "Work by hand");
+    take_from_outside(&demo, BRANCH, &taken);
+    // The base branch moves with a migration of another ticket.
+    git(
+        &demo.clone,
+        &["checkout", "--quiet", "-b", "side", "origin/main"],
+    );
+    demo.commit(
+        &[(
+            "db/migrate/002_more.sql",
+            "CREATE TABLE more (id INTEGER);\n",
+        )],
+        "A migration of another ticket",
+    );
+    git(&demo.clone, &["push", "--quiet", "origin", "side:main"]);
+    git(&demo.clone, &["checkout", "--quiet", BRANCH]);
+    git(&demo.clone, &["branch", "--quiet", "-D", "side"]);
+    git(&demo.clone, &["fetch", "--quiet", "origin"]);
+    // Merger merges the base into the branch, and the push goes with no hold.
+    git(
+        &demo.clone,
+        &["merge", "--quiet", "--no-ff", "--no-edit", "origin/main"],
+    );
+    let merge = demo.head();
+    let ctx = demo.ctx();
+    let ledger = demo.ledger();
+    let push = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert_eq!(push.outcome, Outcome::Confirmed, "{push:?}");
+    assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(merge.as_str()));
+
+    // A migration of the ticket itself after the merge is still held.
+    let own = demo.commit(
+        &[("db/migrate/003_own.sql", "CREATE TABLE own (id INTEGER);\n")],
+        "A migration of the ticket",
+    );
+    let held = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert_eq!(
+        held.outcome,
+        Outcome::Waiting {
+            command: format!("vision approve {KEY} git.push {own}")
+        },
+        "{held:?}"
+    );
+    assert_eq!(held.held, ["db/migrate/003_own.sql"]);
+}
+
+#[test]
 fn a_sensitive_path_is_held_unless_the_approved_plan_names_it() {
     let demo = Demo::new();
     let head = demo.commit(
