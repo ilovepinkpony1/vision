@@ -1366,6 +1366,7 @@ A command that is not built yet prints `not built yet: <name>` and exits with co
 - A test never calls the real `claude`, the network, or the real home folder. `tests/bin/fake-claude` plays a session from a script file. `VISION_CLAUDE_BIN` and `VISION_HOME` point a test at the fake and at a temporary folder. `tests/bin/fake-aws` plays the aws program, first in PATH under the name `aws`, and `tests/journal.rs` serves a fake MemPalace on a free localhost port.
 - Three tests are the exception: `tests/real_claude.rs`, `tests/real_judge.rs`, and `tests/real_e2e.rs`. They are ignored, and they run only with `VISION_REAL_CLAUDE=1` and `--ignored`. `tests/real_e2e.rs` takes `DEMO-12` through the whole demo path with real sessions of the model `haiku`. `tests/real_claude.rs` also has a test for the commit of a worker, a test that the sandbox holds, and a probe. The probe runs the commands of `VISION_PROBE_COMMANDS` in the sandbox of a worker, in the folder of `VISION_PROBE_DIR`.
 - No name of a company, a person, or a private project goes into the repo.
+- Each error and each warning that the person sees comes through `src/friendly.rs`. It shows what happened in one plain sentence, then what to do, when a rule knows it. The raw text stays below as the details, and the ledger and the log keep it as the evidence. A new shape of reason gets a rule there, with a test.
 
 ```
 clap  serde  serde_json  toml  toml_edit  rusqlite (feature "bundled")

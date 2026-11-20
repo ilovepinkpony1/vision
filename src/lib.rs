@@ -14,6 +14,7 @@ pub mod doctor;
 pub mod escapes;
 pub mod executor;
 pub mod exit;
+pub mod friendly;
 pub mod init;
 pub mod install;
 pub mod journal;

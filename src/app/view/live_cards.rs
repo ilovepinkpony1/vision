@@ -59,7 +59,16 @@ pub fn retry(app: &App, card: &RetryCard, c: &mut Canvas) {
     rows.text(3, head, ink(T.fg).bold());
     rows.blank();
     if let Some(reason) = &card.reason {
-        rows.para(3, &format!("A rule stopped it: {reason}"), 68, ink(T.warn));
+        let friendly = crate::friendly::explain(reason);
+        rows.para(
+            3,
+            &format!("A rule stopped it: {}.", friendly.inline()),
+            68,
+            ink(T.warn),
+        );
+        if let Some(action) = &friendly.action {
+            rows.para(3, action, 68, ink(T.dim));
+        }
         rows.blank();
     }
     let agent = card.agent.as_deref().unwrap_or("the agent");

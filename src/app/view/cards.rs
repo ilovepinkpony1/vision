@@ -292,7 +292,17 @@ pub(super) fn action_rows(app: &App, rows: &mut Rows, run: &Run, go: &str, runni
         Run::Running { .. } => rows.busy(app, running),
         Run::Failed(text) => {
             rows.text(3, "It did not work:", ink(T.bad).bold());
-            let lines = lines_of(text, 72);
+            let friendly = crate::friendly::explain(text);
+            rows.text(3, friendly.headline.clone(), ink(T.bad));
+            if let Some(action) = &friendly.action {
+                rows.text(3, action.clone(), ink(T.fg));
+            }
+            let details = friendly
+                .details
+                .as_deref()
+                .map(|d| format!("Details: {d}"))
+                .unwrap_or_default();
+            let lines = lines_of(&details, 72);
             let shown = lines.len().min(6);
             for line in &lines[..shown] {
                 rows.text(3, line.clone(), ink(T.bad));
@@ -495,10 +505,28 @@ fn help(c: &mut Canvas) {
 
 fn error(c: &mut Canvas, title: &str, text: &str) {
     let mut rows = Rows::default();
-    let lines = lines_of(text, 74);
-    let fit = (c.h - 10).max(1) as usize;
+    // What happened and what to do first, then the raw text as the details.
+    let friendly = crate::friendly::explain(text);
+    for line in lines_of(&friendly.headline, 74) {
+        rows.text(3, line, ink(T.fg).bold());
+    }
+    if let Some(action) = &friendly.action {
+        for line in lines_of(action, 74) {
+            rows.text(3, line, ink(T.fg));
+        }
+    }
+    let details = friendly
+        .details
+        .as_deref()
+        .map(|d| lines_of(&format!("Details: {d}"), 74))
+        .unwrap_or_default();
+    if !details.is_empty() {
+        rows.blank();
+    }
+    let lines = details;
+    let fit = (c.h - 14).max(1) as usize;
     for line in lines.iter().take(fit) {
-        rows.text(3, line.clone(), ink(T.fg));
+        rows.text(3, line.clone(), ink(T.faint));
     }
     if lines.len() > fit {
         rows.text(3, "The rest of the text is cut.", ink(T.faint));

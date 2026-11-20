@@ -273,6 +273,22 @@ impl StatusView {
             );
             for need in &self.needs {
                 let ticket = need.ticket.as_deref().unwrap_or("-");
+                if need.kind == NeedKind::Flag {
+                    // A rule stopped the ticket: what happened and what to do, then the raw
+                    // reason as the details.
+                    let friendly = crate::friendly::explain(&need.text);
+                    let _ = writeln!(
+                        out,
+                        "         {} {ticket} {}: {}",
+                        need_word(need.kind),
+                        need.id,
+                        friendly.short()
+                    );
+                    if let Some(details) = &friendly.details {
+                        let _ = writeln!(out, "           details: {details}");
+                    }
+                    continue;
+                }
                 let _ = writeln!(
                     out,
                     "         {} {ticket} {}: {}",

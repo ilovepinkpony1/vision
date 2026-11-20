@@ -8,17 +8,17 @@
  │                                                                                                          │
  │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
- ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-  MY TICKETS   ╭─ The kill switch failed ─────────────────────────────────────────────────────╮cker · 2 open
- ╭─ To Do · 2 ─│                                                                              │─────────────╮
- │   DEMO-15   │  Vision is not set up at /work/home. Run `vision init` first                 │             │
- │   DEMO-9    │  warning: a second line of text                                              │pull request │
- ╰─────────────│                                                                              │─────────────╯
+ ╰─────────────╭─ The kill switch failed ─────────────────────────────────────────────────────╮─────────────╯
+               │                                                                              │
+  MY TICKETS   │  Vision is not set up at /work/home.                                         │cker · 2 open
+ ╭─ To Do · 2 ─│  Run `vision init` first.                                                    │─────────────╮
+ │   DEMO-15   │                                                                              │             │
+ │   DEMO-9    │  Details: Vision is not set up at /work/home. Run `vision init` first        │pull request │
+ ╰─────────────│  warning: a second line of text                                              │─────────────╯
+               │                                                                              │
                │  esc close                                                                   │
                │                                                                              │
                ╰──────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

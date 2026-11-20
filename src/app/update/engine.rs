@@ -232,7 +232,7 @@ fn pass_done(app: &mut App, result: &ChildResult) {
         app,
         format!(
             "The pass failed: {}. Vision tries again in a minute.",
-            cut(error_line(&text).trim_end_matches('.'), 80)
+            cut(&crate::friendly::explain(&error_line(&text)).inline(), 80)
         ),
         Tone::Bad,
     );
@@ -320,8 +320,9 @@ fn action_done(
 
 /// Shows the reason of a failure: a notice when it is short, else a card of its own.
 pub fn show_error(app: &mut App, title: &str, text: &str) {
-    let line = error_line(text);
-    let one_line = text.trim().lines().count() <= 1;
+    let friendly = crate::friendly::explain(&error_line(text));
+    let line = friendly.inline();
+    let one_line = text.trim().lines().count() <= 1 && friendly.action.is_none();
     if one_line && line.chars().count() <= 70 {
         notice(app, format!("{title}: {line}"), Tone::Bad);
     } else {

@@ -45,9 +45,27 @@ pub fn report(err: &anyhow::Error) -> ExitCode {
     match err.downcast_ref::<Stop>() {
         Some(Stop::NotBuilt(name)) => eprintln!("not built yet: {name}"),
         Some(Stop::Reported(_)) | Some(Stop::Exit(_)) => {}
-        Some(Stop::GateRefused(_)) | None => eprintln!("error: {err:#}"),
+        Some(Stop::GateRefused(_)) | None => eprintln!("{}", error_text(err)),
     }
     ExitCode::from(code(err))
+}
+
+/// An error for the person: what happened, what to do, and the raw text as the details.
+pub fn error_text(err: &anyhow::Error) -> String {
+    let raw = format!("{err:#}");
+    let friendly = crate::friendly::explain(&raw);
+    // A short error that no rule changes reads well as it is.
+    if friendly.action.is_none() && friendly.details.is_none() {
+        return format!("error: {raw}");
+    }
+    let mut out = format!("error: {}", friendly.headline);
+    if let Some(action) = &friendly.action {
+        out.push_str(&format!("\n       {action}"));
+    }
+    if let Some(details) = &friendly.details {
+        out.push_str(&format!("\n       details: {details}"));
+    }
+    out
 }
 
 #[cfg(test)]

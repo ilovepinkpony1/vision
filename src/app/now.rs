@@ -439,7 +439,10 @@ pub fn need_line(need: &Need) -> String {
         NeedKind::Flag if need.id == PAUSED => "paused: you took over its session".into(),
         NeedKind::Flag => {
             let reason = need.text.split_once(": ").map_or("", |(_, r)| r);
-            format!("a rule stopped it: {reason}")
+            format!(
+                "a rule stopped it: {}",
+                crate::friendly::explain(reason).inline()
+            )
         }
         NeedKind::Proposal => "a change of the memory waits for your review".into(),
         NeedKind::Notice => format!("a notice to read: {}", need.text),

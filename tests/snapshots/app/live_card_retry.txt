@@ -12,7 +12,7 @@
  ○ ready         │                                                                          │Judge          0
  ○ comments      │  Start the step build of DEMO-12 again?                                  │
  ○ ci-review     │                                                                          │
- ○ ready-to-merge│  A rule stopped it: the proof did not pass at 1a2b3c4d5e6f               │       3f2a1b4 ✓
+ ○ ready-to-merge│  A rule stopped it: the proof did not pass at 1a2b3c4d5e6f.              │       3f2a1b4 ✓
  ○ done          │                                                                          │               -
                  │  Vision clears the flag, and the step build starts again with a new      │               -
  TEAM            │  turn of builder. Its message says why the step stopped.                 │               -

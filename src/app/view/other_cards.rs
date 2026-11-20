@@ -85,7 +85,16 @@ pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
         ink(T.fg).bold(),
     );
     body.blank();
-    body.para(3, &item.reason, TEXT, ink(T.warn));
+    // What happened and what to do first; the raw reason stays below as the details.
+    let friendly = crate::friendly::explain(&item.reason);
+    body.para(3, &friendly.headline, TEXT, ink(T.warn));
+    if let Some(action) = &friendly.action {
+        body.para(3, action, TEXT, ink(T.fg));
+    }
+    if let Some(details) = &friendly.details {
+        body.blank();
+        body.para(3, &format!("Details: {details}"), TEXT, ink(T.faint));
+    }
     body.blank();
     let mut foot = Rows::default();
     if item.stopped {

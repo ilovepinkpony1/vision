@@ -2,29 +2,29 @@
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
   IN PROGRESS                                        2 tickets · Vision moves them while this window is open
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │   DEMO-12   ╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮1.03     38m │
- │             │                                                                              │             │
+ ╭─────────────╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮─────────────╮
+ │   DEMO-12   │                                                                              │1.03     38m │
  │             │  Keep the filter of the list when the page loads again                       │             │
- │   DEMO-7    │                                                                              │6.12  2h 10m │
- │             │  clone     ~/clones/demo-2 is free                                           │             │
- ╰─────────────│  branch    vision/DEMO-15 from origin/main                                   │─────────────╯
-               │  path      13 steps: refine, plan, plan-ready, build, review, open-pr, ci,…  │
-  MY TICKETS   │  first     refine: scout · claude-fable-5-2 · high                           │cker · 2 open
- ╭─ To Do · 2 ─│  writes    Of 5 write verbs, 4 in the mode auto and 1 in the mode ask.       │─────────────╮
- │ ▸ DEMO-15   │            Vision asks you before each write that is not in the mode auto.   │             │
- │   DEMO-9    │                                                                              │pull request │
- ╰─────────────│  Nothing goes to the tracker or the forge at the start.                      │─────────────╯
-               │                                                                              │
+ │             │                                                                              │             │
+ │   DEMO-7    │  clone     ~/clones/demo-2 is free                                           │6.12  2h 10m │
+ │             │  branch    vision/DEMO-15 from origin/main                                   │             │
+ ╰─────────────│  path      13 steps: refine, plan, plan-ready, build, review, open-pr, ci,…  │─────────────╯
+               │  first     refine: scout · claude-fable-5-2 · high                           │
+  MY TICKETS   │  writes    Of 5 write verbs, 4 in the mode auto and 1 in the mode ask.       │cker · 2 open
+ ╭─ To Do · 2 ─│            Vision asks you before each write that is not in the mode auto.   │─────────────╮
+ │ ▸ DEMO-15   │                                                                              │             │
+ │   DEMO-9    │  Nothing goes to the tracker or the forge at the start.                      │pull request │
+ ╰─────────────│                                                                              │─────────────╯
                │  It did not work:                                                            │
-               │  DEMO-15: no clone is free:                                                  │
+               │  DEMO-15: no clone is free.                                                  │
+               │  Add a clone to `clones` in config.toml, or wait until a ticket ends.        │
+               │  Details: DEMO-15: no clone is free:                                         │
                │  /work/clones/demo-1: DEMO-12 holds it (step build)                          │
                │  Add a clone to `clones` in config.toml, or wait until a ticket ends         │
                │                                                                              │
                │  enter try again    esc close                                                │
                │                                                                              │
                ╰──────────────────────────────────────────────────────────────────────────────╯
-
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 

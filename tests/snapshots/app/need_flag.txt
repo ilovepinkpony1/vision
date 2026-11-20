@@ -10,7 +10,7 @@
  │       │                                                                                          │       │
  │   DEMO│  A rule stopped DEMO-12 at the step build.                                               │2h 10m │
  │       │                                                                                          │       │
- ╰───────│  the proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change             │───────╯
+ ╰───────│  The proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change.            │───────╯
          │                                                                                          │
   MY TICK│  r starts the step build again with a new turn of builder. Its message says why the      │ 2 open
  ╭─ To Do│  step stopped.                                                                           │───────╮
