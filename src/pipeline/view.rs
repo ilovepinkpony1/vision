@@ -130,6 +130,33 @@ pub fn needs(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     Ok(out)
 }
 
+/// The tickets that the person stopped. They ask for nothing until the person continues them.
+pub fn stopped_keys(ledger: &Ledger) -> Result<std::collections::BTreeSet<String>> {
+    Ok(ledger
+        .tickets()?
+        .into_iter()
+        .filter_map(|row| Ticket::of(row).ok())
+        .filter(|t| t.flags.iter().any(|f| f == STOPPED))
+        .map(|t| t.key.to_string())
+        .collect())
+}
+
+/// Leaves out each need of a ticket that the person stopped: its flag, its plan, its writes, and
+/// its questions. A notice only informs, so it stays. The flag `paused` stays too: the person
+/// worked in the session with `vision open`, and Vision asks whether the ticket goes on.
+pub fn drop_stopped(ledger: &Ledger, needs: &mut Vec<Need>) -> Result<()> {
+    let stopped = stopped_keys(ledger)?;
+    needs.retain(|need| {
+        need.kind == NeedKind::Notice
+            || (need.kind == NeedKind::Flag && need.id == PAUSED)
+            || need
+                .ticket
+                .as_ref()
+                .is_none_or(|key| !stopped.contains(key))
+    });
+    Ok(())
+}
+
 fn default_reason(flag: &str) -> &'static str {
     match flag {
         PAUSED => "you took over the session with vision open. Run vision retry when you are done",

@@ -242,9 +242,12 @@ fn read_command(id: &str) -> String {
 
 fn waiting_cards(ledger: &Ledger) -> Result<Vec<Question>> {
     let mut agents = Agents::default();
+    // A ticket that the person stopped asks for nothing until it goes on.
+    let stopped = pipeline::stopped_keys(ledger)?;
     ledger
         .questions_in_states(&[STATE_PROPOSED, STATE_ASKED])?
         .into_iter()
+        .filter(|row| !stopped.contains(&row.ticket))
         .map(|row| Question::load(ledger, row, &mut agents))
         .collect()
 }
@@ -253,6 +256,7 @@ fn others(ctx: &Ctx, ledger: &Ledger) -> Result<Vec<Need>> {
     let mut needs = pipeline::needs(ctx, ledger)?;
     needs.extend(executor::needs(ctx, ledger)?);
     needs.extend(crate::curator::needs(ctx, ledger)?);
+    pipeline::drop_stopped(ledger, &mut needs)?;
     Ok(needs)
 }
 

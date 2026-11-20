@@ -166,6 +166,8 @@ pub fn collect_needs_with(ctx: &Ctx, ledger: &Ledger, proposals: Vec<Need>) -> R
     needs.extend(executor::needs(ctx, ledger)?);
     needs.extend(proposals);
     needs.extend(pipeline::notice_needs(ledger)?);
+    // A ticket that the person stopped asks for nothing until it goes on.
+    pipeline::drop_stopped(ledger, &mut needs)?;
     Ok(needs)
 }
 

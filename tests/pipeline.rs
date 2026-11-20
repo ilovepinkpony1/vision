@@ -1584,6 +1584,35 @@ fn a_job_whose_runner_dies_runs_once_more_and_then_fails() {
 }
 
 #[test]
+fn a_stopped_ticket_asks_for_nothing_until_it_goes_on() {
+    let world = World::new();
+    // The proof with no plan and no changed test cannot pass, so a rule stops the ticket.
+    check_step_adapter(&world, "proof");
+    simple_scenarios(&world);
+    take_and_approve(&world);
+    world.tick_until("the flag needs-you", LONG, |w| has_flag(w, "needs-you"));
+    let needs_of = |w: &World| -> Vec<String> {
+        status(w)["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["ticket"] == KEY)
+            .map(|n| n["id"].as_str().unwrap_or("").to_string())
+            .collect()
+    };
+    assert_eq!(needs_of(&world), ["needs-you"]);
+    world.run(&["stop", KEY]).expect_code(0);
+    assert!(
+        needs_of(&world).is_empty(),
+        "a ticket that the person stopped asks for nothing"
+    );
+    let needs = world.run(&["needs"]).stdout;
+    assert!(needs.lines().all(|l| !l.contains(KEY)), "{needs}");
+    // The flag stays on the ticket, so that its continue card can name the reason.
+    assert!(has_flag(&world, "needs-you"));
+}
+
+#[test]
 fn a_job_step_whose_job_fails_needs_you_and_does_not_move() {
     let world = World::new();
     // The proof with no plan and no changed test cannot pass.

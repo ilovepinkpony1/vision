@@ -44,7 +44,7 @@ pub use commands::{
     LogEntry, Measures, PlanView, Report, BY_HAND,
 };
 pub use machine::{crash_point, CRASH_CODE, CRASH_ENV};
-pub use view::{plan_hash, TicketView, SHORT_HASH};
+pub use view::{drop_stopped, plan_hash, stopped_keys, TicketView, SHORT_HASH};
 
 /// `vision pick`, `take`, `plan`, `approve-plan`, `log`, `diff`, `stop`, `retry`, `report`, and
 /// `kind`.
