@@ -628,6 +628,92 @@ fn one_entry_above_the_review_cap_needs_you_with_the_open_findings() {
 }
 
 #[test]
+fn the_cap_names_a_red_ci_only_when_the_newest_run_is_red() {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.write_adapter(|text| {
+        let old = "cap = \"review_rounds\"\nnext = \"open-pr\"";
+        assert!(text.contains(old));
+        text.replacen(
+            old,
+            "cap = \"review_rounds\"\nnext = \"again\"\n\n[[step]]\nid = \"again\"\nkind = \"wait\"\nwatch = \"pr.draft\"\non = { \"none\" = \"review\" }\nevery = 1",
+            1,
+        )
+    });
+    world.edit_config(|doc| doc["caps"]["review_rounds"] = toml_edit::value(1));
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([ends_with(result(
+            "Reviewed.",
+            &[("review.md", "# Review\n\nNo findings.\n")]
+        ))]),
+    );
+    take_and_approve(&world);
+    // A red run of one step, then green runs of two other steps: the checks of three sources.
+    // The newest check of each source stays, and the red one is the oldest of them.
+    for (head, result, source) in [
+        (
+            "1111111111111111111111111111111111111111",
+            "red",
+            "step:ci-review",
+        ),
+        (
+            "1111111111111111111111111111111111111111",
+            "green",
+            "step:ci-review-rerun",
+        ),
+        (
+            "2222222222222222222222222222222222222222",
+            "green",
+            "step:in-review",
+        ),
+    ] {
+        world
+            .ledger()
+            .conn()
+            .execute(
+                "INSERT INTO checks (ticket, head, kind, result, source, at)
+                 VALUES (?1, ?2, 'ci', ?3, ?4, '2026-01-01T00:00:00Z')",
+                [KEY, head, result, source],
+            )
+            .unwrap();
+    }
+    world.tick_until("the cap", LONG, |w| has_flag(w, "needs-you"));
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains("reached its cap review_rounds = 1: this is entry 2"),
+        "{reason}"
+    );
+    assert!(
+        !reason.contains("the CI is red"),
+        "a later green run makes the old red run history: {reason}"
+    );
+    assert!(reason.ends_with("Nothing open is listed"), "{reason}");
+
+    // A newer red run of the first step is open again.
+    world
+        .ledger()
+        .conn()
+        .execute(
+            "INSERT INTO checks (ticket, head, kind, result, source, at)
+             VALUES (?1, '3333333333333333333333333333333333333333', 'ci', 'red', 'step:ci-review',
+                     '2026-01-01T00:00:00Z')",
+            [KEY],
+        )
+        .unwrap();
+    world.run(&["retry", KEY]).expect_code(0);
+    world.tick_until("the cap of entry 3", LONG, |w| {
+        has_flag(w, "needs-you") && w.counts()["entries"]["review"] == 3
+    });
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.ends_with("Open: the CI is red at 333333333333"),
+        "{reason}"
+    );
+}
+
+#[test]
 fn stop_frees_the_clone_and_take_starts_the_ticket_again_in_the_clone_of_its_branch() {
     let world = World::new();
     world.scenario(

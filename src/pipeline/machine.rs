@@ -1578,8 +1578,9 @@ pub(crate) fn cap_value(ctx: &Ctx, name: &str) -> Result<Option<u32>> {
         .and_then(|v| u32::try_from(v).ok()))
 }
 
-/// What is open at a step, for the message of its cap: the open items of its documents, and a
-/// red CI run.
+/// What is open at a step, for the message of its cap: the open items of its documents, and the
+/// newest CI run when it is red. Each step that reads the CI writes its checks under its own
+/// source, so a red run of one step and a later green run of another step both stay.
 pub(crate) fn open_items(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -1597,6 +1598,7 @@ pub(crate) fn open_items(
     if let Some(ci) = ledger
         .latest_checks(key.as_str())?
         .into_iter()
+        .rev()
         .find(|c| c.kind == "ci")
     {
         if ci.result == "red" {
