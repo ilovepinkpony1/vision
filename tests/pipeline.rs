@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use pipeline_support::{
     ends_with, git, plan_hash_of, result, runs_then, simple_scenarios, take_and_approve,
-    without_resume, World, KEY, PLAN,
+    without_resume, World, BUILD_COMMAND, KEY, PLAN,
 };
 use serde_json::{json, Value};
 use vision::paths::{TicketKey, TurnId};
@@ -2869,5 +2869,114 @@ fn a_branch_that_another_worktree_holds_stops_the_take_with_the_name_of_that_wor
     assert_eq!(
         git(world.clone(), &["rev-parse", "--abbrev-ref", "HEAD"]),
         "vision/DEMO-12"
+    );
+}
+
+/// A short path to a pull request: a build turn, an act step that pushes and opens the pull
+/// request, and a fix turn whose push the sensitive gate holds.
+fn held_push_adapter(world: &World) {
+    world.write_adapter(|text| {
+        let start = text.find("[[step]]").unwrap();
+        let end = text.find("[verbs.").unwrap();
+        let steps = r#"[[step]]
+id = "build"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+expects = ["commits", "clean"]
+next = "open-pr"
+
+[[step]]
+id = "open-pr"
+kind = "act"
+run = ["git.push", { verb = "pr.open", args = { text = "Add subtract." } }]
+next = "fix"
+
+[[step]]
+id = "fix"
+kind = "turn"
+agent = "builder"
+turn = "worker"
+expects = ["commits", "clean"]
+after = ["git.push"]
+next = "ready-to-merge"
+
+[[step]]
+id = "ready-to-merge"
+kind = "wait"
+watch = "pr.merged"
+on = { "true" = "done" }
+wait = ["false"]
+limit = 1209600
+every = 60
+
+[[step]]
+id = "done"
+kind = "end"
+
+"#;
+        format!("{}{steps}{}", &text[..start], &text[end..])
+    });
+    world.scenario(
+        "builder",
+        "build",
+        json!([runs_then(BUILD_COMMAND, result("Built.", &[]))]),
+    );
+    world.scenario(
+        "builder",
+        "fix",
+        json!([runs_then(
+            "mkdir -p db/migrate && echo 'CREATE TABLE notices (id INTEGER);' > db/migrate/001_notices.sql && git add -A && git commit -q -m 'Add the notices table'",
+            result("Fixed.", &[])
+        )]),
+    );
+}
+
+#[test]
+fn a_merge_of_the_pull_request_ends_a_ticket_whose_push_waits_for_approval() {
+    let world = World::new();
+    held_push_adapter(&world);
+    world.edit_config(|doc| doc["caps"]["merge_look_minutes"] = toml_edit::value(0));
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the held push", LONG, |w| {
+        status(w)["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "operation")
+    });
+    assert_eq!(world.step().as_deref(), Some("fix"));
+    let id = status(&world)["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["kind"] == "operation")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (verb, commit) = id.split_once(' ').unwrap();
+    let pushes = world.acts_of("git.push");
+    // The team merges the pull request while the push waits for the person.
+    world.world_cmd(&["merge", world.root(), "1"]);
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+    assert_eq!(world.row().unwrap().state.as_deref(), Some("done"));
+    assert!(
+        status(&world)["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["kind"] != "operation"),
+        "the held push asks for nothing after the merge"
+    );
+    // A late approval pushes nothing to the merged pull request.
+    let approve = world.run(&["approve", KEY, verb, commit]);
+    assert_ne!(approve.code, 0, "{approve:?}");
+    world.tick();
+    assert_eq!(world.acts_of("git.push"), pushes, "no push after the merge");
+    assert!(
+        world.log_text().contains("was merged outside Vision"),
+        "{}",
+        world.log_text()
     );
 }

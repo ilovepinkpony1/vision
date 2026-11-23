@@ -745,6 +745,101 @@ fn ci_run_a_workflow_with_no_dispatch_trigger_is_failed() {
     assert!(has(&result, "workflow_dispatch"));
 }
 
+// A write to a pull request that is done -------------------------------------------------------
+
+/// The pull request #7, merged or closed with no merge.
+fn done_pull(merged: bool) -> Value {
+    Pull {
+        draft: false,
+        state: "closed".into(),
+        merged,
+        ..Pull::default()
+    }
+    .json()
+}
+
+#[test]
+fn a_write_to_a_merged_pull_request_is_refused_and_sends_nothing() {
+    let (t, w, verdicts) = reply_test();
+    w.lock().pr = Some(done_pull(true));
+    let reply = || {
+        t.act("review.reply")
+            .args(json!({ "verdicts": verdicts }))
+            .field("pr", json!(7))
+    };
+    let result = reply().run();
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        has(
+            &result,
+            "the pull request #7 is merged, so review.reply does not write to it or to its branch"
+        ),
+        "{result:?}"
+    );
+    assert!(reply_posts(&t).is_empty());
+    assert_eq!(
+        reply().reconcile().run().state(),
+        "failed",
+        "the reconcile only reads, and no reply is there"
+    );
+
+    let (t, w, _s) = ci_test();
+    w.lock().pr = Some(done_pull(true));
+    let result = t
+        .act("ci.run")
+        .field("head", json!(HEAD))
+        .field("pr", json!(7))
+        .run();
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        has(&result, "is merged, so ci.run does not write"),
+        "{result:?}"
+    );
+    assert_eq!(t.server.count("POST", &dispatch_path()), 0);
+
+    let p = Push::new();
+    let w = GitHubWorld::new(&p.t.server, Some(done_pull(true)));
+    let result = p.push(false, json!({}), &[("pr", json!(7))]);
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        has(&result, "is merged, so git.push does not write"),
+        "{result:?}"
+    );
+    assert_eq!(p.pushes(), 0);
+    assert_eq!(
+        p.repos.remote_head(BRANCH),
+        None,
+        "the branch is not made again"
+    );
+
+    w.lock().pr = Some(done_pull(false));
+    let result = p.push(false, json!({}), &[("pr", json!(7))]);
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        has(&result, "the pull request #7 is closed, so git.push"),
+        "{result:?}"
+    );
+    assert_eq!(p.pushes(), 0);
+}
+
+#[test]
+fn a_write_to_an_open_or_unknown_pull_request_runs() {
+    let p = Push::new();
+    let _w = GitHubWorld::new(&p.t.server, Some(pull(false)));
+    let result = p.push(false, json!({}), &[("pr", json!(7))]);
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert_eq!(p.pushes(), 1);
+
+    let p = Push::new();
+    let _w = GitHubWorld::new(&p.t.server, None);
+    let result = p.push(false, json!({}), &[("pr", json!(7))]);
+    assert_eq!(
+        result.state(),
+        "confirmed",
+        "GitHub does not know #7, so the guard has nothing to refuse: {result:?}"
+    );
+}
+
 // review.reply ----------------------------------------------------------------------------------
 
 fn reply_test() -> (AdapterTest, GitHubWorld, String) {

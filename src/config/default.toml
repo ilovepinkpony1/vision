@@ -47,6 +47,7 @@ qa_fix = 2
 merge = 3
 comments = 3
 judge_minutes = 15
+merge_look_minutes = 10        # minutes between two looks for a merge of the pull request of a ticket at a step that does not watch it
 
 [judge]
 answer_when_sure = true       # the Judge also answers alone from its own inference

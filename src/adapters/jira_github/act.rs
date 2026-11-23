@@ -49,6 +49,18 @@ const VERBS: [(&str, Verb); 12] = [
     ("tracker.move", tracker_move),
 ];
 
+/// The verbs that write to the pull request of the ticket or to its branch. Each one refuses
+/// while the pull request of the call is merged or closed: see [`closed_pr`].
+const PR_WRITES: [&str; 7] = [
+    "ci.rerun",
+    "ci.run",
+    "git.push",
+    "review.minimize",
+    "review.reply",
+    "review.rerequest",
+    "review.resolve",
+];
+
 const READS: [(&str, Read); 5] = [
     ("ci.log", ci_log_read),
     ("github.pr", github_pr),
@@ -83,7 +95,13 @@ pub fn act(call: &Map<String, Value>) -> Res<Value> {
     };
     let reconcile = truthy(call.get("reconcile")).is_some();
     let mut state = Acting::default();
-    match run(&config, call, reconcile, &mut state) {
+    let guarded = !reconcile && PR_WRITES.contains(&name);
+    let outcome = match guarded.then(|| closed_pr(&config, call, name)).transpose() {
+        Ok(Some(Some(refusal))) => failed(&refusal),
+        Ok(_) => run(&config, call, reconcile, &mut state),
+        Err(e) => Err(e),
+    };
+    match outcome {
         Err(Error::Http { text, status }) => {
             // A definite refusal of the server (400 to 499, but not a time limit or a rate
             // limit) means that the call changed nothing.
@@ -118,6 +136,30 @@ pub fn act(call: &Map<String, Value>) -> Res<Value> {
         }
         other => other,
     }
+}
+
+/// The refusal of the write `verb` when the pull request of the call is merged or closed, so
+/// that a write that waited, for example for an approval, never lands on a pull request that
+/// is done. A call with no pull request, or with one that GitHub does not know, gets `None`.
+fn closed_pr(config: &Config, call: &Map<String, Value>, verb: &str) -> Res<Option<String>> {
+    let Some(number) = pr_number(call.get("pr")).filter(|n| *n > 0) else {
+        return Ok(None);
+    };
+    let gh = GitHub::new(config, verb, None)?;
+    let pull = match gh.pull(number) {
+        Ok(pull) => pull,
+        Err(Error::Http { status: 404, .. }) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if pull.get("state").and_then(Value::as_str) != Some("closed") {
+        return Ok(None);
+    }
+    let merged =
+        pull.get("merged") == Some(&Value::Bool(true)) || truthy(pull.get("merged_at")).is_some();
+    let how = if merged { "merged" } else { "closed" };
+    Ok(Some(format!(
+        "the pull request #{number} is {how}, so {verb} does not write to it or to its branch"
+    )))
 }
 
 fn answer(

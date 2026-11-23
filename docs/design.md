@@ -198,6 +198,7 @@ qa_fix = 2
 merge = 3
 comments = 3
 judge_minutes = 15
+merge_look_minutes = 10        # minutes between two looks for a merge outside Vision (section 11.3)
 jobs_at_once = 2              # the most jobs that run in the background at one time
 
 [judge]
@@ -1163,6 +1164,7 @@ The ticket row holds the id of its step in `state`, its flags, and its counters.
 - If a wait step has `limit`, a visit that watches for more than `limit` seconds sets the flag `needs-you`. The reason names the last value. The time counts from the first `observe` of the visit. `vision retry KEY` enters the step again and starts a new limit.
 - A human step waits for its command. `vision needs` lists it. The one action is `approve-plan`.
 - The end step frees the clone. If the pull request is merged, it records the event `ticket-merged`.
+- A person can merge the pull request while the ticket waits at a step that does not watch it, such as a turn step whose `after` verb waits for `vision approve`. A wait step sees the merge through its `watch`. At each other step, the ticket looks at its pull request once in `caps.merge_look_minutes` minutes, also under the flag `needs-you`. It does not look while a turn or a job of it runs, or while it is stopped or paused. A merged pull request ends each operation of the ticket that is `pending` as `failed`, so that a later `vision approve` sends nothing. It clears the flags `needs-you` and `waits-for-limit`, and the ticket moves to the end step. The event `step` has `how` = `merged outside`, the number of the pull request, and the dropped operations.
 
 Each visit of a step is one row in `spans`. Its key `waits_on` says what the ticket waits for: `agent:<name>`, `job:<name>`, `person:<action>`, `watch:<path>`, `verbs:<verb>,<verb>` for an act step (such as `verbs:git.push,pr.open`), or `end`.
 
@@ -1254,6 +1256,7 @@ These rules keep the tokens and the repo safe:
 - `git.push` gives the token to one git call through environment variables, for the address of the remote only. A push never forces.
 - A job that runs code of the project gets no secret.
 - A reconcile call only reads.
+- `git.push`, `ci.run`, `ci.rerun`, `review.reply`, `review.resolve`, `review.minimize`, and `review.rerequest` refuse a call whose pull request is merged or closed. The verb reads the pull request of the call first. If it is merged or closed, the operation is `failed`, and nothing goes to GitHub. So a write that waited, for example for an approval, never makes the branch of a merged pull request again and never answers on it. A call with no pull request, or with a number that GitHub does not know, runs as before.
 - Text from Jira and from GitHub is data. Each document wraps it as `{"untrusted": "..."}`.
 
 `vision app-token` prints an installation token of a GitHub App, for the command of the secret `FORGE_TOKEN`. The private key comes from a file or from the output of a command, and it never goes into a file. The command can print the key as a PEM file or as the PEM file in one base64 line.

@@ -461,6 +461,9 @@ pub struct Caps {
     pub merge: u32,
     pub comments: u32,
     pub judge_minutes: u32,
+    /// Minutes between two looks for a merge of the pull request of a ticket that waits at a
+    /// step that does not watch it. 0 looks at each tick.
+    pub merge_look_minutes: u32,
     /// The most jobs that run in the background at one time. Each runs in the clone of its
     /// ticket, so two jobs of different clones do not meet.
     pub jobs_at_once: u32,
@@ -475,6 +478,7 @@ impl Default for Caps {
             merge: 3,
             comments: 3,
             judge_minutes: 15,
+            merge_look_minutes: 10,
             jobs_at_once: 2,
         }
     }

@@ -48,6 +48,10 @@ pub struct Counts {
     /// The place of the ticket among the slots, when it holds none or held one before.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slot: Option<SlotNote>,
+    /// When the pipeline last looked for a merge of the pull request of a ticket that waits at
+    /// a step that does not watch it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merge_look: Option<String>,
 }
 
 /// What the ticket row keeps about the slots (section 11.3): the clone that the ticket held

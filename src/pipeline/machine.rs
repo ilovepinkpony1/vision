@@ -18,7 +18,8 @@ use super::decide::{
 use super::docs::{self, result_documents};
 use super::gates;
 use super::state::{
-    flags_of, flags_text, waits_on, Counts, FlagReason, Interrupt, Seen, WAITS_FOR_LIMIT,
+    flags_of, flags_text, waits_on, Counts, FlagReason, Interrupt, Seen, NEEDS_YOU, STOPPED,
+    WAITS_FOR_LIMIT,
 };
 use crate::adapter::when::Holds;
 use crate::adapter::{self, Adapter, Entry, EntryKind, Expect, GateRule, Step, StepKind};
@@ -321,6 +322,14 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
         let Some(step) = adapter.step(ticket.state()).cloned() else {
             continue;
         };
+        match merged_outside(ctx, &pass.ledger, &adapter, &mut ticket, &step, pass.now) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => ctx.log(&format!(
+                "pipeline: could not look for a merge of the pull request of {}: {e:#}",
+                ticket.key
+            )),
+        }
         // The members of a team that still run when a rule stopped the ticket keep their
         // results: their end facts are tested also under the flag needs-you.
         let keeps = !step.team().is_empty()
@@ -358,6 +367,104 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// A ticket whose pull request was merged outside Vision ends, at whatever step it waits. A
+/// wait step watches the pull request itself. At each other step with no running turn and no
+/// job in the background, the ticket looks at its pull request at most once in
+/// `caps.merge_look_minutes`,
+/// also under the flag needs-you; a stopped or paused ticket waits for the person. A merged pull
+/// request drops each write of the ticket that waits, so that no approval sends it later,
+/// clears the flags, and moves the ticket to its end step, which step 6 finishes. Gives true
+/// when the ticket moved.
+fn merged_outside(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    ticket: &mut Ticket,
+    step: &Step,
+    now: OffsetDateTime,
+) -> Result<bool> {
+    if ticket.row.pr.is_none()
+        || matches!(step.kind, StepKind::Wait(_) | StepKind::End)
+        || ticket
+            .flags
+            .iter()
+            .any(|f| f == STOPPED || f == turn::PAUSED)
+        || ledger.running_turns_of_ticket(ticket.key.as_str())? > 0
+        || !runs::of_ticket(&ctx.paths, ticket.key.as_str()).is_empty()
+    {
+        return Ok(false);
+    }
+    let every = i64::from(ctx.config()?.caps.merge_look_minutes) * 60;
+    let due = ticket
+        .counts
+        .merge_look
+        .as_deref()
+        .and_then(|t| time::parse_rfc3339(t).ok())
+        .is_none_or(|at| time::seconds_between(at, now) >= every);
+    if !due {
+        return Ok(false);
+    }
+    let at = time::rfc3339(now);
+    ticket.counts.merge_look = Some(at.clone());
+    ledger.set_ticket_state(
+        ticket.key.as_str(),
+        ticket.state(),
+        &flags_text(&ticket.flags),
+        &ticket.counts.text(),
+        &at,
+    )?;
+    let facts = executor::observe_ticket(ctx, ledger, &ticket.key)?;
+    let Some(pr) = facts.pr.as_ref().filter(|pr| pr.merged) else {
+        return Ok(false);
+    };
+    let number = pr.number;
+    let mut dropped = Vec::new();
+    for op in ledger.operations_of(ticket.key.as_str(), None)? {
+        if op.state != crate::ledger::operations::STATE_PENDING {
+            continue;
+        }
+        let detail = format!(
+            "dropped: the pull request #{number} was merged outside Vision, so this write did not run"
+        );
+        ledger.end_operation(
+            &op.id,
+            crate::ledger::operations::STATE_FAILED,
+            None,
+            Some(&at),
+            &json!({"detail": detail, "dropped": "merged"}).to_string(),
+        )?;
+        dropped.push(format!("{} {}", op.verb, op.id));
+    }
+    ticket
+        .flags
+        .retain(|f| f != NEEDS_YOU && f != WAITS_FOR_LIMIT);
+    ticket.counts.reasons.remove(NEEDS_YOU);
+    ticket.counts.reasons.remove(WAITS_FOR_LIMIT);
+    ticket.counts.seen = Some(Seen::of(&facts, &at));
+    let end = adapter.end().id.clone();
+    move_to_with(
+        ctx,
+        ledger,
+        adapter,
+        ticket,
+        step,
+        &end,
+        "merged outside",
+        Some(&json!({"pr": number, "dropped": dropped})),
+    )?;
+    ctx.log(&format!(
+        "pipeline: the pull request #{number} of {} was merged outside Vision at the step {}, so the ticket goes to its end{}",
+        ticket.key,
+        step.id,
+        if dropped.is_empty() {
+            String::new()
+        } else {
+            format!(" and drops the waiting writes {}", dropped.join(", "))
+        }
+    ));
+    Ok(true)
 }
 
 /// The documents of the step: the names of its `doc:` end facts and the documents that its
