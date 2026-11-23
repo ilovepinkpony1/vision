@@ -2311,6 +2311,104 @@ fn a_push_by_hand_and_a_late_comment_take_a_ticket_back_from_ready_to_merge() {
     );
 }
 
+#[test]
+fn a_push_by_hand_wins_over_a_commit_of_vision_that_never_left_the_machine() {
+    let p = Project::new();
+    let path = p.vision.join("config.toml");
+    let mut doc: DocumentMut = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+    doc["git"]["name"] = toml_edit::value("factory[bot]");
+    doc["git"]["email"] = toml_edit::value("factory@example.invalid");
+    std::fs::write(&path, doc.to_string()).unwrap();
+    needs_the_person_at_refine(&p);
+    p.run(&["retry", KEY, "--step", "ready-to-merge"])
+        .expect_code(0);
+    p.run(&["stop", KEY]).expect_code(0);
+    let number = pull_request_by_hand(&p);
+    p.server.team(
+        "review",
+        json!({"number": number, "id": 601, "login": "lead", "state": "APPROVED"}),
+    );
+    // A commit of Vision that no push sent, such as a fix whose push a gate refused.
+    std::fs::write(p.clone.join("VISION.txt"), "A fix of Vision.\n").unwrap();
+    git(&p.clone, &["add", "--all"]);
+    let status = Command::new("git")
+        .args(["commit", "--quiet", "-m", "A fix of Vision"])
+        .current_dir(&p.clone)
+        .env("GIT_AUTHOR_NAME", "factory[bot]")
+        .env("GIT_AUTHOR_EMAIL", "factory@example.invalid")
+        .env("GIT_COMMITTER_NAME", "factory[bot]")
+        .env("GIT_COMMITTER_EMAIL", "factory@example.invalid")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let own = p.head();
+    // The person goes on from another checkout and pushes: the branches went apart.
+    let root = p._dir.path();
+    let person = root.join("person");
+    git(
+        root,
+        &[
+            "clone",
+            "--quiet",
+            "--branch",
+            BRANCH,
+            p.remote.to_str().unwrap(),
+            person.to_str().unwrap(),
+        ],
+    );
+    git(&person, &["config", "user.name", "person"]);
+    git(&person, &["config", "user.email", "person@example.invalid"]);
+    std::fs::write(person.join("NOTES.txt"), "A late change.\n").unwrap();
+    git(&person, &["add", "--all"]);
+    git(&person, &["commit", "--quiet", "-m", "A late change"]);
+    git(&person, &["push", "--quiet", "origin", BRANCH]);
+    let pushed = git(&person, &["rev-parse", "HEAD"]);
+
+    // The pull request went on without the commit of Vision: the rule of a push by hand holds,
+    // and nothing moves before the person continues.
+    let take = p.run(&["take", KEY]);
+    take.expect_code(1);
+    assert!(
+        take.stdout.starts_with(
+            "Vision thinks that DEMO-12 is at the step ci-review, not at the step ready-to-merge where it stopped (rule 3)."
+        ),
+        "{take:?}"
+    );
+    assert!(
+        take.stdout.contains(
+            "  the pull request went on without 1 commit of Vision that never left the machine\n"
+        ),
+        "{take:?}"
+    );
+    assert_eq!(p.head(), own, "a plain take moves nothing");
+
+    let moved = p.run(&["take", KEY, "--step", "ci-review"]);
+    moved.expect_code(0);
+    let kept = format!("refs/vision/kept/{BRANCH}/{}", &own[..12]);
+    assert!(
+        moved.stdout.contains(&format!(
+            "The clone had 1 commit of Vision that never left the machine ({}). The pull request #{number} went on without it, so the branch of the clone moved to its head {}. The old tip stays in {kept}.",
+            &own[..12],
+            &pushed[..12]
+        )),
+        "{moved:?}"
+    );
+    assert!(p.flags().is_empty(), "{:?}", p.flags());
+    assert_eq!(p.step().as_deref(), Some("ci-review"));
+    assert_eq!(p.head(), pushed, "the push of the person wins");
+    assert!(p.clone.join("NOTES.txt").is_file());
+    assert!(!p.clone.join("VISION.txt").exists());
+    assert_eq!(
+        git(&p.clone, &["rev-parse", &kept]),
+        own,
+        "no commit goes away"
+    );
+    let detail = last_resumed(&p);
+    assert_eq!(detail["dropped"], json!([own]));
+    assert_eq!(detail["kept"], json!(kept));
+    assert_eq!(detail["head"], json!({"from": own, "to": pushed}));
+}
+
 /// The adapter of the repo with an interrupt on the wait step ready: a waiting comment or a
 /// change request takes the ticket to comments before pr.draft counts.
 fn interrupt_adapter() -> String {

@@ -847,7 +847,9 @@ fn restart(
 }
 
 /// The head of the pull request for a continue that ran the rules. When the clone has the head
-/// one fast-forward ahead of the branch, the branch moves forward to it. When the clone cannot
+/// one fast-forward ahead of the branch, the branch moves forward to it. When the pull request
+/// went on without commits of Vision that never left the machine, the branch moves to its head,
+/// and a ref keeps the old tip. When the clone cannot
 /// take it, the ticket gets the flag needs-you with the reason and the fix, and nothing moves.
 /// Gives what the event `resumed` records.
 fn head_for_continue(
@@ -873,6 +875,22 @@ fn head_for_continue(
             "resume: {} took the head {} of the pull request",
             ticket.key,
             short(to)
+        ));
+    }
+    if let Head::Replaced {
+        from,
+        to,
+        commits,
+        kept,
+    } = head
+    {
+        resume::replace_head(&clone, from, to, kept)?;
+        ctx.log(&format!(
+            "resume: {} took the head {} of the pull request, which went on without {} commit(s) of Vision that never left the machine; {kept} keeps the old tip {}",
+            ticket.key,
+            short(to),
+            commits.len(),
+            short(from)
         ));
     }
     Ok(Resumed::of(checked, ticket.state(), ticket.row.pr))

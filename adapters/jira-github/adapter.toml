@@ -212,9 +212,10 @@
 # ci.state, and envs.<name>.holds and envs.<name>.deployed. One more path comes from Vision:
 # head.state, the head of the open pull request against the branch of the clone, after a
 # fetch. Its values: none (no open pull request), same, forward (the pull request has later
-# commits, such as a push by hand), ahead (the clone has commits that the pull request does
-# not have), behind (the commit is not in the clone, also after the fetch), apart, dirty (the
-# work tree has changes), elsewhere (the clone is on another branch), and unread.
+# commits, such as a push by hand, also when it went on without commits of Vision that no push
+# sent), ahead (the clone has commits that the pull request does not have), behind (the commit
+# is not in the clone, also after the fetch), apart, dirty (the work tree has changes),
+# elsewhere (the clone is on another branch), and unread.
 #
 # The search reads the rules in order. A rule that holds and names the stored step ends the
 # search: the facts confirm the step where the ticket is. A rule that holds and names a step
@@ -242,9 +243,11 @@
 # clone. When the clone does not have the head, such as after a push of the person from another
 # checkout, the continue fetches first. When the head is a later commit of the branch, the
 # branch of the clone moves forward to it, and the ticket row takes it as its head, and the
-# number of the pull request when the row names none. When the commit is still missing after
-# the fetch, or the branch went another way, nothing moves: the ticket gets the flag needs-you
-# with the reason and the fix.
+# number of the pull request when the row names none. When the pull request went on without
+# commits of Vision that no push sent, such as a fix whose push a gate refused, the branch moves
+# to its head, and refs/vision/kept/<branch>/<commit> keeps the old tip. When the commit is
+# still missing after the fetch, or the branch went another way with a commit of a person,
+# nothing moves: the ticket gets the flag needs-you with the reason and the fix.
 #
 # With no [[resume]] table, a continue starts the stored step again and runs no observe.
 #

@@ -396,7 +396,12 @@ pub(crate) fn check(
                 .clone()
                 .filter(|b| !b.trim().is_empty())
                 .unwrap_or_else(|| adapter.branch_for(&ticket.key));
-            let head = head(ticket, &branch, &facts, switches);
+            let own = ctx
+                .config()
+                .ok()
+                .map(|c| crate::turn::identity(&c.user, &c.git));
+            let own = own.as_ref().map(|(n, e)| (n.as_str(), e.as_str()));
+            let head = head(ticket, &branch, &facts, switches, own);
             Checked {
                 found: find(adapter, ticket.state(), &facts, &head),
                 facts: Some(facts),
@@ -513,6 +518,17 @@ pub enum Head {
     },
     /// The branch in the clone and the branch of the pull request went apart.
     Apart { forge: String },
+    /// The branch in the clone and the branch of the pull request went apart, but each commit
+    /// that only the clone has is a commit of Vision that no push sent. The pull request went
+    /// on without them, such as after a push of the person from another checkout. The continue
+    /// keeps the old tip under the ref `kept` and moves the branch to the head of the pull
+    /// request. `commits` are the commits of Vision that the branch drops, oldest first.
+    Replaced {
+        from: String,
+        to: String,
+        commits: Vec<String>,
+        kept: String,
+    },
     /// The clone has the head of the pull request, but changes in its work tree stop the
     /// fast-forward.
     Dirty { forge: String, changes: usize },
@@ -576,9 +592,11 @@ impl Head {
                 format!("Vision could not read the clone {clone}: {why}"),
                 "Fix the clone".to_string(),
             ),
-            Head::None | Head::Same { .. } | Head::Forward { .. } | Head::Ahead { .. } => {
-                return None
-            }
+            Head::None
+            | Head::Same { .. }
+            | Head::Forward { .. }
+            | Head::Replaced { .. }
+            | Head::Ahead { .. } => return None,
         };
         Some(HeadProblem { what, fix })
     }
@@ -595,6 +613,9 @@ impl Head {
                 "The clone has {} that {pr} does not have. The next push sends them",
                 count(*commits, "commit")
             )),
+            Head::Replaced {
+                to, commits, kept, ..
+            } => Some(replaced_text(commits, to, kept, &pr, false)),
             _ => None,
         }
     }
@@ -606,7 +627,8 @@ impl Head {
         match self {
             Head::None => "none",
             Head::Same { .. } => "same",
-            Head::Forward { .. } => "forward",
+            // The pull request went on without the commits of Vision, as after a push by hand.
+            Head::Forward { .. } | Head::Replaced { .. } => "forward",
             Head::Ahead { .. } => "ahead",
             Head::Behind { .. } => "behind",
             Head::Apart { .. } => "apart",
@@ -636,12 +658,39 @@ impl Head {
             Head::Apart { .. } => {
                 "the branch of the clone and the branch of the pull request went apart".into()
             }
+            Head::Replaced { commits, .. } => format!(
+                "the pull request went on without {} of Vision that never left the machine",
+                count(commits.len(), "commit")
+            ),
             Head::Dirty { changes, .. } => {
                 format!("the work tree of the clone has {changes} change(s)")
             }
             Head::Elsewhere { branch } => format!("the clone is on {branch}"),
             Head::Unread(_) => "Vision could not read the clone".into(),
         })
+    }
+}
+
+/// What a continue does when the pull request went on without the `commits` of Vision: the
+/// branch moves to `to`, and the ref `kept` keeps the old tip. `done` says it after the move,
+/// else before it, as on the continue card.
+fn replaced_text(commits: &[String], to: &str, kept: &str, pr: &str, done: bool) -> String {
+    let shown: Vec<&str> = commits.iter().map(|c| short(c)).collect();
+    let n = count(commits.len(), "commit");
+    let them = if commits.len() == 1 { "it" } else { "them" };
+    let to = short(to);
+    if done {
+        format!(
+            "The clone had {n} of Vision that never left the machine ({}). {} went on without {them}, so the branch of the clone moved to its head {to}. The old tip stays in {kept}",
+            shown.join(", "),
+            capital(pr),
+        )
+    } else {
+        format!(
+            "The clone has {n} of Vision that never left the machine ({}). {} went on without {them}, so the branch of the clone moves to its head {to}, and {kept} keeps the old tip",
+            shown.join(", "),
+            capital(pr),
+        )
     }
 }
 
@@ -668,8 +717,16 @@ fn is_commit(text: &str) -> bool {
 /// `switches`, the continue switches the clone to the branch first, as `vision take` does for
 /// a stopped ticket, so a clone on another branch is no problem. When the clone does not have
 /// the head, it fetches first: the person can push from another checkout. The fetch changes no
-/// branch and no work tree.
-pub(crate) fn head(ticket: &Ticket, branch: &str, facts: &TicketFacts, switches: bool) -> Head {
+/// branch and no work tree. `own` is the name and the address of each commit of Vision: when the
+/// branches went apart and each commit that only the clone has is one of them, the pull request
+/// wins ([`Head::Replaced`]).
+pub(crate) fn head(
+    ticket: &Ticket,
+    branch: &str,
+    facts: &TicketFacts,
+    switches: bool,
+    own: Option<(&str, &str)>,
+) -> Head {
     let Some(pr) = facts.pr.as_ref().filter(|pr| !pr.merged && !pr.closed) else {
         return Head::None;
     };
@@ -770,7 +827,64 @@ pub(crate) fn head(ticket: &Ticket, branch: &str, facts: &TicketFacts, switches:
         .unwrap_or(0);
         return Head::Ahead { forge, commits };
     }
-    Head::Apart { forge }
+    let Some(commits) = own.and_then(|own| only_own(&clone, &forge, &local, own)) else {
+        return Head::Apart { forge };
+    };
+    if on == branch {
+        match dirty_lines(&clone) {
+            Ok(lines) if !lines.is_empty() => {
+                return Head::Dirty {
+                    forge,
+                    changes: lines.len(),
+                }
+            }
+            Ok(_) => {}
+            Err(e) => return Head::Unread(format!("{e:#}")),
+        }
+    }
+    Head::Replaced {
+        kept: format!("{KEPT}/{branch}/{}", short(&local)),
+        from: local,
+        to: forge,
+        commits,
+    }
+}
+
+/// The folder of the refs that keep the old tip of a branch that a continue moved to the head of
+/// its pull request ([`Head::Replaced`]): `refs/vision/kept/<branch>/<commit>`.
+pub const KEPT: &str = "refs/vision/kept";
+
+/// The commits of `local` that `forge` does not have and that no remote branch of the clone
+/// holds after a fetch, oldest first, when each one has `own` as its committer: commits of
+/// Vision that no push sent. A commit of the branch that a remote branch holds, such as a
+/// commit of the base that a merge brought, stays safe there. `None` when one such commit has
+/// another committer, when there is none, or when git fails.
+fn only_own(clone: &Path, forge: &str, local: &str, own: (&str, &str)) -> Option<Vec<String>> {
+    // Fresh remote branches, so that a commit that a push sent counts as sent.
+    git::fetch_all(clone).ok()?;
+    let range = format!("{forge}..{local}");
+    let lines = git::run(
+        clone,
+        &[
+            "log",
+            "--reverse",
+            "--format=%H%x09%cn%x09%ce",
+            &range,
+            "--not",
+            "--remotes",
+        ],
+    )
+    .ok()?;
+    let mut commits = Vec::new();
+    for line in lines.lines().filter(|l| !l.trim().is_empty()) {
+        let mut parts = line.split('\t');
+        let (commit, name, email) = (parts.next()?, parts.next()?, parts.next()?);
+        if name != own.0 || !email.eq_ignore_ascii_case(own.1) {
+            return None;
+        }
+        commits.push(commit.to_string());
+    }
+    (!commits.is_empty()).then_some(commits)
 }
 
 /// Moves the branch that the clone is on forward to `to`: a fast-forward only, so no commit
@@ -782,6 +896,34 @@ pub fn take_head(clone: &Path, to: &str) -> Result<()> {
     git::run(clone, &["merge", "--ff-only", "--quiet", to]).with_context(|| {
         format!(
             "could not move the branch of the clone {} forward to {}",
+            clone.display(),
+            short(to)
+        )
+    })?;
+    Ok(())
+}
+
+/// Moves the branch that the clone is on from `from` to `to`, the head of its pull request,
+/// after it keeps `from` under the ref `kept`. The clone must be on a branch at `from`, and
+/// `git reset --keep` refuses to lose a change of the work tree. No commit goes away: the ref
+/// holds the old tip.
+pub fn replace_head(clone: &Path, from: &str, to: &str, kept: &str) -> Result<()> {
+    if !is_commit(from) || !is_commit(to) {
+        bail!("`{from}` or `{to}` is not a commit id");
+    }
+    let at = git::run(clone, &["rev-parse", "--verify", "--quiet", "HEAD"]).unwrap_or_default();
+    if git::run(clone, &["symbolic-ref", "--quiet", "HEAD"]).is_err() || at != from {
+        bail!(
+            "the clone {} is no longer on its branch at {}, so Vision did not move it",
+            clone.display(),
+            short(from)
+        );
+    }
+    git::run(clone, &["update-ref", kept, from])
+        .with_context(|| format!("could not keep the old tip {} in {kept}", short(from)))?;
+    git::run(clone, &["reset", "--keep", "--quiet", to]).with_context(|| {
+        format!(
+            "could not move the branch of the clone {} to {}",
             clone.display(),
             short(to)
         )
@@ -818,6 +960,10 @@ pub struct Resumed {
     pub head: Option<(String, String)>,
     /// The commits of the clone that the pull request does not have.
     pub ahead: Option<usize>,
+    /// The commits of Vision that the branch dropped, because the pull request went on without
+    /// them, and the ref that keeps the old tip.
+    pub dropped: Vec<String>,
+    pub kept: Option<String>,
     /// True when the suggestion goes back from the stored step.
     pub back: bool,
     /// The sentence of a suggestion that goes back (see [`back_sentence`]).
@@ -870,6 +1016,17 @@ impl Resumed {
                 out.head = Some((from.clone(), to.clone()));
                 out.pr_head = Some(to.clone());
             }
+            Head::Replaced {
+                from,
+                to,
+                commits,
+                kept,
+            } => {
+                out.head = Some((from.clone(), to.clone()));
+                out.pr_head = Some(to.clone());
+                out.dropped = commits.clone();
+                out.kept = Some(kept.clone());
+            }
             Head::Same { forge } => out.pr_head = Some(forge.clone()),
             Head::Ahead { commits, .. } => out.ahead = Some(*commits),
             _ => {}
@@ -896,6 +1053,8 @@ impl Resumed {
             "pr_head": self.pr_head,
             "head": self.head.as_ref().map(|(from, to)| json!({"from": from, "to": to})),
             "ahead": self.ahead,
+            "dropped": self.dropped,
+            "kept": self.kept,
             "back": self.back,
             "facts": self.facts,
         })
@@ -934,7 +1093,15 @@ impl Resumed {
                 _ => capital(fact),
             });
         }
-        if let Some((_, to)) = &self.head {
+        if let (Some((_, to)), Some(kept)) = (&self.head, &self.kept) {
+            out.push(replaced_text(
+                &self.dropped,
+                to,
+                kept,
+                &pr_name(self.pr),
+                true,
+            ));
+        } else if let Some((_, to)) = &self.head {
             out.push(format!(
                 "It took the head {} of {} that someone pushed by hand: the branch of the clone moved forward to it",
                 short(to),
@@ -1871,6 +2038,21 @@ step = "open-pr"
 
     const BRANCH: &str = "vision/DEMO-12";
 
+    /// The name and the address of each commit of Vision in these tests.
+    const VISION: (&str, &str) = ("vision[bot]", "bot@example.invalid");
+
+    /// A commit of Vision of one file in `dir`, with the identity [`VISION`]. Gives the commit.
+    fn vision_commit(dir: &Path, name: &str) -> String {
+        std::fs::write(dir.join(name), name).unwrap();
+        let author = git::Author {
+            name: VISION.0,
+            email: VISION.1,
+        };
+        git::run_as(dir, &["add", "--all"], author).unwrap();
+        git::run_as(dir, &["commit", "--quiet", "-m", name], author).unwrap();
+        git::run_as(dir, &["rev-parse", "HEAD"], author).unwrap()
+    }
+
     fn git_in(dir: &Path, args: &[&str]) -> String {
         let author = git::Author {
             name: "test",
@@ -1969,7 +2151,13 @@ step = "open-pr"
 
         /// The head of the open pull request `forge`, seen from the clone.
         fn head(&self, forge: &str, switches: bool) -> Head {
-            head(&self.ticket(BRANCH), BRANCH, &pr_at(forge), switches)
+            head(
+                &self.ticket(BRANCH),
+                BRANCH,
+                &pr_at(forge),
+                switches,
+                Some(VISION),
+            )
         }
 
         fn branch(&self) -> String {
@@ -2049,6 +2237,81 @@ step = "open-pr"
     }
 
     #[test]
+    fn the_pull_request_wins_over_commits_of_vision_that_never_left_the_machine() {
+        let repos = Repos::new();
+        let own = vision_commit(&repos.clone, "v.txt");
+        let pushed = repos.pushed("b.txt");
+        let kept = format!("{KEPT}/{BRANCH}/{}", short(&own));
+        assert_eq!(
+            repos.head(&pushed, false),
+            Head::Replaced {
+                from: own.clone(),
+                to: pushed.clone(),
+                commits: vec![own.clone()],
+                kept: kept.clone(),
+            }
+        );
+        assert_eq!(repos.branch(), own, "the test moves nothing");
+        // A change in the work tree stops the move.
+        Repos::write(&repos.clone, "a.txt", "changed by hand");
+        assert!(matches!(
+            repos.head(&pushed, false),
+            Head::Dirty { changes: 1, .. }
+        ));
+        git_in(&repos.clone, &["checkout", "--quiet", "--", "a.txt"]);
+        // The move keeps the old tip under its ref and takes the head of the pull request.
+        replace_head(&repos.clone, &own, &pushed, &kept).unwrap();
+        assert_eq!(repos.branch(), pushed);
+        assert_eq!(git_in(&repos.clone, &["rev-parse", &kept]), own);
+        assert!(repos.clone.join("b.txt").is_file());
+        assert!(!repos.clone.join("v.txt").exists());
+        // A second move from the old tip refuses: the clone is no longer there.
+        assert!(replace_head(&repos.clone, &own, &pushed, &kept).is_err());
+    }
+
+    #[test]
+    fn a_commit_of_a_person_or_a_sent_commit_of_vision_keeps_the_branches_apart() {
+        // A commit of the person in the clone, next to a commit of Vision: nothing moves.
+        let repos = Repos::new();
+        vision_commit(&repos.clone, "v.txt");
+        Repos::commit(&repos.clone, "c.txt", "C", "C");
+        let pushed = repos.pushed("b.txt");
+        assert_eq!(
+            repos.head(&pushed, false),
+            Head::Apart {
+                forge: pushed.clone()
+            }
+        );
+        // A commit of Vision that a push sent to another branch of the remote left the machine.
+        let repos = Repos::new();
+        let own = vision_commit(&repos.clone, "v.txt");
+        git_in(
+            &repos.clone,
+            &[
+                "push",
+                "--quiet",
+                "origin",
+                &format!("{own}:refs/heads/env"),
+            ],
+        );
+        let pushed = repos.pushed("b.txt");
+        assert_eq!(
+            repos.head(&pushed, false),
+            Head::Apart {
+                forge: pushed.clone()
+            }
+        );
+        // With no identity of Vision, each commit counts as a commit of a person.
+        let repos = Repos::new();
+        vision_commit(&repos.clone, "v.txt");
+        let pushed = repos.pushed("b.txt");
+        assert_eq!(
+            head(&repos.ticket(BRANCH), BRANCH, &pr_at(&pushed), false, None),
+            Head::Apart { forge: pushed }
+        );
+    }
+
+    #[test]
     fn a_change_in_the_work_tree_another_branch_and_a_missing_branch_stop_the_continue() {
         let repos = Repos::new();
         let pushed = repos.pushed("b.txt");
@@ -2081,13 +2344,19 @@ step = "open-pr"
         // Unread: the branch of the ticket is not in the clone, or the row names no clone.
         let other = repos.ticket("vision/DEMO-99");
         assert_eq!(
-            head(&other, "vision/DEMO-99", &pr_at(&pushed), true),
+            head(
+                &other,
+                "vision/DEMO-99",
+                &pr_at(&pushed),
+                true,
+                Some(VISION)
+            ),
             Head::Unread("the branch vision/DEMO-99 is not in the clone".into())
         );
         let mut none = repos.ticket(BRANCH);
         none.row.clone = None;
         assert!(matches!(
-            head(&none, BRANCH, &pr_at(&pushed), true),
+            head(&none, BRANCH, &pr_at(&pushed), true, Some(VISION)),
             Head::Unread(why) if why.contains("DEMO-12 has no clone")
         ));
     }
@@ -2135,7 +2404,7 @@ step = "open-pr"
         assert!(git::worktree_common_dir(&slot).is_some());
         let mut ticket = repos.ticket(BRANCH);
         ticket.row.clone = Some(slot.display().to_string());
-        let head_at = |forge: &str| head(&ticket, BRANCH, &pr_at(forge), false);
+        let head_at = |forge: &str| head(&ticket, BRANCH, &pr_at(forge), false, Some(VISION));
         assert_eq!(
             head_at(&repos.base),
             Head::Same {

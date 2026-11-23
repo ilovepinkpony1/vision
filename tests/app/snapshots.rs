@@ -362,6 +362,17 @@ fn the_continue_card_reads_then_shows_the_suggestion_or_why_there_is_none() {
     };
     read_resume(&mut app, 2.4, "DEMO-3", Ok(behind));
     check("continue_behind", &app);
+    // The pull request went on without a commit of Vision that never left the machine: the card
+    // says that the branch moves to the head of the pull request, and where the old tip stays.
+    let mut replaced = continue_view("DEMO-3", "review", Some("comments"), true);
+    replaced.head = vision::pipeline::resume::Head::Replaced {
+        from: "5d1e0a7b3c9f2e48".into(),
+        to: "a3c8e1f4b7d2906c".into(),
+        commits: vec!["5d1e0a7b3c9f2e48".into()],
+        kept: "refs/vision/kept/vision/DEMO-3/5d1e0a7b3c9f".into(),
+    };
+    read_resume(&mut app, 2.5, "DEMO-3", Ok(replaced));
+    check("continue_replaced", &app);
 }
 
 /// A ticket stopped at ready-to-merge gets a late comment: the suggestion goes back to
