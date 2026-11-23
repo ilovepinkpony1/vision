@@ -126,6 +126,10 @@ pub fn render(
     // `allowUnsandboxedCommands` is false, so a call that asks for no sandbox is ignored. The
     // real test `a_real_worker_turn_stays_in_its_sandbox` shows both. Never keep the rule
     // without the strict sandbox.
+    //
+    // `strictAllowlist` denies each host outside `allowedDomains` at once. Without it, Claude
+    // Code asks the person: a headless turn denies the request by itself, but a turn in a herdr
+    // pane waits at the prompt "Network request outside of sandbox" until a person answers.
     let mut value = json!({
         "permissions": {"allow": ["Bash"]},
         "sandbox": {
@@ -139,6 +143,7 @@ pub fn render(
             },
             "network": {
                 "allowedDomains": sandbox.allow_domains,
+                "strictAllowlist": true,
                 "allowLocalBinding": true,
                 "allowUnixSockets": sandbox.allow_unix_sockets,
             }
@@ -498,7 +503,7 @@ mod tests {
                 "sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,
                 "failIfUnavailable":true,"filesystem":{"denyRead":["~/"],
                 "allowRead":["/clones/one","/opt/tool chain","/v/worker.gitconfig"]},
-                "network":{"allowedDomains":["localhost","127.0.0.1"],"allowLocalBinding":true,"allowUnixSockets":[]}}})
+                "network":{"allowedDomains":["localhost","127.0.0.1"],"strictAllowlist":true,"allowLocalBinding":true,"allowUnixSockets":[]}}})
         );
         let reader = render(
             TurnKind::Reader,

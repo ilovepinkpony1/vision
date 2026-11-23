@@ -172,8 +172,8 @@ fn a_worker_turn_gets_the_sandbox_and_the_worker_git_configuration() {
                 home.work.display().to_string(), journal.clone(), "/opt/tool chain",
                 gitconfig.display().to_string()],
                 "denyWrite": [journal.clone()]},
-            "network": {"allowedDomains": ["localhost", "127.0.0.1"], "allowLocalBinding": true,
-                "allowUnixSockets": []}}})
+            "network": {"allowedDomains": ["localhost", "127.0.0.1"], "strictAllowlist": true,
+                "allowLocalBinding": true, "allowUnixSockets": []}}})
     );
     let git_text = std::fs::read_to_string(&gitconfig).unwrap();
     assert!(
