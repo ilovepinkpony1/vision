@@ -154,6 +154,21 @@ pub fn render(
     Ok(value)
 }
 
+/// Allows the tool Skill in a rendered settings object, once. A skill that names
+/// `allowed-tools` asks for an approval before it starts. A headless turn has nobody to give
+/// it, so Claude Code denies the skill, and a turn in a herdr pane waits at the prompt until a
+/// person answers. The turn chose its skills with `--plugin-dir`, and no turn can change them,
+/// so each of them starts with no approval.
+pub fn allow_skills(value: &mut Value) {
+    let Some(root) = value.as_object_mut() else {
+        return;
+    };
+    let permissions = root.entry("permissions").or_insert_with(|| json!({}));
+    if let Some(permissions) = permissions.as_object_mut() {
+        push_once(permissions, "allow", SKILL_TOOL);
+    }
+}
+
 /// The files of a common git folder that a session never writes: git runs what they name
 /// outside the sandbox, such as a hook or a command of the configuration. Claude Code keeps the
 /// same two closed in the `.git` folder of the working folder of a session.
@@ -591,6 +606,37 @@ mod tests {
         let text = settings_text(&paths, TurnKind::Worker, &worker, true, &protect).unwrap();
         let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["permissions"]["deny"], json!(rules));
+    }
+
+    #[test]
+    fn a_turn_with_plugins_starts_each_skill_with_no_approval() {
+        let render_kind = |kind: TurnKind| {
+            render(
+                kind,
+                Path::new("/clones/app"),
+                &[],
+                &Sandbox::default(),
+                Path::new("/v/worker.gitconfig"),
+                &[PathBuf::from("/plugins/one")],
+            )
+            .unwrap()
+        };
+        let mut tester = render_kind(TurnKind::Tester);
+        let before = tester.clone();
+        allow_skills(&mut tester);
+        allow_skills(&mut tester);
+        assert_eq!(tester["permissions"]["allow"], json!(["Bash", "Skill"]));
+        // Only the allow list changes: the deny rules and the sandbox stay.
+        assert_eq!(tester["permissions"]["deny"], before["permissions"]["deny"]);
+        assert_eq!(tester["sandbox"], before["sandbox"]);
+        // A reader has no allow list of its own, so it gets one with the tool Skill.
+        let mut reader = render_kind(TurnKind::Reader);
+        allow_skills(&mut reader);
+        assert_eq!(reader["permissions"]["allow"], json!(["Skill"]));
+        assert_eq!(
+            reader["permissions"]["deny"],
+            render_kind(TurnKind::Reader)["permissions"]["deny"]
+        );
     }
 
     #[test]

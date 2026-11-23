@@ -427,6 +427,8 @@ In a git worktree, `.git` is a file. Git keeps the index, the objects, and the r
 
 Each entry of `claude.plugins` is a Claude Code plugin folder, which has `.claude-plugin/plugin.json`, or a folder of such folders. If the list names a folder, each work turn (a reader, a worker, or a tester of a step) gets one `--plugin-dir` for each folder, and its tool list ends with `Skill`. The contract of 7.4 names `Skill` too. The Judge and the Curator get no plugin.
 
+The `settings.json` of such a turn also allows `Skill`. A skill that names `allowed-tools` in its front matter asks for an approval before it starts. A turn has nobody who can approve, so a headless turn denies the skill, and a turn in a herdr pane waits at the prompt. The turn chose its skills with `--plugin-dir`, and no turn can change them, so each of them starts with no approval.
+
 A skill reads the files that it links, and a worker runs its scripts. So a turn can read each plugin folder and never write it. The runner gives the turn each folder, its real path, and the real path of each link in a skill folder that leads out of the plugin folder, as `--add-dir`. The runner also adds them to the read allow list of the sandbox of a worker and a tester. The `settings.json` of each work turn denies `Edit` and `Write` on each of these folders, such as `Edit(//<folder>/**)`, and the sandbox of a worker and a tester lists them in `denyWrite`. A file `sandbox/<kind>.json` of the home gets the same deny rules.
 
 A folder of `claude.plugins` that does not exist or that holds no plugin refuses the turn. `vision doctor` names each plugin and the number of its skills in its line `plugins`, and fails such a folder. With an empty list, there is no such line.

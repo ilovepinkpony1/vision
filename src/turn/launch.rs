@@ -479,6 +479,9 @@ pub fn prepare(ctx: &Ctx, ledger: &Ledger, request: &LaunchRequest) -> Result<La
             &gitconfig,
             &protect,
         )?;
+        if skills {
+            settings::allow_skills(&mut rendered);
+        }
         // In a git worktree, git keeps the index, the objects, and the refs in the common git
         // folder of the main checkout, so git in the sandbox needs that folder too.
         if settings::sandboxed(request.kind) {

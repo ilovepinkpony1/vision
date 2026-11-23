@@ -528,7 +528,9 @@ fn a_work_turn_loads_the_plugins_and_no_turn_can_change_them() {
         .flat_map(|dir| [format!("Edit(/{dir}/**)"), format!("Write(/{dir}/**)")])
         .collect();
     assert_eq!(settings["permissions"]["deny"], json!(rules), "{settings}");
-    assert_eq!(settings["permissions"]["allow"], json!(["Bash"]));
+    // A skill that names `allowed-tools` asks for an approval, and a turn has nobody to give
+    // it: a headless turn denies the skill, and a turn in a pane waits at the prompt.
+    assert_eq!(settings["permissions"]["allow"], json!(["Bash", "Skill"]));
     assert_eq!(
         settings["sandbox"]["filesystem"]["denyWrite"],
         json!(protected)
