@@ -2933,6 +2933,30 @@ kind = "end"
 }
 
 #[test]
+fn a_merge_of_the_pull_request_ends_a_stopped_ticket() {
+    let world = World::new();
+    held_push_adapter(&world);
+    world.edit_config(|doc| doc["caps"]["merge_look_minutes"] = toml_edit::value(0));
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the held push", LONG, |w| {
+        status(w)["needs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "operation")
+    });
+    world.run(&["stop", KEY]).expect_code(0);
+    assert_eq!(world.flags(), ["stopped"]);
+    let pushes = world.acts_of("git.push");
+    // The person merges the pull request of the stopped ticket: nothing is left to decide.
+    world.world_cmd(&["merge", world.root(), "1"]);
+    world.tick_until("the end", LONG, |w| w.counts()["finished"].is_string());
+    assert_eq!(world.row().unwrap().state.as_deref(), Some("done"));
+    assert!(world.flags().is_empty(), "{:?}", world.flags());
+    assert_eq!(world.acts_of("git.push"), pushes, "no push after the merge");
+}
+
+#[test]
 fn a_merge_of_the_pull_request_ends_a_ticket_whose_push_waits_for_approval() {
     let world = World::new();
     held_push_adapter(&world);

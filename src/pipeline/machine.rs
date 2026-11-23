@@ -373,10 +373,11 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
 /// wait step watches the pull request itself. At each other step with no running turn and no
 /// job in the background, the ticket looks at its pull request at most once in
 /// `caps.merge_look_minutes`,
-/// also under the flag needs-you; a stopped or paused ticket waits for the person. A merged pull
-/// request drops each write of the ticket that waits, so that no approval sends it later,
-/// clears the flags, and moves the ticket to its end step, which step 6 finishes. Gives true
-/// when the ticket moved.
+/// also under the flag needs-you or stopped: a merged pull request leaves nothing to decide. A
+/// paused ticket waits for the person, who works in its session. A merged pull request drops
+/// each write of the ticket that waits, so that no approval sends it later, clears the flags,
+/// and moves the ticket to its end step, which step 6 finishes. Gives true when the ticket
+/// moved.
 fn merged_outside(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -387,10 +388,7 @@ fn merged_outside(
 ) -> Result<bool> {
     if ticket.row.pr.is_none()
         || matches!(step.kind, StepKind::Wait(_) | StepKind::End)
-        || ticket
-            .flags
-            .iter()
-            .any(|f| f == STOPPED || f == turn::PAUSED)
+        || ticket.flags.iter().any(|f| f == turn::PAUSED)
         || ledger.running_turns_of_ticket(ticket.key.as_str())? > 0
         || !runs::of_ticket(&ctx.paths, ticket.key.as_str()).is_empty()
     {
@@ -437,11 +435,11 @@ fn merged_outside(
         )?;
         dropped.push(format!("{} {}", op.verb, op.id));
     }
-    ticket
-        .flags
-        .retain(|f| f != NEEDS_YOU && f != WAITS_FOR_LIMIT);
-    ticket.counts.reasons.remove(NEEDS_YOU);
-    ticket.counts.reasons.remove(WAITS_FOR_LIMIT);
+    let cleared = [NEEDS_YOU, WAITS_FOR_LIMIT, STOPPED];
+    ticket.flags.retain(|f| !cleared.contains(&f.as_str()));
+    for flag in cleared {
+        ticket.counts.reasons.remove(flag);
+    }
     ticket.counts.seen = Some(Seen::of(&facts, &at));
     let end = adapter.end().id.clone();
     move_to_with(
