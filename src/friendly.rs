@@ -131,6 +131,9 @@ pub fn explain(raw: &str) -> Friendly {
     if let Some(friendly) = unrouted(text, raw) {
         return friendly;
     }
+    if let Some(friendly) = wait_limit(text, raw) {
+        return friendly;
+    }
     if let Some((verb, rest)) = text.split_once(" was refused by the size gate: ") {
         let (lines, limit) = numbers_of(rest);
         let headline = match (lines, limit) {
@@ -416,6 +419,55 @@ fn unrouted(text: &str, raw: &str) -> Option<Friendly> {
     ))
 }
 
+/// `the step S watched W for N s, above its limit of L s. The last value: V`. A wait for a
+/// deploy names the environment, because the cause is then outside Vision.
+fn wait_limit(text: &str, raw: &str) -> Option<Friendly> {
+    let rest = text.strip_prefix("the step ")?;
+    let (step, rest) = rest.split_once(" watched ")?;
+    let (watch, rest) = rest.split_once(" for ")?;
+    let (_, rest) = rest.split_once(" s, above its limit of ")?;
+    let (limit, rest) = rest.split_once(" s.")?;
+    let (_, value) = rest.split_once("The last value: ")?;
+    let value = value.trim().trim_end_matches('.');
+    let limit = limit
+        .trim()
+        .parse::<u64>()
+        .map_or_else(|_| "its time limit".to_string(), plain_time);
+    if let Some(env) = watch
+        .strip_prefix("envs.")
+        .and_then(|w| w.strip_suffix(".deployed"))
+    {
+        return Some(Friendly::new(
+            format!("{env} did not run the head of the ticket in {limit}, so the step {step} stopped waiting"),
+            Some(format!(
+                "Find out why {env} did not deploy, for example in its deploy job. Then press r to wait again"
+            )),
+            raw,
+        ));
+    }
+    let seen = if value == "not observed yet" {
+        "Vision never observed its value".to_string()
+    } else {
+        format!("its value stayed `{value}`")
+    };
+    Some(Friendly::new(
+        format!("The step {step} waited {limit} for {watch}, and {seen}"),
+        Some(format!(
+            "Find out why {watch} does not change. Then press r to wait again, or raise the limit of the step {step} in adapter.toml"
+        )),
+        raw,
+    ))
+}
+
+/// A time in words: `45 seconds`, `90 minutes`, or `2 hours`.
+fn plain_time(secs: u64) -> String {
+    match secs {
+        s if s >= 7200 && s % 3600 == 0 => format!("{} hours", s / 3600),
+        s if s >= 120 => format!("{} minutes", s / 60),
+        s => format!("{s} seconds"),
+    }
+}
+
 /// `V is in the mode shadow: ... Run `vision promote V` ...`.
 fn shadow(text: &str, raw: &str) -> Option<Friendly> {
     let at = text.find(" is in the mode shadow")?;
@@ -688,6 +740,43 @@ mod tests {
         assert_eq!(
             other.action.as_deref(),
             Some("Fix the outside state, or add `none` to on or wait of the step look in adapter.toml. Then press r.")
+        );
+    }
+
+    #[test]
+    fn a_wait_past_its_limit_says_what_it_waited_for() {
+        let raw = "needs-you at the step deployed-void: the step deployed-void watched envs.void.deployed for 5427 s, above its limit of 5400 s. The last value: false";
+        let f = explain(raw);
+        assert_eq!(
+            f.headline,
+            "Void did not run the head of the ticket in 90 minutes, so the step deployed-void stopped waiting."
+        );
+        assert_eq!(
+            f.action.as_deref(),
+            Some("Find out why void did not deploy, for example in its deploy job. Then press r to wait again.")
+        );
+        assert_eq!(f.details.as_deref(), Some(raw));
+        assert_eq!(
+            f.inline(),
+            "void did not run the head of the ticket in 90 minutes, so the step deployed-void stopped waiting"
+        );
+        assert_eq!(
+            f.action_for_command_line("DEMO-12").as_deref(),
+            Some("Find out why void did not deploy, for example in its deploy job. Then run `vision retry DEMO-12` to wait again.")
+        );
+        let ci = explain("the step ci-review watched ci.state for 7260 s, above its limit of 7200 s. The last value: running");
+        assert_eq!(
+            ci.headline,
+            "The step ci-review waited 2 hours for ci.state, and its value stayed `running`."
+        );
+        assert_eq!(
+            ci.action.as_deref(),
+            Some("Find out why ci.state does not change. Then press r to wait again, or raise the limit of the step ci-review in adapter.toml.")
+        );
+        let none = explain("the step look watched pr.draft for 61 s, above its limit of 60 s. The last value: not observed yet");
+        assert_eq!(
+            none.headline,
+            "The step look waited 60 seconds for pr.draft, and Vision never observed its value."
         );
     }
 
