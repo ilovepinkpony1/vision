@@ -1195,7 +1195,7 @@ A `failed` operation is final for its key. `vision retry KEY` frees the key, so 
 
 `vision take KEY` needs a slot: a free clone of `clones`, or the slot of a ticket that only watches (see "Slots and the queue" below). It fetches, and it makes the branch from `base`. A clone holds one ticket at a time. A clone can be a git worktree, and the take uses the clones in their order. Git lets one worktree hold a branch at a time. If another worktree holds the branch of the ticket, the take stops, names that worktree, and says how to free the branch. A continue of a stopped ticket does the same.
 
-A ticket can be in progress outside Vision: someone made a branch with its key by hand, and maybe opened a pull request. The queue gives such a ticket as not eligible, with its `branch`, and with `pr` for an open pull request. The branch of the pull request wins over another branch with the key. If git cannot take the text as the name of a branch, Vision drops the branch of that ticket.
+A ticket can be in progress outside Vision: someone made a branch by hand, and maybe opened a pull request. The name of the branch or the title of the open pull request holds the key. The queue gives such a ticket as not eligible, with its `branch`, and with `pr` for an open pull request. The branch of the pull request wins over another branch with the key. If git cannot take the text as the name of a branch, Vision drops the branch of that ticket.
 
 A plain `vision take KEY` of such a ticket calls `observe` one time, with that branch and that pull request. Then it reads the rules from the first step of the path. It prints where the ticket is, each fact, and the suggestion with its command. It changes nothing, and it exits with code 1. Vision has no clone of the ticket yet, so the facts have no head state. A rule that names the end step suggests nothing, because Vision takes no ticket that is done.
 
@@ -1256,6 +1256,7 @@ These rules keep the tokens and the repo safe:
 
 - A token goes to a service only in a header, and only over https. It never goes into a file, a command line, a remote address, an error text, or an answer.
 - `git.push` gives the token to one git call through environment variables, for the address of the remote only. A push never forces.
+- `git.push` pushes only the branch of the call, and never the base branch or the branch of an env. The name of the branch holds the key, or the branch is the head of the open pull request of the call in the repo itself, with the key in its title. A ticket that a person started outside Vision can have such a branch.
 - A job that runs code of the project gets no secret.
 - A reconcile call only reads.
 - `git.push`, `ci.run`, `ci.rerun`, `review.reply`, `review.resolve`, `review.minimize`, and `review.rerequest` refuse a call whose pull request is merged or closed. The verb reads the pull request of the call first. If it is merged or closed, the operation is `failed`, and nothing goes to GitHub. So a write that waited, for example for an approval, never makes the branch of a merged pull request again and never answers on it. A call with no pull request, or with a number that GitHub does not know, runs as before.

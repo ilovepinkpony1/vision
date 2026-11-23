@@ -432,13 +432,16 @@ pub(super) fn bad_ref(branch: &str) -> bool {
         || branch.contains("//")
 }
 
-/// The branch that git.push can push: the branch of the call, with the key, never the base.
+/// The branch that git.push can push: the branch of the call, never the base. The branch holds
+/// the key, or it is the head of the open pull request of the call, whose title holds the key.
+/// The queue gives such a branch for a ticket that a person started outside Vision.
 fn check_push_branch(
-    branch: Option<&Value>,
+    call: &Map<String, Value>,
     key: &str,
     config: &Config,
     args: &Map<String, Value>,
 ) -> Res<String> {
+    let branch = truthy(call.get("branch"));
     let branch = match branch {
         Some(Value::String(b)) if !b.is_empty() && !bad_ref(b) => b.clone(),
         other => {
@@ -461,17 +464,47 @@ fn check_push_branch(
             "git.push refuses the branch {branch}: it is the base branch or the branch of an env"
         ));
     }
-    if !forge::names_key(&branch, key) {
-        return refuse(format!(
-            "git.push refuses the branch {branch}: it does not hold the key {key}"
-        ));
-    }
     for flag in ["force", "force_with_lease", "delete", "mirror"] {
         if truthy(args.get(flag)).is_some() {
             return refuse(format!("git.push never uses {}", flag.replace('_', "-")));
         }
     }
+    if !forge::names_key(&branch, key) && !pull_names_key(config, call, &branch, key)? {
+        return refuse(format!(
+            "git.push refuses the branch {branch}: it does not hold the key {key}, and no open \
+             pull request of the call has it as its head and {key} in its title"
+        ));
+    }
     Ok(branch)
+}
+
+/// True when the open pull request of the call has `branch` of the repo itself as its head and
+/// `key` in its title. A branch of a fork has the same name, but it is another branch.
+fn pull_names_key(
+    config: &Config,
+    call: &Map<String, Value>,
+    branch: &str,
+    key: &str,
+) -> Res<bool> {
+    let Some(number) = pr_number(call.get("pr")).filter(|n| *n > 0) else {
+        return Ok(false);
+    };
+    let repo = config.repo("git.push")?;
+    let pull = match GitHub::new(config, "git.push", None)?.pull(number) {
+        Ok(pull) => pull,
+        Err(Error::Http { status: 404, .. }) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let head = pull.get("head");
+    let from = head
+        .and_then(|h| h.get("repo"))
+        .and_then(|r| r.get("full_name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    Ok(pull.get("state").and_then(Value::as_str) == Some("open")
+        && head.and_then(|h| h.get("ref")).and_then(Value::as_str) == Some(branch)
+        && from.eq_ignore_ascii_case(&repo)
+        && forge::names_key(&text_of(pull.get("title")), key))
 }
 
 pub(super) fn remote_url(config: &Config, why: &str) -> Res<String> {
@@ -550,7 +583,7 @@ fn git_push(
     let why = "git.push";
     let key = check_key(call.get("key"), "the ticket key")?;
     let args = args_of(call);
-    let branch = check_push_branch(truthy(call.get("branch")), &key, config, &args)?;
+    let branch = check_push_branch(call, &key, config, &args)?;
     let Some(head) = commit_of(truthy(call.get("head"))).map(str::to_string) else {
         return fail("git.push needs the last commit in head");
     };

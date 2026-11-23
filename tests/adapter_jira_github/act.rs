@@ -471,6 +471,74 @@ fn push_it_refuses_the_base_branch_another_branch_and_force() {
     assert_eq!(p.repos.remote_head(BRANCH), None);
 }
 
+/// The open pull request #7 of `branch` in `repo`, with `title`.
+fn pull_of(branch: &str, repo: Value, title: &str) -> Value {
+    let mut pr = pull(false);
+    pr["head"]["ref"] = json!(branch);
+    pr["head"]["repo"] = repo;
+    pr["title"] = json!(title);
+    pr
+}
+
+#[test]
+fn push_a_branch_without_the_key_needs_its_open_pull_request_with_the_key_in_the_title() {
+    // A person started the ticket outside Vision on a branch with another name, and the title of
+    // the pull request names the key. The queue gave that branch, and the take kept it.
+    const OWN: &str = "feature/quiet-redesign";
+    let titled = "[DEMO-12] Export the report";
+    let p = Push::new();
+    git(&["checkout", "--quiet", "-b", OWN], &p.repos.clone);
+    let w = GitHubWorld::new(
+        &p.t.server,
+        Some(pull_of(OWN, json!({"full_name": "Acme/Widgets"}), titled)),
+    );
+    let push = |pr: Value| p.push(false, json!({}), &[("branch", json!(OWN)), ("pr", pr)]);
+    let result = push(json!(7));
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert_eq!(
+        p.repos.remote_head(OWN).as_deref(),
+        Some(p.repos.head.as_str())
+    );
+    assert_eq!(p.pushes(), 1);
+
+    let ours = json!({"full_name": "acme/widgets"});
+    let cases = [
+        (
+            pull_of(OWN, ours.clone(), "Export the report"),
+            "the title has no key",
+        ),
+        (
+            pull_of(OWN, ours.clone(), "[DEMO-123] Export the report"),
+            "the title has another key",
+        ),
+        (
+            pull_of("feature/other", ours.clone(), titled),
+            "the pull request is of another branch",
+        ),
+        (
+            pull_of(OWN, json!({"full_name": "someone/widgets"}), titled),
+            "the branch is in a fork",
+        ),
+        (pull_of(OWN, Value::Null, titled), "the fork is gone"),
+    ];
+    for (pr, why) in cases {
+        w.lock().pr = Some(pr);
+        let result = push(json!(7));
+        assert_eq!(result.code, 2, "{why}: {result:?}");
+        assert!(
+            has(
+                &result,
+                "git.push refuses the branch feature/quiet-redesign: it does not hold the key DEMO-12"
+            ),
+            "{why}: {result:?}"
+        );
+    }
+    w.lock().pr = Some(pull_of(OWN, ours, titled));
+    let result = push(Value::Null);
+    assert_eq!(result.code, 2, "a call with no pull request: {result:?}");
+    assert_eq!(p.pushes(), 1, "a refusal runs no push");
+}
+
 #[test]
 fn push_a_branch_that_moved_on_the_remote_is_never_forced() {
     let p = Push::new();
