@@ -1064,7 +1064,8 @@ fn ci_log_no_run_and_a_storage_that_is_not_https() {
 // app-start -------------------------------------------------------------------------------------
 
 /// The app of the test: an HTTP server on the port of `VISION_TEST_APP_PORT` that prints one
-/// line when it listens, and `PORT-TAKEN` when its port is taken.
+/// line when it listens, and `PORT-TAKEN` when its port is taken. If the file of
+/// `VISION_TEST_APP_SLOW` holds a number, each answer waits that many seconds, as a busy app.
 pub fn serve_test_app() {
     let Some(port) = std::env::var("VISION_TEST_APP_PORT")
         .ok()
@@ -1088,6 +1089,13 @@ pub fn serve_test_app() {
         let mut stream = stream;
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf);
+        let slow = std::env::var("VISION_TEST_APP_SLOW")
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| text.trim().parse::<u64>().ok());
+        if let Some(seconds) = slow {
+            std::thread::sleep(std::time::Duration::from_secs(seconds));
+        }
         let _ = stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
     }
@@ -1166,10 +1174,16 @@ impl AppStart {
 
     fn app_command(&self) -> String {
         format!(
-            "env > env-of-the-app.txt; VISION_TEST_APP_PORT={} exec '{}' test_app --exact --ignored --nocapture --test-threads=1",
+            "env > env-of-the-app.txt; VISION_TEST_APP_PORT={} VISION_TEST_APP_SLOW='{}' exec '{}' test_app --exact --ignored --nocapture --test-threads=1",
             self.port,
+            self.slow_file().display(),
             std::env::current_exe().unwrap().display()
         )
+    }
+
+    /// The file that makes each answer of the test app wait, see [`serve_test_app`].
+    fn slow_file(&self) -> PathBuf {
+        self.t.path("slow-app")
     }
 
     fn start(&self, command: &str, config: Value) -> (Value, Value) {
@@ -1382,6 +1396,28 @@ fn app_start_a_new_head_restarts_the_app_that_the_job_started() {
     let state: Value =
         serde_json::from_str(&std::fs::read_to_string(a.state_path()).unwrap()).unwrap();
     assert_eq!(state["pid"], fresh["pid"]);
+}
+
+#[test]
+fn app_start_a_busy_app_of_the_same_head_runs_on() {
+    let mut a = AppStart::new();
+    let head = a.commit("one");
+    let (answer, info) = a.start_app();
+    assert_eq!(answer["ok"], true, "{answer}");
+    // The app is busy now: each answer takes 3 s, as a cold page of a large app on a busy
+    // machine. The job waits for it, and it does not stop the app to start it again.
+    std::fs::write(a.slow_file(), "3").unwrap();
+    let (again, same) = a.start("exit 9", json!({}));
+    assert_eq!(again["ok"], true, "{again}");
+    assert!(detail(&again).contains(&format!(
+        "the app that Vision started (process id {}) already answers",
+        info["pid"]
+    )));
+    assert_eq!(
+        (&same["started"], &same["pid"], &same["head"]),
+        (&json!(false), &info["pid"], &json!(head))
+    );
+    assert!(alive(info["pid"].as_i64().unwrap()), "the busy app runs on");
 }
 
 #[test]

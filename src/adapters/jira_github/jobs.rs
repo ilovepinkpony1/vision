@@ -1472,6 +1472,11 @@ fn job_log(gh: &GitHub, config: &Config, job_id: Option<&Value>, keep: usize) ->
 
 // app-start -------------------------------------------------------------------------------------
 
+/// The wait for one answer of an app that runs already, before the job starts an app. A busy
+/// app on a busy machine can take many seconds for one page, and a short wait reads it as gone:
+/// the job then stops a good app of the same head and pays a full start.
+const RUNNING_APP_PROBE: f64 = 20.0;
+
 /// True when the address answers with a status below 400.
 fn answers(url: &str, timeout: f64) -> Res<bool> {
     let headers = vec![("User-Agent".to_string(), USER_AGENT.to_string())];
@@ -1554,7 +1559,7 @@ fn app_start(config: &Config, call: &Map<String, Value>) -> Res<Value> {
         info["log"] = json!(state.log);
         info["head"] = json!(state.head);
         let same = state.head == head;
-        if (same || !restart) && answers(&health, 2.0)? {
+        if (same || !restart) && answers(&health, RUNNING_APP_PROBE)? {
             if same {
                 return answer(
                     true,
@@ -1598,7 +1603,7 @@ fn app_start(config: &Config, call: &Map<String, Value>) -> Res<Value> {
         info["pid"] = Value::Null;
         info["log"] = Value::Null;
         info["head"] = Value::Null;
-    } else if answers(&health, 2.0)? {
+    } else if answers(&health, RUNNING_APP_PROBE)? {
         return answer(
             true,
             format!(
