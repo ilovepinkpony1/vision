@@ -231,7 +231,9 @@
 # opened the pull request goes on at in-review, or at comments when a comment or a change
 # request waits, not at its review again. A late comment takes a ticket back to comments, also
 # after the approval or a deploy. A push by hand takes it to ci-review: CI at the new head,
-# then a new review. A merged pull request goes to done.
+# then a new review. An approval with no comment that waits takes a ticket that stopped after
+# in-review, such as at comments, on to ready-to-merge, as in-review does. A merged pull
+# request goes to done.
 #
 # The same rules find the step of a ticket that is in progress outside Vision: the queue gives
 # its branch with the key, and its open pull request. The start card of Home, or a plain
@@ -576,6 +578,10 @@ back = true
 [[resume]]                    # the pull request is open and ready
 when = { "pr.draft" = false, "pr.closed" = false }
 step = "in-review"
+
+[[resume]]                    # approved, and no comment waits: as in-review, the merge is next
+when = { "review.state" = "approved", "pr.closed" = false }
+step = "ready-to-merge"
 
 [[resume]]                    # the pull request is open and still a draft
 when = { "pr.draft" = true, "pr.closed" = false }

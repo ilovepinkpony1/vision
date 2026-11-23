@@ -693,6 +693,25 @@ fn comments_the_threads_that_wait() {
 }
 
 #[test]
+fn comments_an_approval_answers_each_comment_before_it_as_observe_does() {
+    let (t, w) = comments_test();
+    // The lead approves at 10:00:25: the thread 20, whose last comment came at 10:00:22, does
+    // not wait, and the comment 30 of 10:00:30 still waits.
+    let mut approval = review_with(50, "lead", "APPROVED", "");
+    approval["submitted_at"] = json!("2026-11-02T10:00:25Z");
+    w.lock().reviews = vec![approval];
+    let rows = comment_rows(&comments_job(&t, json!({})));
+    assert_eq!(ids(&rows), kind_ids(&[("inline", 30)]), "{rows:?}");
+    // One approval is not enough when the project needs two: each comment still waits.
+    let rows = comment_rows(&comments_job(&t, json!({"approvals_needed": 2})));
+    assert_eq!(
+        ids(&rows),
+        kind_ids(&[("inline", 20), ("inline", 30)]),
+        "{rows:?}"
+    );
+}
+
+#[test]
 fn comments_each_row_has_a_mark_with_the_last_comment_of_its_thread() {
     let (t, w) = comments_test();
     {

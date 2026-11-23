@@ -885,15 +885,53 @@ fn head_for_continue(
     } = head
     {
         resume::replace_head(&clone, from, to, kept)?;
+        let writes = drop_held_writes(ledger, ticket.key.as_str(), commits)?;
         ctx.log(&format!(
-            "resume: {} took the head {} of the pull request, which went on without {} commit(s) of Vision that never left the machine; {kept} keeps the old tip {}",
+            "resume: {} took the head {} of the pull request, which went on without {} commit(s) of Vision that never left the machine; {kept} keeps the old tip {}{}",
             ticket.key,
             short(to),
             commits.len(),
-            short(from)
+            short(from),
+            if writes.is_empty() {
+                String::new()
+            } else {
+                format!(", and the waiting writes {} are dropped", writes.join(", "))
+            }
         ));
     }
     Ok(Resumed::of(checked, ticket.state(), ticket.row.pr))
+}
+
+/// Ends each `pending` operation of the ticket at one of the `commits` of Vision that a continue
+/// dropped from the branch, as `failed`, so that no approval sends a commit that is gone from
+/// the branch. Gives each dropped operation as `<verb> <id>`.
+fn drop_held_writes(ledger: &Ledger, key: &str, commits: &[String]) -> Result<Vec<String>> {
+    let at = time::now_rfc3339();
+    let mut dropped = Vec::new();
+    for op in ledger.operations_of(key, None)? {
+        if op.state != crate::ledger::operations::STATE_PENDING {
+            continue;
+        }
+        let head = serde_json::from_str::<Value>(&op.args)
+            .ok()
+            .and_then(|args| args["head"].as_str().map(str::to_string));
+        let Some(head) = head.filter(|h| commits.iter().any(|c| c == h)) else {
+            continue;
+        };
+        let detail = format!(
+            "dropped: the pull request went on without the commit {} of Vision, so this write did not run",
+            short(&head)
+        );
+        ledger.end_operation(
+            &op.id,
+            crate::ledger::operations::STATE_FAILED,
+            None,
+            Some(&at),
+            &json!({"detail": detail, "dropped": "replaced"}).to_string(),
+        )?;
+        dropped.push(format!("{} {}", op.verb, op.id));
+    }
+    Ok(dropped)
 }
 
 /// Writes in the ticket row what a continue found of the open pull request: its number when the

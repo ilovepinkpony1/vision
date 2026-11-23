@@ -1201,7 +1201,8 @@ fn second_review(config: &Config, call: &Map<String, Value>) -> Res<Value> {
 
 /// Each comment that waits for an answer, as comments.json: the inline threads, the reviews
 /// that ask for changes or comment with a body, and the conversation comments, one row each with
-/// its kind. The text is untrusted data.
+/// its kind. A comment from before the newest approval does not wait (see
+/// [`forge::Approval::answers`]). The text is untrusted data.
 fn comments(config: &Config, call: &Map<String, Value>) -> Res<Value> {
     let why = "the job comments";
     let own = config.logins("own_logins")?;
@@ -1222,13 +1223,20 @@ fn comments(config: &Config, call: &Map<String, Value>) -> Res<Value> {
     };
     let number = forge::int(&pull, "number")
         .ok_or_else(|| Error::Unexpected("KeyError: 'number'".into()))?;
-    let rows = forge::waiting_rows(
-        &gh.reviews(number)?,
+    // A comment from before the newest approval does not wait, as in the review state of
+    // observe: the approver saw it, so the ticket goes on.
+    let reviews = gh.reviews(number)?;
+    let approval = forge::Approval::of(config, &reviews)?;
+    let rows: Vec<Value> = forge::waiting_rows(
+        &reviews,
         &gh.review_comments(number)?,
         &gh.issue_comments(number)?,
         &own,
         &ignore,
-    );
+    )
+    .into_iter()
+    .filter(|row| !approval.answers(row))
+    .collect();
     let kinds: Vec<String> = forge::KINDS
         .iter()
         .map(|k| {

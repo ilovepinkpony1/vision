@@ -2312,6 +2312,31 @@ fn a_push_by_hand_and_a_late_comment_take_a_ticket_back_from_ready_to_merge() {
 }
 
 #[test]
+fn an_approval_takes_a_ticket_stopped_at_comments_on_to_ready_to_merge() {
+    let p = Project::new();
+    needs_the_person_at_refine(&p);
+    p.run(&["retry", KEY, "--step", "comments"]).expect_code(0);
+    p.run(&["stop", KEY]).expect_code(0);
+    let number = pull_request_by_hand(&p);
+    p.server.team(
+        "review",
+        json!({"number": number, "id": 601, "login": "lead", "state": "APPROVED"}),
+    );
+    // in-review comes before comments, so its rule does not apply: the rule of the approval
+    // does, as in-review would route it.
+    let take = p.run(&["take", KEY]);
+    take.expect_code(1);
+    assert!(
+        take.stdout.starts_with(
+            "Vision thinks that DEMO-12 is at the step ready-to-merge, not at the step comments where it stopped"
+        ) && take.stdout.contains("(rule 5)"),
+        "{take:?}"
+    );
+    assert_eq!(p.step().as_deref(), Some("comments"));
+    assert_eq!(p.flags(), ["stopped"]);
+}
+
+#[test]
 fn a_push_by_hand_wins_over_a_commit_of_vision_that_never_left_the_machine() {
     let p = Project::new();
     let path = p.vision.join("config.toml");
@@ -2342,6 +2367,22 @@ fn a_push_by_hand_wins_over_a_commit_of_vision_that_never_left_the_machine() {
         .unwrap();
     assert!(status.success());
     let own = p.head();
+    // A gate held the push of that commit for the person.
+    let args = json!({"args": {}, "branch": BRANCH, "head": own}).to_string();
+    assert!(p
+        .ledger()
+        .add_operation(&vision::ledger::operations::NewOperation {
+            id: "op-held",
+            idem: "idem-held",
+            source: "rule",
+            turn: None,
+            ticket: KEY,
+            verb: "git.push",
+            args: &args,
+            mode: "auto",
+            result: r#"{"detail":"held by the sensitive gate"}"#,
+        })
+        .unwrap());
     // The person goes on from another checkout and pushes: the branches went apart.
     let root = p._dir.path();
     let person = root.join("person");
@@ -2407,6 +2448,22 @@ fn a_push_by_hand_wins_over_a_commit_of_vision_that_never_left_the_machine() {
     assert_eq!(detail["dropped"], json!([own]));
     assert_eq!(detail["kept"], json!(kept));
     assert_eq!(detail["head"], json!({"from": own, "to": pushed}));
+    // The held push of the dropped commit ends, so no approval sends it.
+    let held = p
+        .ledger()
+        .operations_of(KEY, None)
+        .unwrap()
+        .into_iter()
+        .find(|op| op.id == "op-held")
+        .unwrap();
+    assert_eq!(held.state, "failed");
+    assert!(
+        held.result
+            .as_deref()
+            .unwrap()
+            .contains("\"dropped\":\"replaced\""),
+        "{held:?}"
+    );
 }
 
 /// The adapter of the repo with an interrupt on the wait step ready: a waiting comment or a
