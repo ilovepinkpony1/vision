@@ -729,7 +729,8 @@ fn the_cap_names_a_red_ci_only_when_the_newest_run_is_red() {
     );
     assert!(reason.ends_with("Nothing open is listed"), "{reason}");
 
-    // A newer red run of the first step is open again.
+    // A newer red run of the first step at an older commit: a fix moved the head after the
+    // run, and no CI checked the head yet.
     world
         .ledger()
         .conn()
@@ -744,9 +745,33 @@ fn the_cap_names_a_red_ci_only_when_the_newest_run_is_red() {
     world.tick_until("the cap of entry 3", LONG, |w| {
         has_flag(w, "needs-you") && w.counts()["entries"]["review"] == 3
     });
+    let head = git(world.clone(), &["rev-parse", "HEAD"]);
     let reason = world.reason("needs-you");
     assert!(
-        reason.ends_with("Open: the CI is red at 333333333333"),
+        reason.ends_with(&format!(
+            "Open: the CI was red at 333333333333, and no newer CI run checked the head {}",
+            &head[..12]
+        )),
+        "{reason}"
+    );
+
+    // A newer red run at the head is open.
+    world
+        .ledger()
+        .conn()
+        .execute(
+            "INSERT INTO checks (ticket, head, kind, result, source, at)
+             VALUES (?1, ?2, 'ci', 'red', 'step:ci-review', '2026-01-01T00:00:00Z')",
+            [KEY, head.as_str()],
+        )
+        .unwrap();
+    world.run(&["retry", KEY]).expect_code(0);
+    world.tick_until("the cap of entry 4", LONG, |w| {
+        has_flag(w, "needs-you") && w.counts()["entries"]["review"] == 4
+    });
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.ends_with(&format!("Open: the CI is red at {}", &head[..12])),
         "{reason}"
     );
 }

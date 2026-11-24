@@ -38,7 +38,7 @@ fn cap_flag(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, step: &Step) -> Result<
     if !cap_exceeded(visit.n, Some(value), visit.skip_cap) {
         return Ok(None);
     }
-    let open = open_items(ctx, ledger, &ticket.key, step)?;
+    let open = open_items(ctx, ledger, ticket, step)?;
     Ok(Some(flag_action(
         ticket,
         NEEDS_YOU,

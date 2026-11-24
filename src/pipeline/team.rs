@@ -74,7 +74,7 @@ pub(crate) fn select(
         if let Some(name) = &step.cap {
             if let Some(value) = cap_value(ctx, name)? {
                 if cap_exceeded(visit.n, Some(value), visit.skip_cap) {
-                    let open = open_items(ctx, ledger, &ticket.key, step)?;
+                    let open = open_items(ctx, ledger, ticket, step)?;
                     return Ok(vec![flag_action(
                         ticket,
                         NEEDS_YOU,

@@ -1826,13 +1826,16 @@ pub(crate) fn cap_value(ctx: &Ctx, name: &str) -> Result<Option<u32>> {
 
 /// What is open at a step, for the message of its cap: the open items of its documents, and the
 /// newest CI run when it is red. Each step that reads the CI writes its checks under its own
-/// source, so a red run of one step and a later green run of another step both stay.
+/// source, so a red run of one step and a later green run of another step both stay. A red run
+/// at another commit than the head of the ticket is history: a fix moved the head after it, and
+/// no CI checked the head yet.
 pub(crate) fn open_items(
     ctx: &Ctx,
     ledger: &Ledger,
-    key: &TicketKey,
+    ticket: &Ticket,
     step: &Step,
 ) -> Result<Vec<String>> {
+    let key = &ticket.key;
     let mut open = Vec::new();
     for name in expected_docs(step) {
         if let Some(text) = read_optional(&ctx.paths.ticket_doc(key, &name))? {
@@ -1848,10 +1851,23 @@ pub(crate) fn open_items(
         .find(|c| c.kind == "ci")
     {
         if ci.result == "red" {
-            open.push(format!("the CI is red at {}", executor::short(&ci.head)));
+            open.push(match ticket.head() {
+                Some(head) if !same_commit(&head, &ci.head) => format!(
+                    "the CI was red at {}, and no newer CI run checked the head {}",
+                    executor::short(&ci.head),
+                    executor::short(&head)
+                ),
+                _ => format!("the CI is red at {}", executor::short(&ci.head)),
+            });
         }
     }
     Ok(open)
+}
+
+/// True when two names of commits are the same commit: a short name is a prefix of the full one.
+fn same_commit(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    !a.is_empty() && !b.is_empty() && (a.starts_with(b) || b.starts_with(a))
 }
 
 /// The facts of the step of one ticket, for [`decide`]. With `member`, `step` is the view of one
@@ -2079,7 +2095,7 @@ pub(crate) fn gather(
         n: visit.n,
         skip_cap: visit.skip_cap,
         open: if cap_hit {
-            open_items(ctx, ledger, key, step)?
+            open_items(ctx, ledger, ticket, step)?
         } else {
             Vec::new()
         },
