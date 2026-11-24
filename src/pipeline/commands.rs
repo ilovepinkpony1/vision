@@ -860,6 +860,11 @@ fn head_for_continue(
     again: &str,
 ) -> Result<Resumed> {
     let head = &checked.head;
+    // A ticket in the background gave its clone to another ticket: there is no branch to move,
+    // and the slots give it a clone at the head of its row when a step needs one.
+    if !ticket.has_clone() {
+        return Ok(Resumed::of(checked, ticket.state(), ticket.row.pr));
+    }
     let clone = ticket.clone_dir()?;
     if let Some(problem) = head.problem(checked.pr(), &clone.display().to_string()) {
         let reason = format!("{}. {}, then {again}", problem.what, problem.fix);

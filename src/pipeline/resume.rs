@@ -534,6 +534,10 @@ pub enum Head {
     Dirty { forge: String, changes: usize },
     /// The clone is not on the branch of the ticket: the branch that it is on.
     Elsewhere { branch: String },
+    /// The ticket holds no clone now: it waits in the background, and its slot went to another
+    /// ticket. There is no branch to compare, so nothing moves. The slots give it a clone at
+    /// the head of its row when a step needs one.
+    NoClone,
     /// Vision could not read the clone: why.
     Unread(String),
 }
@@ -593,6 +597,7 @@ impl Head {
                 "Fix the clone".to_string(),
             ),
             Head::None
+            | Head::NoClone
             | Head::Same { .. }
             | Head::Forward { .. }
             | Head::Replaced { .. }
@@ -634,6 +639,7 @@ impl Head {
             Head::Apart { .. } => "apart",
             Head::Dirty { .. } => "dirty",
             Head::Elsewhere { .. } => "elsewhere",
+            Head::NoClone => "no-clone",
             Head::Unread(_) => "unread",
         }
     }
@@ -666,6 +672,9 @@ impl Head {
                 format!("the work tree of the clone has {changes} change(s)")
             }
             Head::Elsewhere { branch } => format!("the clone is on {branch}"),
+            Head::NoClone => {
+                "the ticket holds no clone now: it waits in the background, so there is no branch to compare".into()
+            }
             Head::Unread(_) => "Vision could not read the clone".into(),
         })
     }
@@ -733,6 +742,9 @@ pub(crate) fn head(
     let Some(forge) = pr.head.as_deref().map(str::trim).filter(|h| is_commit(h)) else {
         return Head::None;
     };
+    if !ticket.has_clone() {
+        return Head::NoClone;
+    }
     let clone = match ticket.clone_dir() {
         Ok(clone) => clone,
         Err(e) => return Head::Unread(format!("{e:#}")),
@@ -2341,7 +2353,7 @@ step = "open-pr"
                 to: pushed.clone()
             }
         );
-        // Unread: the branch of the ticket is not in the clone, or the row names no clone.
+        // Unread: the branch of the ticket is not in the clone. NoClone: the row names no clone.
         let other = repos.ticket("vision/DEMO-99");
         assert_eq!(
             head(
@@ -2355,10 +2367,14 @@ step = "open-pr"
         );
         let mut none = repos.ticket(BRANCH);
         none.row.clone = None;
-        assert!(matches!(
-            head(&none, BRANCH, &pr_at(&pushed), true, Some(VISION)),
-            Head::Unread(why) if why.contains("DEMO-12 has no clone")
-        ));
+        let background = head(&none, BRANCH, &pr_at(&pushed), true, Some(VISION));
+        assert_eq!(background, Head::NoClone);
+        assert_eq!(
+            background.problem(Some(7), "-"),
+            None,
+            "nothing stops the continue"
+        );
+        assert_eq!(background.state(), "no-clone");
     }
 
     #[test]

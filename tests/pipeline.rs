@@ -1133,6 +1133,65 @@ fn retry_to_a_step_refuses_a_step_it_cannot_enter_and_each_case_that_a_plain_ret
 }
 
 #[test]
+fn a_paused_ticket_in_the_background_continues_at_its_step_with_no_clone() {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.scenario(
+        "builder",
+        "build",
+        json!([runs_then(
+            GREEN_BUILD,
+            result(
+                "Built.",
+                &[("pr.md", "Add subtract\n\nThe calculator can subtract.")]
+            )
+        )]),
+    );
+    world.scenario(
+        "reviewer",
+        "review",
+        json!([ends_with(result(
+            "Reviewed.",
+            &[("review.md", "# Review\n\n## Findings\n\nNone.\n")]
+        ))]),
+    );
+    take_and_approve(&world);
+    world.tick_to("ready");
+    // The ticket waits in the background: it gave its clone to another ticket, as the slots
+    // do. Then the person takes over its session.
+    world
+        .ledger()
+        .conn()
+        .execute("UPDATE tickets SET clone = NULL WHERE key = ?1", [KEY])
+        .unwrap();
+    world.run(&["open", KEY]).expect_code(0);
+    assert!(has_flag(&world, "paused"));
+
+    // The continue reads the facts and goes on at the step: no branch to compare, no error.
+    let run = world.run(&["retry", KEY, "--step", "ready"]);
+    run.expect_code(0);
+    assert!(!run.stderr.contains("has no clone"), "{run:?}");
+    assert!(!has_flag(&world, "paused"), "{run:?}");
+    assert!(!has_flag(&world, "needs-you"), "{run:?}");
+    assert_eq!(world.step().as_deref(), Some("ready"));
+    let resumed = world
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.kind == "resumed")
+        .expect("the event resumed");
+    let detail: Value = serde_json::from_str(resumed.detail.as_deref().unwrap()).unwrap();
+    assert!(
+        detail["facts"].to_string().contains("holds no clone now"),
+        "{detail:#}"
+    );
+    // The wait step only watches, so it goes on in the background with no clone.
+    world.world_cmd(&["ready", world.root(), "1"]);
+    world.tick_to("comments");
+}
+
+#[test]
 fn a_move_clears_the_flags_of_a_retry_and_is_no_entry_for_the_cap_of_its_step() {
     let world = World::new();
     // refine and plan count their entries, and the cap review_rounds = 1 allows one each. With
