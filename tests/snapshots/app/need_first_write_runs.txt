@@ -3,7 +3,7 @@
          │                                                                                          │
     needs│  Replaces the description of the ticket in the tracker.                                  │ needs
          │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │
-  IN PROG│  The verb tracker.describe is in the mode shadow, so nothing was sent.                   │is open
+   In pro│  The verb tracker.describe is in the mode shadow, so nothing was sent.                   │
  ╭───────│                                                                                          │───────╮
  │ ▸ DEMO│  The write that waits                                                                    │   38m │
  │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
@@ -12,11 +12,11 @@
  │       │  │       The file keeps the order of the columns of the table.                        │  │       │
  ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
          │  The gates: passed.                                                                      │
-  MY TICK│                                                                                          │ 2 open
- ╭─ To Do│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
- │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │       │
- │   DEMO│    n  Do not send. The ticket stays as it is                                             │equest │
- ╰───────│                                                                                          │───────╯
+         │                                                                                          │
+         │    y  Send it. Ask me each time for this verb                            shadow to ask   │
+         │    a  Send it. Never ask again for this verb                             shadow to auto  │
+         │    n  Do not send. The ticket stays as it is                                             │
+         │                                                                                          │
          │  y and a change the mode of the verb for each later write of it, one step of the ladder  │
          │  at a time. In the mode auto: Vision never asks again for tracker.describe, except for   │
          │                                                                     ▼ 1 more · ↑↓ scroll │
@@ -28,5 +28,5 @@
   THIS WE│                                                                                          │
          │  esc close this card; the action goes on                                                 │
          │                                                                                          │
- ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯quit
+ ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

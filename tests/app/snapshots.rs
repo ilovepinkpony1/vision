@@ -105,6 +105,23 @@ fn home_with_tickets() {
     check("home_tickets", &home(SIZE));
 }
 
+/// Each tab shows its count, and the tab "Ready to merge" holds the ticket at a merge step.
+#[test]
+fn home_with_a_ticket_ready_to_merge() {
+    let mut tickets = two_tickets();
+    tickets[1].view.step = Some("ready-to-merge".into());
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    check("home_tab_work", &app);
+    send(&mut app, 2.0, Msg::Key(Key::Char('3')));
+    check("home_tab_merge", &app);
+    send(&mut app, 2.1, Msg::Key(Key::Tab));
+    assert_eq!(
+        app.home.tab,
+        vision::app::model::HomeTab::Work,
+        "Tab wraps to the first tab"
+    );
+}
+
 /// A ticket that is in progress outside Vision shows with its status, as a ticket that can
 /// start does, and Enter opens its start card: the read, the suggestion, and no step found.
 #[test]
@@ -114,6 +131,7 @@ fn home_and_the_start_card_of_a_ticket_in_progress_outside_vision() {
         local(two_tickets(), Vec::new()),
         Some(queue_with_outside()),
     );
+    send(&mut app, 1.9, Msg::Key(Key::Char('2')));
     check("home_outside", &app);
     app.home.selected = Some("DEMO-21".into());
     send(&mut app, 2.0, Msg::Key(Key::Enter));
@@ -218,43 +236,40 @@ fn home_at_other_sizes() {
     );
 }
 
-/// MY TICKETS has one section for each status: the statuses of `app.sections` first, then the
-/// others in the order of the queue. The arrows follow the sections. When the box shows a
-/// part, its top line names the section of the first row in view, a title at the top of the
-/// part moves into that line, and the marks count only tickets.
+/// The tab "To take" has one section for each status: the statuses of `app.sections` first,
+/// then the others in the order of the queue. The arrows follow the sections. When the box
+/// shows a part, its top line names the section of the first row in view, a title at the top
+/// of the part moves into that line, and the marks count only tickets.
 #[test]
 fn home_with_a_section_for_each_status() {
-    let app = sectioned_home(SIZE);
+    let mut app = sectioned_home(SIZE);
+    send(&mut app, 1.9, Msg::Key(Key::Char('2')));
     let keys: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();
     assert_eq!(
         keys,
         [
-            "DEMO-12", "DEMO-7", "DEMO-33", "DEMO-37", "DEMO-41", "DEMO-32", "DEMO-36", "DEMO-39",
-            "DEMO-31", "DEMO-34", "DEMO-40", "DEMO-30", "DEMO-38", "DEMO-35",
+            "DEMO-33", "DEMO-37", "DEMO-41", "DEMO-32", "DEMO-36", "DEMO-39", "DEMO-31", "DEMO-34",
+            "DEMO-40", "DEMO-30", "DEMO-38", "DEMO-35",
         ]
     );
     check("home_sections", &app);
-    let mut app = sectioned_home((100, 28));
+    // A queue longer than the box: it shows the part around the selection.
+    let mut app = long_sectioned_home((100, 28));
+    send(&mut app, 1.9, Msg::Key(Key::Char('2')));
     check("home_sections_100x28", &app);
-    // Ten moves down from DEMO-12 select DEMO-40. The part then starts at the title In Review,
-    // so that title moves into the top line.
-    for _ in 0..10 {
+    // Nineteen moves down from DEMO-33 select DEMO-57, the last ticket. The part then starts
+    // at the title In Testing, so that title moves into the top line.
+    for _ in 0..19 {
         send(&mut app, 2.0, Msg::Key(Key::Down));
     }
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-40"));
-    check("home_sections_scrolled_100x28", &app);
-    for _ in 0..3 {
-        send(&mut app, 2.1, Msg::Key(Key::Down));
-    }
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-35"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-57"));
     check("home_sections_end_100x28", &app);
 }
 
 /// Home with the start card of DEMO-15 open and its facts read.
 pub fn start_card() -> App {
     let mut app = home(SIZE);
-    send(&mut app, 2.0, Msg::Key(Key::Down));
-    send(&mut app, 2.1, Msg::Key(Key::Down));
+    send(&mut app, 2.0, Msg::Key(Key::Char('2')));
     let fx = send(&mut app, 2.2, Msg::Key(Key::Enter));
     assert_eq!(fx, vec![Effect::LoadStartInfo("DEMO-15".into())]);
     send(
@@ -284,8 +299,7 @@ pub fn start_card() -> App {
 #[test]
 fn the_start_card_while_it_reads() {
     let mut app = home(SIZE);
-    send(&mut app, 2.0, Msg::Key(Key::Down));
-    send(&mut app, 2.1, Msg::Key(Key::Down));
+    send(&mut app, 2.0, Msg::Key(Key::Char('2')));
     send(&mut app, 2.2, Msg::Key(Key::Enter));
     check("start_loading", &app);
 }

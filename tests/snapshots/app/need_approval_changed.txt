@@ -3,7 +3,7 @@
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
          ╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮
-  IN PROG│                                                                                          │is open
+   In pro│                                                                                          │
  ╭───────│  The write tracker.describe that waits now is not the one that the card showed: its      │───────╮
  │ ▸ DEMO│  commit or its text changed. Vision did not approve it. Read it, then decide again.      │   38m │
  │       │                                                                                          │       │
@@ -12,11 +12,11 @@
  │       │  The verb tracker.describe is in the mode ask, so it waits for your approval.            │       │
  ╰───────│                                                                                          │───────╯
          │  What it sends                                                                           │
-  MY TICK│  ╭────────────────────────────────────────────────────────────────────────────────────╮  │ 2 open
- ╭─ To Do│  │ text  Another text.                                                                │  │───────╮
- │   DEMO│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │       │
- │   DEMO│                                                                                          │equest │
- ╰───────│    y  Approve it. Vision sends it now.                                                   │───────╯
+         │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │
+         │  │ text  Another text.                                                                │  │
+         │  ╰────────────────────────────────────────────────────────────────────────────────────╯  │
+         │                                                                                          │
+         │    y  Approve it. Vision sends it now.                                                   │
          │    a  Approve it, and move tracker.describe to the mode auto, so that Vision never asks  │
          │       again for tracker.describe.                                                        │
          │                                                                                          │
@@ -28,5 +28,5 @@
   THIS WE╰──────────────────────────────────────────────────────────────────────────────────────────╯
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

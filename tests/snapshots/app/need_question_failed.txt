@@ -3,7 +3,7 @@
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
 
-  IN PROG╭─ DEMO-12 · builder asks at the step build · your 1 answer ───────────────────────────────╮is open
+   In pro╭─ DEMO-12 · builder asks at the step build · your 1 answer ───────────────────────────────╮
  ╭───────│                                                                                          │───────╮
  │ ▸ DEMO│  1 ✓ draft    review                                                                     │   38m │
  │       │                                                                                          │       │
@@ -12,11 +12,11 @@
  │       │▸ 1  Must the export keep the order of the columns?                                       │       │
  ╰───────│     a  Keep the order                                                                    │───────╯
          │     refused: Q-0002 already has an answer                                                │
-  MY TICK│                                                                                          │ 2 open
- ╭─ To Do│  ✗ send your answer to Q-0002                                                            │───────╮
- │   DEMO│                                                                                          │       │
- │   DEMO│  It did not work:                                                                        │equest │
- ╰───────│  no answer was recorded, because the answer to Q-0002 was refused: Q-0002 already has    │───────╯
+         │                                                                                          │
+         │  ✗ send your answer to Q-0002                                                            │
+         │                                                                                          │
+         │  It did not work:                                                                        │
+         │  no answer was recorded, because the answer to Q-0002 was refused: Q-0002 already has    │
          │  an answer                                                                               │
          │  Now  Nothing was recorded, and your draft stays.                                        │
          │                                                                                          │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

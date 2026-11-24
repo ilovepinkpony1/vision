@@ -3,7 +3,7 @@
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
          ╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮
-  IN PROG│                                                                                          │is open
+   In pro│                                                                                          │
  ╭───────│  Replaces the description of the ticket in the tracker.                                  │───────╮
  │ ▸ DEMO│  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │   38m │
  │       │  The verb tracker.describe is in the mode ask, so it waits for your approval.            │       │
@@ -12,11 +12,11 @@
  │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
  ╰───────│  │ text  Export the report of the month as a CSV file.                                │  │───────╯
          │  │                                                                                    │  │
-  MY TICK│  │       The file keeps the order of the columns of the table.                        │  │ 2 open
- ╭─ To Do│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╮
- │   DEMO│                                                                                          │       │
- │   DEMO│    y  Approve it. Vision sends it now.                                                   │equest │
- ╰───────│    a  Approve it, and move tracker.describe to the mode auto, so that Vision never asks  │───────╯
+         │  │       The file keeps the order of the columns of the table.                        │  │
+         │  ╰────────────────────────────────────────────────────────────────────────────────────╯  │
+         │                                                                                          │
+         │    y  Approve it. Vision sends it now.                                                   │
+         │    a  Approve it, and move tracker.describe to the mode auto, so that Vision never asks  │
          │       again for tracker.describe.                                                        │
          │                                                                                          │
          │  In the mode auto: Vision never asks again for tracker.describe, except for a diff that  │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

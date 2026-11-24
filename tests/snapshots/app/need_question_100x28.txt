@@ -3,7 +3,7 @@
     │                                                                                          │
     │   1 ◇ proposed    review                                                                 │s
     │                                                                                          │
-  IN│  Must the export keep the order of the columns?                                          │en
+   I│  Must the export keep the order of the columns?                                          │
  ╭──│                                                                                          │──╮
  │ ▸│  The Judge     proposes a Keep the order                                                 │m │
  │  │                D-0004 says that each export keeps the order of the screen.               │  │
@@ -12,11 +12,11 @@
  │  │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │  │
  ╰──│  Example       The table shows date, client, total. The file can keep that order or      │──╯
     │                sort the columns by name.                                                 │
-  MY│                                                                                          │en
- ╭─ │  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │──╮
- │  │                       order                                                              │  │
- │  │    b  Sort by name    the file sorts the columns by their names                          │t │
- ╰──│                                                                                          │──╯
+    │                                                                                          │
+    │  ▸ a  Keep the order  the file has the columns of the table, in the same    recommended  │
+    │                       order                                                              │
+    │    b  Sort by name    the file sorts the columns by their names                          │
+    │                                                                                          │
     │  Recommended   a Keep the order: People compare the file with the table.                 │
     │  Evidence      src/export.py:42                                                          │
     │                                                                                          │
@@ -24,5 +24,5 @@
   TH│  r review    esc later                                                                   │
     │                                                                                          │
     ╰──────────────────────────────────────────────────────────────────────────────────────────╯
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   q quit
 

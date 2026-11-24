@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+   In progress 1    To take 2    Ready to merge 1             1 ticket · each pull request waits for a merge
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
+ │             ●━●━●━●━●━●━●━●━●━●━●━◉─○  ready-to-merge · waits for CI · no result yet                     │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
+

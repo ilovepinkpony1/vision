@@ -1,22 +1,22 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ─────────────╭─ Start DEMO-21 ──────────────────────────────────────────────────────────────────╮─────────────
              │                                                                                  │
-  IN PROGRESS│  Export the report as a CSV file                                                 │dow is open
- ╭───────────│                                                                                  │───────────╮
- │   DEMO-12 │  DEMO-21 is in progress outside Vision, on the branch feature/demo-21-export,    │03     38m │
- │           │  with the pull request #31.                                                      │           │
- │           │  Vision found no step: no rule holds. Pick the step where the ticket waits now.  │           │
- │   DEMO-7  │  Vision read:                                                                    │12  2h 10m │
- │           │  · the tracker status is In Review                                               │           │
- ╰───────────│  · the pull request #31 is open and ready                                        │───────────╯
+   In progres│  Export the report as a CSV file                                                 │er · 3 open
+ ╭─ To Do · 2│                                                                                  │───────────╮
+ │   DEMO-15 │  DEMO-21 is in progress outside Vision, on the branch feature/demo-21-export,    │           │
+ │   DEMO-9  │  with the pull request #31.                                                      │ll request │
+ ├─ In Review│  Vision found no step: no rule holds. Pick the step where the ticket waits now.  │───────────┤
+ │ ▸ DEMO-21 │  Vision read:                                                                    │           │
+ ╰───────────│  · the tracker status is In Review                                               │───────────╯
+             │  · the pull request #31 is open and ready                                        │
              │  · the review state is waiting and no review comment waits                       │
-  MY TICKETS │  · CI is green at 3f2a1b4c5d6e                                                   │er · 3 open
- ╭─ To Do · 2│  Vision takes it in a free clone, on its branch with the commits of the remote.  │───────────╮
- │   DEMO-15 │  The steps before the step that you pick do not run.                             │           │
- │   DEMO-9  │                                                                                  │ll request │
- ├─ In Review│  ▸ refine                                                                        │───────────┤
- │ ▸ DEMO-21 │    plan                                                                          │           │
- ╰───────────│    plan-ready                                                                    │───────────╯
+             │  · CI is green at 3f2a1b4c5d6e                                                   │
+             │  Vision takes it in a free clone, on its branch with the commits of the remote.  │
+             │  The steps before the step that you pick do not run.                             │
+             │                                                                                  │
+             │  ▸ refine                                                                        │
+             │    plan                                                                          │
+             │    plan-ready                                                                    │
              │    build                                                                         │
              │    review                                                                        │
              │    open-pr                                                                       │
@@ -28,5 +28,5 @@
   THIS WEEK  │                                                              ▼ 1 more · ↑↓ pick  │
              │  enter start at refine    ↑↓ pick a step    esc cancel                           │
              │                                                                                  │
- ↑↓ move   en╰──────────────────────────────────────────────────────────────────────────────────╯  q quit
+ ↑↓ move   en╰──────────────────────────────────────────────────────────────────────────────────╯uit
 

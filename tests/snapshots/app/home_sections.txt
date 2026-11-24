@@ -1,18 +1,9 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
- │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
- │                                                                                                          │
- │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
- │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
- ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-  MY TICKETS                                                                      from the tracker · 12 open
+   In progress 2    To take 12    Ready to merge 0                                from the tracker · 12 open
  ╭─ In Progress · 3 ────────────────────────────────────────────────────────────────────────────────────────╮
- │   DEMO-33   Keep the last search of the person                                                           │
+ │ ▸ DEMO-33   Keep the last search of the person                                                           │
  │   DEMO-37   Send the weekly email on the day that the person picks                                       │
  │   DEMO-41   Mark the orders that came from a coupon                                                      │
  ├─ In Review · 3 ──────────────────────────────────────────────────────────────────────────────────────────┤
@@ -24,9 +15,18 @@
  │   DEMO-34   Hide the button of the export for a guest                                                    │
  │   DEMO-40   Load the next page of the list when the person scrolls                                       │
  ├─ To Do · 2 ──────────────────────────────────────────────────────────────────────────────────────────────┤
- ╰─────────────────────────────────────────────────────────────────────────────────────────────── ▼ 3 more ─╯
+ │   DEMO-30   Show the name of the shop in the subject of the email                                        │
+ │   DEMO-38   Add a link to the help page in the menu                                                      │
+ ├─ Backlog · 1 ────────────────────────────────────────────────────────────────────────────────────────────┤
+ │   DEMO-35   Let the person pick the first day of the week                                                │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

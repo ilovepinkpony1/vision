@@ -1,20 +1,21 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Expor╭─ Keys ─────────────────────────────────────────────────────────────╮    $1.03     38m │
- │             ●━●━●│                                                                    │                  │
- │                  │  ↑↓  j k      move through the tickets                             │                  │
- │   DEMO-7    Show │  enter        open a ticket, or start one                          │    $6.12  2h 10m │
- │             ●━●━●│  n            answer what waits for you                            │                  │
- ╰──────────────────│  m            the model of each agent                              │──────────────────╯
+   In progress 2    To take 2    Ready to merge 0
+ ╭──────────────────╭─ Keys ─────────────────────────────────────────────────────────────╮──────────────────╮
+ │ ▸ DEMO-12   Expor│                                                                    │    $1.03     38m │
+ │             ●━●━●│  ↑↓  j k      move through the tickets of the tab                  │                  │
+ │                  │  enter        open a ticket, or start one                          │                  │
+ │   DEMO-7    Show │  tab          the next tab                                         │    $6.12  2h 10m │
+ │             ●━●━●│  1 2 3        in progress, to take, ready to merge                 │                  │
+ ╰──────────────────│  n            answer what waits for you                            │──────────────────╯
+                    │  m            the model of each agent                              │
                     │  s            the stats                                            │
-  MY TICKETS        │  p            pause the engine, or start it again                  │e tracker · 2 open
- ╭─ To Do · 2 ──────│  r            load the queue of the tracker again                  │──────────────────╮
- │   DEMO-15   Keep │  K            the kill switch: stop each agent now                 │                  │
- │   DEMO-9    Fix t│  ?            this list of keys                                    │open pull request │
- ╰──────────────────│  esc          go back, or close a card                             │──────────────────╯
+                    │  p            pause the engine, or start it again                  │
+                    │  r            load the queue of the tracker again                  │
+                    │  K            the kill switch: stop each agent now                 │
+                    │  ?            this list of keys                                    │
+                    │  esc          go back, or close a card                             │
                     │  q            quit                                                 │
                     │  click        a key acts as that key; a row selects, then opens    │
                     │  2 clicks     a key that sends something or records a decision     │
@@ -24,9 +25,8 @@
                     │  esc closes this list                                              │
                     │                                                                    │
                     ╰────────────────────────────────────────────────────────────────────╯
-
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

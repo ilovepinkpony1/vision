@@ -38,6 +38,21 @@ fn the_selected_row_has_the_selection_background() {
 }
 
 #[test]
+fn the_open_tab_has_the_accent_background_and_the_others_are_dim() {
+    let mut app = home(SIZE);
+    let buf = render(&app);
+    let (work, take) = (column(&buf, 3, "In progress"), column(&buf, 3, "To take"));
+    assert_eq!(buf[(work, 3)].bg, T.accent.color());
+    assert!(buf[(work, 3)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(take, 3)].bg, T.bg.color());
+    assert_eq!(buf[(take, 3)].fg, T.dim.color());
+    send(&mut app, 2.0, Msg::Key(vision::app::msg::Key::Char('2')));
+    let buf = render(&app);
+    assert_eq!(buf[(take, 3)].bg, T.accent.color());
+    assert_eq!(buf[(work, 3)].bg, T.bg.color());
+}
+
+#[test]
 fn a_ticket_that_needs_the_person_has_the_warning_color() {
     let tickets = vec![
         needing("DEMO-12", "Export the report", "plan"),

@@ -59,6 +59,7 @@ pub fn setup() -> Setup {
         adapter: "demo".into(),
         steps: STEPS.iter().map(|s| s.to_string()).collect(),
         sections: Vec::new(),
+        merge_steps: vec!["ready-to-merge".to_string()],
     }
 }
 
@@ -571,6 +572,29 @@ pub fn sectioned_home(size: (u16, u16)) -> App {
         local(two_tickets(), Vec::new()),
         Some(sectioned_queue()),
     )
+}
+
+/// [`sectioned_home`] with eight more tickets in the section Backlog, DEMO-50 to DEMO-57, so
+/// that the queue is longer than the box of a window of the minimum size.
+pub fn long_sectioned_home(size: (u16, u16)) -> App {
+    let setup = Setup {
+        sections: SECTIONS.iter().map(|s| s.to_string()).collect(),
+        ..setup()
+    };
+    let mut queue = sectioned_queue();
+    for n in 50..58 {
+        queue.push(PickRow {
+            key: format!("DEMO-{n}"),
+            title: format!("Clean up the old report number {n}"),
+            status: "Backlog".into(),
+            eligible: true,
+            reason: String::new(),
+            taken: None,
+            branch: None,
+            pr: None,
+        });
+    }
+    home_from(size, setup, local(two_tickets(), Vec::new()), Some(queue))
 }
 
 /// Draws the model into a test backend of its size.

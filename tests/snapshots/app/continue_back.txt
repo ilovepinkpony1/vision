@@ -1,32 +1,32 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
-─────────────╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮─────────────
-             │                                                                                  │
-  IN PROGRESS│  Rename the setting of the weekly email                                          │dow is open
- ╭───────────│                                                                                  │───────────╮
- │ ▸ DEMO-3  │  DEMO-3 is stopped at the step ready-to-merge.                                   │50   5h 0m │
- │           │  Vision thinks it is at comments. This goes back from ready-to-merge: 2 review   │           │
- ╰───────────│  comments wait, and the head runs on void.                                       │───────────╯
-             │  Vision read:                                                                    │
-  MY TICKETS │  · the tracker status is In Review                                               │er · 2 open
- ╭─ To Do · 2│  · the pull request #7 is open and ready                                         │───────────╮
- │   DEMO-15 │  · the review state is comments and 2 review comments wait                       │           │
- │   DEMO-9  │  · CI is green at 3f2a1b4c5d6e                                                   │ll request │
- ╰───────────│  · the head runs on void                                                         │───────────╯
-             │  · the branch of the clone is at the head of the pull request                    │
-             │                                                                        ▲ 1 more  │
-             │    plan                                                                          │
-             │    plan-ready                                                                    │
-             │    build                                                                         │
-             │    review                                                                        │
-             │    open-pr                                                                       │
-             │    ci                                                                            │
-             │    fix-ci                                                                        │
-             │    ready                                                                         │
-             │  ▸ comments         Vision suggests                                              │
-             │    ci-review                                                                     │
-             │    ready-to-merge   stopped here                                                 │
-  THIS WEEK  │                                                                                  │
-             │  enter continue at comments    ↑↓ pick a step    esc cancel    v live view       │
-             │                                                                                  │
- ↑↓ move   en╰──────────────────────────────────────────────────────────────────────────────────╯  q quit
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+   In progress 0    To take 2    Ready to merge 1                                  from the tracker · 2 open
+ ╭─ To Do · 2 ──────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-15   Keep the filter of the list when the page loads again                                        │
+ │   DEMO-9    Fix the date format in the weekly email                  it already has an open pull request │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+               ╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮
+               │                                                                              │
+               │  Keep the filter of the list when the page loads again                       │
+               │                                                                              │
+               │  ⠸ Vision reads the adapter and looks for a free clone · 0:00                │
+               │                                                                              │
+               │  enter start    esc cancel                                                   │
+               │                                                                              │
+               ╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

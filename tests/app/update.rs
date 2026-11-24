@@ -2,7 +2,7 @@
 //! effects, a refresh keeps the selection on the same ticket, and the engine starts a pass at
 //! the right moments.
 
-use vision::app::model::{Card, Local, PassEnd, Run, Screen, Tone};
+use vision::app::model::{Card, HomeTab, Local, PassEnd, Run, Screen, Tone};
 use vision::app::msg::{Action, ChildResult, Effect, JobDone, JobKind, Key, Msg};
 use vision::app::terminal::key_of;
 use vision::app::update::engine::LOCK_HELD;
@@ -50,29 +50,67 @@ fn ok(stdout: &str) -> ChildResult {
 }
 
 #[test]
-fn the_arrows_and_j_k_move_through_both_boxes() {
+fn the_arrows_and_j_k_move_in_the_open_tab_and_the_tab_keys_open_a_tab() {
     let mut app = home(SIZE);
+    assert_eq!(app.home.tab, HomeTab::Work);
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-12"));
     key(&mut app, 2.0, Key::Down);
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-7"));
     key(&mut app, 2.1, Key::Char('j'));
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-15"));
-    key(&mut app, 2.2, Key::Char('j'));
-    key(&mut app, 2.3, Key::Down);
     assert_eq!(
         app.home.selected.as_deref(),
-        Some("DEMO-9"),
-        "the last row stays"
+        Some("DEMO-7"),
+        "the last row of the tab stays: the queue is in another tab"
     );
-    key(&mut app, 2.4, Key::Char('k'));
-    key(&mut app, 2.5, Key::Up);
-    key(&mut app, 2.6, Key::Up);
-    key(&mut app, 2.7, Key::Up);
+    key(&mut app, 2.2, Key::Up);
+    key(&mut app, 2.3, Key::Char('k'));
     assert_eq!(
         app.home.selected.as_deref(),
         Some("DEMO-12"),
         "the first row stays"
     );
+    // Tab opens "To take" and selects its first row.
+    key(&mut app, 2.4, Key::Tab);
+    assert_eq!(app.home.tab, HomeTab::Take);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-15"));
+    key(&mut app, 2.5, Key::Char('j'));
+    key(&mut app, 2.6, Key::Down);
+    key(&mut app, 2.7, Key::Down);
+    assert_eq!(
+        app.home.selected.as_deref(),
+        Some("DEMO-9"),
+        "the last row stays"
+    );
+    // No ticket of this home is at a merge step, so the tab "Ready to merge" selects nothing.
+    key(&mut app, 2.8, Key::Char('3'));
+    assert_eq!(app.home.tab, HomeTab::Merge);
+    assert_eq!(app.home.selected, None);
+    assert!(app.items().is_empty());
+    // After the last tab, Tab opens the first one again.
+    key(&mut app, 2.9, Key::Tab);
+    assert_eq!(app.home.tab, HomeTab::Work);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-12"));
+    key(&mut app, 3.0, Key::Char('2'));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-15"));
+    key(&mut app, 3.1, Key::Char('1'));
+    assert_eq!(app.home.tab, HomeTab::Work);
+}
+
+#[test]
+fn a_ticket_at_a_merge_step_shows_only_in_the_tab_ready_to_merge() {
+    let mut tickets = two_tickets();
+    tickets[1].view.step = Some("ready-to-merge".into());
+    let mut app = home_with(SIZE, local(tickets, Vec::new()), Some(queue()));
+    let keys = |app: &vision::app::model::App| -> Vec<String> {
+        app.items().iter().map(|i| i.key().to_string()).collect()
+    };
+    assert_eq!(keys(&app), ["DEMO-12"]);
+    key(&mut app, 2.0, Key::Char('3'));
+    assert_eq!(keys(&app), ["DEMO-7"]);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-7"));
+    // Enter opens its live view, as in the tab "In progress".
+    let fx = key(&mut app, 2.1, Key::Enter);
+    assert!(fx.contains(&Effect::LoadTicket("DEMO-7".into())), "{fx:?}");
 }
 
 #[test]
@@ -101,8 +139,8 @@ fn enter_opens_the_live_view_of_the_ticket_in_progress_and_esc_goes_back() {
 #[test]
 fn enter_on_a_ticket_that_can_start_opens_the_start_card_and_reads_its_facts() {
     let mut app = home(SIZE);
-    key(&mut app, 2.0, Key::Down);
-    key(&mut app, 2.1, Key::Down);
+    key(&mut app, 2.0, Key::Char('2'));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-15"));
     let fx = key(&mut app, 2.2, Key::Enter);
     assert_eq!(fx, vec![Effect::LoadStartInfo("DEMO-15".into())]);
     let Some(Card::Start(card)) = &app.card else {
@@ -131,9 +169,8 @@ fn enter_on_a_ticket_that_can_start_opens_the_start_card_and_reads_its_facts() {
 #[test]
 fn enter_on_a_ticket_that_cannot_start_shows_its_reason() {
     let mut app = home(SIZE);
-    for i in 0..3 {
-        key(&mut app, 2.0 + f64::from(i) / 10.0, Key::Down);
-    }
+    key(&mut app, 2.0, Key::Char('2'));
+    key(&mut app, 2.1, Key::Down);
     let fx = key(&mut app, 2.5, Key::Enter);
     assert!(fx.is_empty());
     assert_eq!(app.card, None);
@@ -348,8 +385,9 @@ fn outside_selected() -> vision::app::model::App {
         local(two_tickets(), Vec::new()),
         Some(queue_with_outside()),
     );
-    for i in 0..4 {
-        key(&mut app, 2.0 + f64::from(i) / 10.0, Key::Down);
+    key(&mut app, 2.0, Key::Char('2'));
+    for i in 0..2 {
+        key(&mut app, 2.1 + f64::from(i) / 10.0, Key::Down);
     }
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-21"));
     app
@@ -588,10 +626,11 @@ fn a_refresh_keeps_the_selection_on_the_same_ticket() {
     rows.reverse();
     send(&mut app, 3.1, Msg::Queue(Ok(rows)));
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-7"));
-    // The selected ticket leaves: the row at its place gets the selection.
+    // The selected ticket leaves: the row at its place in the tab gets the selection, here
+    // the last row of the tab.
     tickets.retain(|t| t.view.key != "DEMO-7");
     send(&mut app, 4.0, Msg::Local(Ok(local(tickets, Vec::new()))));
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-9"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-12"));
 }
 
 #[test]

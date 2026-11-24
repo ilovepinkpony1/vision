@@ -3,7 +3,7 @@
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+   In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
  │       ╭─ DEMO-12 · a notice · N-2 ───────────────────────────────────────────────────────────────╮       │
@@ -12,11 +12,11 @@
  │       │  round after round:                                                                      │       │
  ╰───────│                                                                                          │───────╯
          │  F1  major  1. [MAJOR][BLOCKING] app/models/report_export.rb:42: A retry sends the       │
-  MY TICK│             report twice                                                                 │ 2 open
- ╭─ To Do│                                                                                          │───────╮
- │   DEMO│  This finding keeps coming back after its fix.                                           │       │
- │   DEMO│                                                                                          │equest │
- ╰───────│  A notice never stops a ticket. It stays until you mark it read. The turn was            │───────╯
+         │             report twice                                                                 │
+         │                                                                                          │
+         │  This finding keeps coming back after its fix.                                           │
+         │                                                                                          │
+         │  A notice never stops a ticket. It stays until you mark it read. The turn was            │
          │  20261116T150000Z-DEMO-12-review-5.                                                      │
          │                                                                                          │
          │  enter mark it read    esc later                                                         │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

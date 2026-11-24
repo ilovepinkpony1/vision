@@ -96,7 +96,8 @@ verb = "review.read"          # the read verb of the adapter that gives the revi
 every = 900                   # seconds between two looks at a pull request while the review is missing
 
 [app]                         # the full-screen app
-sections = []                 # statuses of the tracker whose sections come first in MY TICKETS, in this order, such as ["In Progress", "In Review"]. Each other status follows in the order of the queue.
+sections = []                 # statuses of the tracker whose sections come first in the tab "To take", in this order, such as ["In Progress", "In Review"]. Each other status follows in the order of the queue.
+merge_steps = ["ready-to-merge"]   # steps of the adapter whose tickets show in the tab "Ready to merge": their pull request waits for the merge of a person
 
 [modes]                       # verb -> hold | shadow | ask | auto. Only promote and demote change them.
 

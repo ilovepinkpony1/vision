@@ -1,17 +1,17 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  IN PROGRESS                                           1 ticket · Vision moves it while this window is open
+   In progress 1    To take 2    Ready to merge 0       1 ticket · Vision moves it while this window is open
  ╭───────────╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮───────────╮
  │ ▸ DEMO-3  │                                                                                  │50   5h 0m │
  │           │  Rename the setting of the weekly email                                          │           │
  ╰───────────│                                                                                  │───────────╯
              │  DEMO-3 is stopped at the step review.                                           │
-  MY TICKETS │  Vision could not check the tracker and the pull request, so it suggests         │er · 2 open
- ╭─ To Do · 2│  nothing: bin/observe failed: the forge did not answer in 30 s                   │───────────╮
- │   DEMO-15 │                                                                                  │           │
- │   DEMO-9  │    refine                                                                        │ll request │
- ╰───────────│    plan                                                                          │───────────╯
+             │  Vision could not check the tracker and the pull request, so it suggests         │
+             │  nothing: bin/observe failed: the forge did not answer in 30 s                   │
+             │                                                                                  │
+             │    refine                                                                        │
+             │    plan                                                                          │
              │    plan-ready                                                                    │
              │    build                                                                         │
              │  ▸ review           stopped here                                                 │
@@ -28,5 +28,5 @@
   THIS WEEK  ╰──────────────────────────────────────────────────────────────────────────────────╯
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

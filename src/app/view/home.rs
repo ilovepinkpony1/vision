@@ -1,24 +1,29 @@
-//! Home (`drawHome` of the design): the bar "needs you", the box IN PROGRESS with two lines for
-//! each ticket, the box MY TICKETS with the queue of the tracker, the line THIS WEEK, and the
-//! keys. MY TICKETS has one section for each status of the tracker ([`crate::app::sections`]):
-//! the top line of the box and each line between two sections show the status and its count.
-//! A ticket of the queue that can start shows bright, and so does a ticket that is in progress
+//! Home (`drawHome` of the design): the bar "needs you", a line of three tabs, the box of the
+//! open tab, the line THIS WEEK, and the keys. The tab "In progress" holds the tickets in
+//! progress with two lines each, the tab "To take" holds the queue of the tracker, and the tab
+//! "Ready to merge" holds the tickets in progress at a step of `app.merge_steps`. Each tab
+//! shows its count. `Tab` opens the next tab, `1`, `2`, and `3` open a tab, and a click on a
+//! tab opens it.
+//!
+//! The queue has one section for each status of the tracker ([`crate::app::sections`]): the
+//! top line of the box and each line between two sections show the status and its count. A
+//! ticket of the queue that can start shows bright, and so does a ticket that is in progress
 //! outside Vision, because its start card takes it at its step. Each other ticket of the queue
-//! shows faint, with the reason that it cannot start. The boxes take the full width of the
-//! window. When a box has more rows than fit, it shows the part around the selection and says
-//! how many rows are above and below. The top line of MY TICKETS then shows the status of the
-//! first row in view.
+//! shows faint, with the reason that it cannot start. The box takes the full width and the
+//! free height of the window. When it has more rows than fit, it shows the part around the
+//! selection and says how many rows are above and below. The top line of the queue then shows
+//! the status of the first row in view.
 //!
 //! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
-//! The wheel over a box moves the selection as the arrows do, a click on the mark of the rows
-//! above or below a box selects the next row out of view, and a click on the bar "needs you"
+//! The wheel over the box moves the selection as the arrows do, a click on the mark of the rows
+//! above or below the box selects the next row out of view, and a click on the bar "needs you"
 //! acts as `n`.
 
 use super::canvas::{ink, Canvas};
 use super::header::{dots, header, keys, spinner};
 use super::theme::{Rgb, T};
 use crate::app::hits::Act;
-use crate::app::model::{App, Held};
+use crate::app::model::{App, Held, HomeTab};
 use crate::app::msg::Key;
 use crate::app::now::{need_line, Tone};
 use crate::app::sections::sections;
@@ -34,98 +39,17 @@ pub fn draw(app: &App, c: &mut Canvas) {
         needs_bar(app, c, y);
         y += 2;
     }
-    let held = app.held();
     let queue = app.queue_rows();
-    let kx = key_column(held, &queue);
-    let message = queue_message(app, c.w);
-    let lines = queue_lines(&queue);
-    // The title of the first section is on the top line of the box, so each other line is a
-    // row of the box.
-    let queue_rows = message
-        .as_ref()
-        .map_or(lines.len().saturating_sub(1), Vec::len)
-        .max(1) as i32;
-    let held_rows = held.len() as i32;
-    let avail = c.h - 6 - y + 1;
-    let (show_held, show_queue) = fit(held_rows, queue_rows, avail);
-
-    // IN PROGRESS
-    c.put(2, y, "IN PROGRESS", ink(T.dim).bold());
-    if !held.is_empty() {
-        // What moves the tickets now: the kill switch and the pause come before the engine.
-        let what = if app.off() {
-            "Vision is off, so no step runs"
-        } else if app.engine.paused {
-            "the engine is paused, so no new step starts"
-        } else if held.len() == 1 {
-            "Vision moves it while this window is open"
-        } else {
-            "Vision moves them while this window is open"
-        };
-        c.right(
-            c.w - 3,
-            y,
-            &format!("{} · {what}", count(held.len(), "ticket")),
-            ink(T.faint),
-        );
-    }
+    // The column of the titles comes from each ticket, so it stays when another tab opens.
+    let kx = key_column(app.held(), &queue);
+    tabs(app, c, y, &queue);
     y += 1;
+    // The box takes the rows down to the line THIS WEEK.
+    let avail = (c.h - 6 - y + 1).max(3);
     let selected = app.selected_index();
-    if held.is_empty() {
-        c.frame(1, y, c.w - 2, 3, T.line);
-        let text = match (&app.local.data, &app.local.error) {
-            (None, Some(error)) => format!("The ledger did not load: {}", error_line(error)),
-            (None, None) => format!("{} reads the ledger", spinner(app)),
-            _ => "Nothing is in progress. Select a ticket below and press Enter to start it."
-                .to_string(),
-        };
-        c.put(5, y + 1, &cut(&text, (c.w - 10) as usize), ink(T.dim));
-        y += 3;
-    } else {
-        let sel = selected.filter(|i| *i < held.len());
-        let offset = window(sel, held.len(), show_held as usize);
-        c.frame(1, y, c.w - 2, show_held * 3 + 1, T.line);
-        c.wheel(1, y, c.w - 2, show_held * 3 + 1, 1);
-        more_marks(
-            c,
-            y,
-            show_held * 3 + 1,
-            (offset, show_held as usize, held.len()),
-            |i| held.get(i).map(|h| Act::Ticket(h.view.key.clone())),
-        );
-        for (i, ticket) in held
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .take(show_held as usize)
-        {
-            let yy = y + 1 + (i - offset) as i32 * 3;
-            held_row(app, c, ticket, yy, kx, sel == Some(i));
-        }
-        y += show_held * 3 + 1;
-    }
-    y += 1;
-
-    // MY TICKETS
-    c.put(2, y, "MY TICKETS", ink(T.dim).bold());
-    let tail = if app.queue.data.is_some() {
-        format!("from the tracker · {} open", queue.len())
-    } else {
-        "from the tracker".to_string()
-    };
-    c.right(c.w - 3, y, &tail, ink(T.faint));
-    y += 1;
-    c.frame(1, y, c.w - 2, show_queue + 2, T.line);
-    if let Some(message) = &message {
-        for (i, (text, color)) in message.iter().enumerate().take(show_queue as usize) {
-            c.put(5, y + 1 + i as i32, text, ink(*color));
-        }
-    } else {
-        c.wheel(1, y, c.w - 2, show_queue + 2, 1);
-        let sel = selected
-            .filter(|i| *i >= held.len())
-            .map(|i| i - held.len());
-        queue_box(c, &queue, &lines, (y, show_queue as usize), kx, sel);
+    match app.home.tab {
+        HomeTab::Take => take_box(app, c, y, avail, &queue, kx, selected),
+        tab => held_box(app, c, (y, avail), &app.held_of(tab), kx, selected),
     }
 
     week(app, c);
@@ -135,6 +59,7 @@ pub fn draw(app: &App, c: &mut Canvas) {
         &[
             ("↑↓", "move"),
             ("enter", "open or start"),
+            ("tab", "tabs"),
             ("n", "needs"),
             ("m", "models"),
             ("s", "stats"),
@@ -147,6 +72,137 @@ pub fn draw(app: &App, c: &mut Canvas) {
             ("q", "quit"),
         ],
     );
+}
+
+/// The line of the tabs at `y`: each tab with its count, the open one bright. A click on a tab
+/// acts as its key `1`, `2`, or `3`. The right end says what moves the tickets of the open tab,
+/// or where the queue comes from, when it has room.
+fn tabs(app: &App, c: &mut Canvas, y: i32, queue: &[&PickRow]) {
+    let open = app.home.tab;
+    let mut x = 2;
+    for (i, tab) in HomeTab::ALL.into_iter().enumerate() {
+        let n = match tab {
+            HomeTab::Take => app.queue.data.is_some().then_some(queue.len()),
+            _ => app.local.data.is_some().then(|| app.held_of(tab).len()),
+        };
+        let text = match n {
+            Some(n) => format!(" {} {n} ", tab.label()),
+            None => format!(" {} ", tab.label()),
+        };
+        let style = if tab == open {
+            ink(T.bg).on(T.accent).bold()
+        } else {
+            ink(T.dim)
+        };
+        let end = c.put(x, y, &text, style);
+        let key = Key::Char((b'1' + i as u8) as char);
+        c.click(x, y, width(&text) as i32, 1, Act::Key(key));
+        x = end + 2;
+    }
+    let held = app.held_of(open);
+    let tail = match open {
+        HomeTab::Take if app.queue.data.is_some() => {
+            format!("from the tracker · {} open", queue.len())
+        }
+        HomeTab::Take => "from the tracker".to_string(),
+        _ if held.is_empty() => String::new(),
+        HomeTab::Merge => format!(
+            "{} · each pull request waits for a merge",
+            count(held.len(), "ticket")
+        ),
+        HomeTab::Work => {
+            // What moves the tickets now: the kill switch and the pause come before the engine.
+            let what = if app.off() {
+                "Vision is off, so no step runs"
+            } else if app.engine.paused {
+                "the engine is paused, so no new step starts"
+            } else if held.len() == 1 {
+                "Vision moves it while this window is open"
+            } else {
+                "Vision moves them while this window is open"
+            };
+            format!("{} · {what}", count(held.len(), "ticket"))
+        }
+    };
+    if !tail.is_empty() && x + (width(&tail) as i32) < c.w - 3 {
+        c.right(c.w - 3, y, &tail, ink(T.faint));
+    }
+}
+
+/// The box of the tab "In progress" or "Ready to merge" from its top line at `y`, in `avail`
+/// rows: two lines for each ticket.
+fn held_box(
+    app: &App,
+    c: &mut Canvas,
+    (y, avail): (i32, i32),
+    held: &[&Held],
+    kx: i32,
+    selected: Option<usize>,
+) {
+    if held.is_empty() {
+        c.frame(1, y, c.w - 2, 3, T.line);
+        let text = match (&app.local.data, &app.local.error) {
+            (None, Some(error)) => format!("The ledger did not load: {}", error_line(error)),
+            (None, None) => format!("{} reads the ledger", spinner(app)),
+            _ if app.home.tab == HomeTab::Merge => "No pull request waits for a merge.".to_string(),
+            _ if app.queue.data.is_some() && app.queue_rows().is_empty() => {
+                "Nothing is in progress, and no ticket of the tracker waits to be taken."
+                    .to_string()
+            }
+            _ => {
+                "Nothing is in progress. Press 2 to see the tickets that you can take.".to_string()
+            }
+        };
+        c.put(5, y + 1, &cut(&text, (c.w - 10) as usize), ink(T.dim));
+        return;
+    }
+    let shown = ((avail - 1) / 3).clamp(1, held.len() as i32);
+    let sel = selected.filter(|i| *i < held.len());
+    let offset = window(sel, held.len(), shown as usize);
+    c.frame(1, y, c.w - 2, shown * 3 + 1, T.line);
+    c.wheel(1, y, c.w - 2, shown * 3 + 1, 1);
+    more_marks(
+        c,
+        y,
+        shown * 3 + 1,
+        (offset, shown as usize, held.len()),
+        |i| held.get(i).map(|h| Act::Ticket(h.view.key.clone())),
+    );
+    for (i, ticket) in held.iter().enumerate().skip(offset).take(shown as usize) {
+        let yy = y + 1 + (i - offset) as i32 * 3;
+        held_row(app, c, ticket, yy, kx, sel == Some(i));
+    }
+}
+
+/// The box of the tab "To take" from its top line at `y`, in `avail` rows: the queue in its
+/// sections, or a message while it loads, after a failure, or when it is empty.
+fn take_box(
+    app: &App,
+    c: &mut Canvas,
+    y: i32,
+    avail: i32,
+    queue: &[&PickRow],
+    kx: i32,
+    selected: Option<usize>,
+) {
+    let message = queue_message(app, c.w);
+    let lines = queue_lines(queue);
+    // The title of the first section is on the top line of the box, so each other line is a
+    // row of the box.
+    let rows = message
+        .as_ref()
+        .map_or(lines.len().saturating_sub(1), Vec::len)
+        .max(1) as i32;
+    let shown = (avail - 2).clamp(1, rows);
+    c.frame(1, y, c.w - 2, shown + 2, T.line);
+    if let Some(message) = &message {
+        for (i, (text, color)) in message.iter().enumerate().take(shown as usize) {
+            c.put(5, y + 1 + i as i32, text, ink(*color));
+        }
+    } else {
+        c.wheel(1, y, c.w - 2, shown + 2, 1);
+        queue_box(c, queue, &lines, (y, shown as usize), kx, selected);
+    }
 }
 
 /// The bar "needs you": the first need and the count of the others. A click on it acts as the
@@ -229,7 +285,7 @@ fn queue_message(app: &App, w: i32) -> Option<Vec<(String, Rgb)>> {
     None
 }
 
-/// One line of the box MY TICKETS: the title of a section with its count, or a row of the
+/// One line of the box of the queue: the title of a section with its count, or a row of the
 /// queue by its index.
 #[derive(Clone, Debug, PartialEq)]
 enum Line {
@@ -237,7 +293,7 @@ enum Line {
     Row(usize),
 }
 
-/// The lines of the box MY TICKETS: the title of each section, then its rows.
+/// The lines of the box of the queue: the title of each section, then its rows.
 fn queue_lines(queue: &[&PickRow]) -> Vec<Line> {
     let mut lines = Vec::new();
     for section in sections(queue) {
@@ -250,7 +306,7 @@ fn queue_lines(queue: &[&PickRow]) -> Vec<Line> {
     lines
 }
 
-/// The inside of the box MY TICKETS from its top line at `y`, with `shown` rows: the rows of
+/// The inside of the box of the queue from its top line at `y`, with `shown` rows: the rows of
 /// the queue, and a line with the title of a section between two sections. The top line shows
 /// the title of the section of the first row in view. When the box shows only a part of the
 /// lines, the part holds the selected row, and a title at its top moves into the top line, so
@@ -304,7 +360,7 @@ fn queue_box(
     }
 }
 
-/// A line of the box MY TICKETS with the title of a section on it, such as
+/// A line of the box of the queue with the title of a section on it, such as
 /// `├─ In Review · 3 ───┤`: the top line of the box, or a line inside it between two sections.
 fn title_line(c: &mut Canvas, y: i32, line: &Line, inside: bool) {
     let Line::Title { status, count } = line else {
@@ -318,24 +374,6 @@ fn title_line(c: &mut Canvas, y: i32, line: &Line, inside: bool) {
     let x = c.put(3, y, " ", ink(T.line));
     let x = c.put(x, y, &cut(status, room), ink(T.dim).bold());
     c.put(x, y, &format!(" · {count} "), ink(T.faint));
-}
-
-/// How many rows of each box fit in `avail` rows.
-fn fit(held: i32, queue: i32, avail: i32) -> (i32, i32) {
-    let held_box = |n: i32| if n == 0 { 3 } else { n * 3 + 1 };
-    let need = 1 + held_box(held) + 1 + 1 + queue + 2;
-    if need <= avail || held == 0 && queue <= 1 {
-        return (held, queue);
-    }
-    let queue_min = queue.min(3);
-    let room = avail - (1 + 1 + 1 + queue_min + 2);
-    let show_held = if held == 0 {
-        0
-    } else {
-        ((room - 1) / 3).clamp(1, held)
-    };
-    let left = avail - (1 + held_box(show_held) + 1 + 1 + 2);
-    (show_held, left.clamp(1, queue))
 }
 
 /// The first row to show so that the selected row is in a window of `shown` rows.

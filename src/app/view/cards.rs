@@ -488,8 +488,10 @@ fn join_and(items: &[String]) -> String {
 
 fn help(c: &mut Canvas) {
     let list = [
-        ("↑↓  j k", "move through the tickets"),
+        ("↑↓  j k", "move through the tickets of the tab"),
         ("enter", "open a ticket, or start one"),
+        ("tab", "the next tab"),
+        ("1 2 3", "in progress, to take, ready to merge"),
         ("n", "answer what waits for you"),
         ("m", "the model of each agent"),
         ("s", "the stats"),

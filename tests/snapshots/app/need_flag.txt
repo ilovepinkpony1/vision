@@ -3,7 +3,7 @@
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+   In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
  │       ╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮       │
@@ -12,11 +12,11 @@
  │       │                                                                                          │       │
  ╰───────│  The proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change.            │───────╯
          │                                                                                          │
-  MY TICK│  r starts the step build again with a new turn of builder. Its message says why the      │ 2 open
- ╭─ To Do│  step stopped.                                                                           │───────╮
- │   DEMO│  o opens the session of builder in this terminal. Vision pauses DEMO-12 while you work   │       │
- │   DEMO│  in it, and asks afterwards whether it goes on.                                          │equest │
- ╰───────│  x stops DEMO-12. Its branch stays in its clone.                                         │───────╯
+         │  r starts the step build again with a new turn of builder. Its message says why the      │
+         │  step stopped.                                                                           │
+         │  o opens the session of builder in this terminal. Vision pauses DEMO-12 while you work   │
+         │  in it, and asks afterwards whether it goes on.                                          │
+         │  x stops DEMO-12. Its branch stays in its clone.                                         │
          │                                                                                          │
          │  r try the step again    o open the session    x stop the ticket    esc later            │
          │                                                                                          │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

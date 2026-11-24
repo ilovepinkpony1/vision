@@ -3,7 +3,7 @@
          │                                                                                          │
     needs│  Replaces the description of the ticket in the tracker.                                  │ needs
          │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │
-  IN PROG│  The verb tracker.describe is in the mode shadow, so nothing was sent.                   │is open
+   In pro│  The verb tracker.describe is in the mode shadow, so nothing was sent.                   │
  ╭───────│                                                                                          │───────╮
  │ ▸ DEMO│  The write that waits                                                                    │   38m │
  │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
@@ -12,11 +12,11 @@
  │       │  │       The file keeps the order of the columns of the table.                        │  │       │
  ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
          │  The gates: passed.                                                                      │
-  MY TICK│                                                                                          │ 2 open
- ╭─ To Do│    y  Send it. Ask me each time for this verb                            shadow to ask   │───────╮
- │   DEMO│    a  Send it. Never ask again for this verb                             shadow to auto  │       │
- │   DEMO│                                                                     ▼ 5 more · ↑↓ scroll │equest │
- ╰───────│  ✗ move tracker.describe from shadow to ask                                              │───────╯
+         │                                                                                          │
+         │    y  Send it. Ask me each time for this verb                            shadow to ask   │
+         │    a  Send it. Never ask again for this verb                             shadow to auto  │
+         │                                                                     ▼ 5 more · ↑↓ scroll │
+         │  ✗ move tracker.describe from shadow to ask                                              │
          │  · run the writes of the step refine of DEMO-12 again                                    │
          │  · a pass asks for tracker.describe again                                                │
          │  · check that the same write waits: tracker.describe at 1a2b3c4d5e6f                     │
@@ -28,5 +28,5 @@
   THIS WE│                                                                                          │
          │  y a n choose    esc later                                                               │
          │                                                                                          │
- ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯quit
+ ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

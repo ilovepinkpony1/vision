@@ -1,20 +1,20 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
- ╭─────────────╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮─────────────╮
- │   DEMO-12   │                                                                              │1.03     38m │
- │             │  Keep the filter of the list when the page loads again                       │             │
- │             │                                                                              │             │
- │   DEMO-7    │  clone     ~/clones/demo-2 is free                                           │6.12  2h 10m │
- │             │  branch    vision/DEMO-15 from origin/main                                   │             │
- ╰─────────────│  path      13 steps: refine, plan, plan-ready, build, review, open-pr, ci,…  │─────────────╯
-               │  first     refine: scout · claude-fable-5-2 · high                           │
-  MY TICKETS   │  writes    Of 5 write verbs, 4 in the mode auto and 1 in the mode ask.       │cker · 2 open
- ╭─ To Do · 2 ─│            Vision asks you before each write that is not in the mode auto.   │─────────────╮
+   In progress 2    To take 2    Ready to merge 0                                  from the tracker · 2 open
+ ╭─ To Do · 2 ─╭─ Start DEMO-15 ──────────────────────────────────────────────────────────────╮─────────────╮
  │ ▸ DEMO-15   │                                                                              │             │
- │   DEMO-9    │  Nothing goes to the tracker or the forge at the start.                      │pull request │
+ │   DEMO-9    │  Keep the filter of the list when the page loads again                       │pull request │
  ╰─────────────│                                                                              │─────────────╯
+               │  clone     ~/clones/demo-2 is free                                           │
+               │  branch    vision/DEMO-15 from origin/main                                   │
+               │  path      13 steps: refine, plan, plan-ready, build, review, open-pr, ci,…  │
+               │  first     refine: scout · claude-fable-5-2 · high                           │
+               │  writes    Of 5 write verbs, 4 in the mode auto and 1 in the mode ask.       │
+               │            Vision asks you before each write that is not in the mode auto.   │
+               │                                                                              │
+               │  Nothing goes to the tracker or the forge at the start.                      │
+               │                                                                              │
                │  It did not work:                                                            │
                │  DEMO-15: no clone is free.                                                  │
                │  Add a clone to `clones` in config.toml, or wait until a ticket ends.        │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

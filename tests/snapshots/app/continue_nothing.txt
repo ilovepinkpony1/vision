@@ -1,17 +1,17 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ─────────────╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮─────────────
              │                                                                                  │
-  IN PROGRESS│  Rename the setting of the weekly email                                          │dow is open
+   In progres│  Rename the setting of the weekly email                                          │dow is open
  ╭───────────│                                                                                  │───────────╮
  │ ▸ DEMO-3  │  DEMO-3 is stopped at the step review.                                           │50   5h 0m │
  │           │  Vision found nothing further: no rule holds.                                    │           │
  ╰───────────│  Vision read:                                                                    │───────────╯
              │  · the tracker status is In Review                                               │
-  MY TICKETS │  · the pull request #7 is open and ready                                         │er · 2 open
- ╭─ To Do · 2│  · the review state is comments and 2 review comments wait                       │───────────╮
- │   DEMO-15 │  · CI is green at 3f2a1b4c5d6e                                                   │           │
- │   DEMO-9  │  · the branch of the clone is at the head of the pull request                    │ll request │
- ╰───────────│                                                                                  │───────────╯
+             │  · the pull request #7 is open and ready                                         │
+             │  · the review state is comments and 2 review comments wait                       │
+             │  · CI is green at 3f2a1b4c5d6e                                                   │
+             │  · the branch of the clone is at the head of the pull request                    │
+             │                                                                                  │
              │    refine                                                                        │
              │    plan                                                                          │
              │    plan-ready                                                                    │
@@ -28,5 +28,5 @@
   THIS WEEK  │  enter continue at review    ↑↓ pick a step    esc cancel    v live view         │
              │                                                                                  │
              ╰──────────────────────────────────────────────────────────────────────────────────╯
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

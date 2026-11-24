@@ -351,8 +351,11 @@ pub struct Setup {
     pub adapter: String,
     /// The step ids of the adapter, in order.
     pub steps: Vec<String>,
-    /// The statuses of the tracker whose sections come first in MY TICKETS (`app.sections`).
+    /// The statuses of the tracker whose sections come first in the tab "To take"
+    /// (`app.sections`).
     pub sections: Vec<String>,
+    /// The steps whose tickets show in the tab "Ready to merge" (`app.merge_steps`).
+    pub merge_steps: Vec<String>,
 }
 
 /// Why the home folder cannot be used.
@@ -453,12 +456,49 @@ impl<T> Fetch<T> {
     }
 }
 
-/// The selection of Home: a ticket key, so that a refresh never moves it to another ticket.
+/// The selection of Home: the open tab and a ticket key, so that a refresh never moves it to
+/// another ticket.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HomeState {
+    pub tab: HomeTab,
+    /// The person opened a tab. Until then, Home opens the tab "To take" while nothing is in
+    /// progress.
+    pub chosen: bool,
     pub selected: Option<String>,
-    /// Select this key as soon as it shows, such as a ticket that was just taken.
+    /// Select this key as soon as it shows, such as a ticket that was just taken. When it shows
+    /// in another tab, that tab opens.
     pub select_next: Option<String>,
+}
+
+/// A tab of Home.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HomeTab {
+    /// The tickets in progress whose step is not a merge step.
+    #[default]
+    Work,
+    /// The tickets of the tracker that Vision does not hold: the queue.
+    Take,
+    /// The tickets in progress at a merge step (`app.merge_steps`).
+    Merge,
+}
+
+impl HomeTab {
+    /// The tabs in order: the keys `1`, `2`, and `3` open them.
+    pub const ALL: [HomeTab; 3] = [HomeTab::Work, HomeTab::Take, HomeTab::Merge];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            HomeTab::Work => "In progress",
+            HomeTab::Take => "To take",
+            HomeTab::Merge => "Ready to merge",
+        }
+    }
+
+    /// The tab after this one; the last tab is followed by the first.
+    pub fn next(self) -> HomeTab {
+        let at = HomeTab::ALL.iter().position(|t| *t == self).unwrap_or(0);
+        HomeTab::ALL[(at + 1) % HomeTab::ALL.len()]
+    }
 }
 
 /// The engine: the queue of the worker and its state.
@@ -700,11 +740,40 @@ impl App {
         rows
     }
 
-    /// The rows of both boxes of Home, in order.
+    /// True when the ticket is at a step of `app.merge_steps`: its pull request waits for the
+    /// merge of a person.
+    pub fn at_merge(&self, held: &Held) -> bool {
+        let steps = self
+            .setup
+            .as_ref()
+            .map_or(&[][..], |s| s.merge_steps.as_slice());
+        held.view
+            .step
+            .as_ref()
+            .is_some_and(|step| steps.contains(step))
+    }
+
+    /// The tickets in progress of a tab: the tab "In progress" and the tab "Ready to merge"
+    /// split them. The tab "To take" has none.
+    pub fn held_of(&self, tab: HomeTab) -> Vec<&Held> {
+        match tab {
+            HomeTab::Work => self.held().iter().filter(|h| !self.at_merge(h)).collect(),
+            HomeTab::Merge => self.held().iter().filter(|h| self.at_merge(h)).collect(),
+            HomeTab::Take => Vec::new(),
+        }
+    }
+
+    /// The rows of a tab of Home, in order.
+    pub fn items_of(&self, tab: HomeTab) -> Vec<Item<'_>> {
+        match tab {
+            HomeTab::Take => self.queue_rows().into_iter().map(Item::Queue).collect(),
+            _ => self.held_of(tab).into_iter().map(Item::Held).collect(),
+        }
+    }
+
+    /// The rows of the open tab of Home, in order.
     pub fn items(&self) -> Vec<Item<'_>> {
-        let mut items: Vec<Item> = self.held().iter().map(Item::Held).collect();
-        items.extend(self.queue_rows().into_iter().map(Item::Queue));
-        items
+        self.items_of(self.home.tab)
     }
 
     /// The index of the selected row in [`App::items`].

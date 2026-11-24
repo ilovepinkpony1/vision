@@ -3,7 +3,7 @@
     │                                                                                          │
     │  Replaces the description of the ticket in the tracker.                                  │s
     │                                                                    ▼ 18 more · ↑↓ scroll │
-  IN│  ✗ move tracker.describe from shadow to ask                                              │en
+   I│  ✗ move tracker.describe from shadow to ask                                              │
  ╭──│  · run the writes of the step refine of DEMO-12 again                                    │──╮
  │ ▸│  · a pass asks for tracker.describe again                                                │m │
  │  │  · check that the same write waits: tracker.describe at 1a2b3c4d5e6f                     │  │
@@ -12,11 +12,11 @@
  │  │  It did not work:                                                                        │  │
  ╰──│  line 1 of a long error that the command wrote line 2 of a long error that the command   │──╯
     │  wrote line 3 of a long error that the command wrote line 4 of a long error that the     │
-  MY│  command wrote line 5 of a long error that the command wrote line 6 of a long error      │en
- ╭─ │  that the command wrote line 7 of a long error that the command wrote line 8 of a long   │──╮
- │  │  error that the command wrote line 9 of a long error that the command wrote line 10 of   │  │
- │  │  a long error that the command wrote line 11 of a long error that the command wrote      │t │
- ╰──│  line 12 of a long error that the command wrote line 13 of a long error that the         │──╯
+    │  command wrote line 5 of a long error that the command wrote line 6 of a long error      │
+    │  that the command wrote line 7 of a long error that the command wrote line 8 of a long   │
+    │  error that the command wrote line 9 of a long error that the command wrote line 10 of   │
+    │  a long error that the command wrote line 11 of a long error that the command wrote      │
+    │  line 12 of a long error that the command wrote line 13 of a long error that the         │
     │  command wrote line 14 of a long error that the command wrote line 15 of a long error    │
     │  that the command wrote line 16 of a long error that the command wrote line 17 of a      │
     │  The rest of the text is cut.                                                            │

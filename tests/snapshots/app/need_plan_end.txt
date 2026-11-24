@@ -3,7 +3,7 @@
          │                                                                                          │
     needs│                                                                                          │ needs
          │  ## Decisions                                                                            │
-  IN PROG│                                                                                          │is open
+   In pro│                                                                                          │
  ╭───────│  - The export keeps the order of the columns.                                            │───────╮
  │ ▸ DEMO│  - The file uses commas and a header row.                                                │   38m │
  │       │                                                                                          │       │
@@ -12,11 +12,11 @@
  │       │  test_export.py fails on the base and passes after the change.                           │       │
  ╰───────│                                                                                          │───────╯
          │  - Step 1 of the build writes one part of the export.                                    │
-  MY TICK│  - Step 2 of the build writes one part of the export.                                    │ 2 open
- ╭─ To Do│  - Step 3 of the build writes one part of the export.                                    │───────╮
- │   DEMO│  - Step 4 of the build writes one part of the export.                                    │       │
- │   DEMO│  - Step 5 of the build writes one part of the export.                                    │equest │
- ╰───────│  - Step 6 of the build writes one part of the export.                                    │───────╯
+         │  - Step 2 of the build writes one part of the export.                                    │
+         │  - Step 3 of the build writes one part of the export.                                    │
+         │  - Step 4 of the build writes one part of the export.                                    │
+         │  - Step 5 of the build writes one part of the export.                                    │
+         │  - Step 6 of the build writes one part of the export.                                    │
          │  - Step 7 of the build writes one part of the export.                                    │
          │  - Step 8 of the build writes one part of the export.                                    │
          │  - Step 9 of the build writes one part of the export.                                    │
@@ -28,5 +28,5 @@
   THIS WE│  here. Vision has no way to send a plan back to its agent.                               │
          │  ↑↓ scroll    a approve    x stop the ticket    esc later                                │
          │                                                                                          │
- ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯quit
+ ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

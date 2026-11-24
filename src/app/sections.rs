@@ -1,4 +1,4 @@
-//! The sections of the box MY TICKETS of Home: one section for each status of the tracker.
+//! The sections of the tab "To take" of Home: one section for each status of the tracker.
 //! The statuses of `app.sections` of the configuration come first, in that order. Each other
 //! status follows, in the order of the queue. The tickets of one status keep the order of the
 //! queue, so the order of the rows is the order of the arrows too.

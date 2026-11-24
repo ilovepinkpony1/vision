@@ -1,15 +1,15 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  IN PROGRESS
+   In progress 0    To take 0    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │   Nothing is in progress. Select a ticket below and press Enter to start it.                             │
+ │   Nothing is in progress, and no ticket of the tracker waits to be taken.                                │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
-  MY TICKETS                                                                       from the tracker · 0 open
- ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │   The queue of the tracker is empty.                                                                     │
- ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
 
 
 
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

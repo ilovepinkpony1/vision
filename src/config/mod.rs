@@ -701,12 +701,25 @@ impl Escapes {
 }
 
 /// The values of the full-screen app (section 15.3).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppValues {
-    /// The statuses of the tracker whose sections come first in the box MY TICKETS of Home,
-    /// in this order. Each other status of the queue follows, in the order of the queue.
+    /// The statuses of the tracker whose sections come first in the tab "To take" of Home, in
+    /// this order. Each other status of the queue follows, in the order of the queue.
     pub sections: Vec<String>,
+    /// The steps of the adapter whose tickets show in the tab "Ready to merge" of Home: their
+    /// pull request waits for the merge of a person. Each other ticket in progress shows in
+    /// the tab "In progress".
+    pub merge_steps: Vec<String>,
+}
+
+impl Default for AppValues {
+    fn default() -> AppValues {
+        AppValues {
+            sections: Vec::new(),
+            merge_steps: vec!["ready-to-merge".to_string()],
+        }
+    }
 }
 
 /// True when two statuses of the tracker are the same: equal without the case and without

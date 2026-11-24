@@ -3,7 +3,7 @@
 
     needs╭─ DEMO-12 · builder asks at the step build · Question 1 of 3 ─────────────────────────────╮ needs
          │                                                                                          │
-  IN PROG│   1 ✓ draft    2 · open   3 ◇ proposed   review                                          │is open
+   In pro│   1 ✓ draft    2 · open   3 ◇ proposed   review                                          │
  ╭───────│                                                                                          │───────╮
  │ ▸ DEMO│  Must the export keep the order of the columns?                                          │   38m │
  │       │                                                                                          │       │
@@ -12,11 +12,11 @@
  │       │                                                                                          │       │
  ╰───────│  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │───────╯
          │  Example       The table shows date, client, total. The file can keep that order or      │
-  MY TICK│                sort the columns by name.                                                 │ 2 open
- ╭─ To Do│                                                                                          │───────╮
- │   DEMO│    a  Keep the order  the file has the columns of the table, in the same    recommended  │       │
- │   DEMO│                       order                                                              │equest │
- ╰───────│  ▸ b  Sort by name    the file sorts the columns by their names                          │───────╯
+         │                sort the columns by name.                                                 │
+         │                                                                                          │
+         │    a  Keep the order  the file has the columns of the table, in the same    recommended  │
+         │                       order                                                              │
+         │  ▸ b  Sort by name    the file sorts the columns by their names                          │
          │                                                                                          │
          │  Recommended   a Keep the order: People compare the file with the table.                 │
          │  Evidence      src/export.py:42                                                          │
@@ -28,5 +28,5 @@
   THIS WE╰──────────────────────────────────────────────────────────────────────────────────────────╯
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

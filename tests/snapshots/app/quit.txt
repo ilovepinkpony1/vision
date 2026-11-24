@@ -1,7 +1,7 @@
  ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+   In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
  │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
@@ -10,11 +10,11 @@
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
  ╰────────────────╭─ Quit Vision? ─────────────────────────────────────────────────────────╮────────────────╯
                   │                                                                        │
-  MY TICKETS      │  2 tickets are in progress.                                            │tracker · 2 open
- ╭─ To Do · 2 ────│                                                                        │────────────────╮
- │   DEMO-15   Kee│  The running turn of builder finishes by itself. The next step of      │                │
- │   DEMO-9    Fix│  each ticket waits until you open Vision again.                        │en pull request │
- ╰────────────────│                                                                        │────────────────╯
+                  │  2 tickets are in progress.                                            │
+                  │                                                                        │
+                  │  The running turn of builder finishes by itself. The next step of      │
+                  │  each ticket waits until you open Vision again.                        │
+                  │                                                                        │
                   │  To let the work continue without this window, run vision install.     │
                   │                                                                        │
                   │  enter quit    esc stay                                                │
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 

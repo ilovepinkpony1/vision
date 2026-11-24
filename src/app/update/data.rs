@@ -2,7 +2,7 @@
 //! the selection to a different ticket: the selection is a ticket key. A ticket whose turn just
 //! ended puts a pass into the queue of the worker.
 
-use super::super::model::{App, StageState, STAGE_LEDGER, STAGE_TRACKER};
+use super::super::model::{App, HomeTab, StageState, STAGE_LEDGER, STAGE_TRACKER};
 use super::super::msg::Effect;
 use super::super::text::{count, error_line};
 use super::{boot, engine};
@@ -161,6 +161,23 @@ fn short(error: &str) -> String {
 /// Keeps the selection on the same ticket key. A key that was asked for wins; a key that left
 /// gives its place to the row that is now at the same place.
 fn keep_selection(app: &mut App, before: &[String]) {
+    // A key that was asked for, such as a ticket that was just taken, opens its tab.
+    if let Some(next) = app.home.select_next.clone() {
+        let tab = HomeTab::ALL
+            .into_iter()
+            .find(|tab| app.items_of(*tab).iter().any(|i| i.key() == next));
+        if let Some(tab) = tab {
+            app.home.tab = tab;
+        }
+    }
+    // While nothing is in progress, the queue shows first, until the person opens a tab.
+    if !app.home.chosen
+        && app.home.tab == HomeTab::Work
+        && app.items_of(HomeTab::Work).is_empty()
+        && !app.items_of(HomeTab::Take).is_empty()
+    {
+        app.home.tab = HomeTab::Take;
+    }
     let keys: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();
     if let Some(next) = app.home.select_next.clone() {
         if keys.contains(&next) {

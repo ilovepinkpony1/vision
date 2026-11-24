@@ -226,7 +226,7 @@ fn a_click_on_a_key_of_the_footer_of_the_live_view_acts_as_that_key() {
 #[test]
 fn a_click_on_a_key_of_a_card_acts_as_that_key() {
     let mut app = home(SIZE);
-    for k in [Key::Down, Key::Down, Key::Enter] {
+    for k in [Key::Char('2'), Key::Enter] {
         send(&mut app, 1.5, Msg::Key(k));
     }
     assert!(matches!(&app.card, Some(Card::Start(card)) if card.key == "DEMO-15"));
@@ -507,9 +507,7 @@ fn a_typed_key_acts_at_once_also_while_a_click_armed_its_part() {
     assert!(app.chain.is_some(), "the key `a` sends the write at once");
     // On the start card, Enter starts at once, as before.
     let mut start = home(SIZE);
-    for k in [Key::Down, Key::Down] {
-        send(&mut start, 1.5, Msg::Key(k));
-    }
+    send(&mut start, 1.5, Msg::Key(Key::Char('2')));
     let fx = send(&mut start, 1.5, Msg::Key(Key::Enter));
     assert!(matches!(&start.card, Some(Card::Start(_))), "{fx:?}");
     let fx = send(&mut start, 1.5, Msg::Key(Key::Enter));
@@ -621,7 +619,7 @@ fn a_click_outside_each_part_does_nothing_and_makes_no_redraw() {
 #[test]
 fn a_card_takes_each_click_and_the_screen_under_it_has_no_part() {
     let mut app = home(SIZE);
-    for k in [Key::Down, Key::Down, Key::Enter] {
+    for k in [Key::Char('2'), Key::Enter] {
         send(&mut app, 1.5, Msg::Key(k));
     }
     let buf = draw(&mut app);
@@ -636,6 +634,7 @@ fn a_card_takes_each_click_and_the_screen_under_it_has_no_part() {
 #[test]
 fn only_the_parts_of_the_last_frame_count_and_a_resize_clears_them() {
     let mut app = home(SIZE);
+    send(&mut app, 1.4, Msg::Key(Key::Char('2')));
     let buf = draw(&mut app);
     let row = find(&buf, "DEMO-15");
     assert_eq!(
@@ -657,7 +656,11 @@ fn only_the_parts_of_the_last_frame_count_and_a_resize_clears_them() {
         .iter()
         .any(|(_, act)| matches!(act, Act::Ticket(_))));
     click(&mut models, 1.5, row);
-    assert_eq!(models.home.selected.as_deref(), Some("DEMO-12"));
+    assert_eq!(
+        models.home.selected.as_deref(),
+        Some("DEMO-15"),
+        "the click changes nothing"
+    );
     // A change of the window size clears the parts until the next frame.
     let cell = find_last(&buf, "m models");
     send(
@@ -679,6 +682,12 @@ fn only_the_parts_of_the_last_frame_count_and_a_resize_clears_them() {
 #[test]
 fn a_click_selects_a_ticket_of_home_and_a_second_click_opens_it() {
     let mut app = home(SIZE);
+    // A click on a tab opens it: "To take" holds the queue, and its first row is selected.
+    let buf = draw(&mut app);
+    click(&mut app, 1.4, find(&buf, "To take"));
+    assert_eq!(app.home.tab, vision::app::model::HomeTab::Take);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-15"));
+    send(&mut app, 1.4, Msg::Key(Key::Down));
     let buf = draw(&mut app);
     let queue = find(&buf, "DEMO-15");
     click(&mut app, 1.5, queue);
@@ -706,26 +715,29 @@ fn a_click_selects_a_ticket_of_home_and_a_second_click_opens_it() {
     assert!(fx.contains(&Effect::LoadTicket("DEMO-7".into())));
 }
 
-/// MY TICKETS with sections: a click on a mark selects the next ticket out of view, past the
-/// titles, and a click on the line of a title does nothing.
+/// The tab "To take" with sections: a click on a mark selects the next ticket out of view,
+/// past the titles, and a click on the line of a title does nothing.
 #[test]
-fn a_click_on_a_mark_of_my_tickets_selects_the_next_ticket_out_of_view_and_a_title_does_nothing() {
-    let mut app = sectioned_home((100, 28));
-    for _ in 0..10 {
+fn a_click_on_a_mark_of_the_queue_selects_the_next_ticket_out_of_view_and_a_title_does_nothing() {
+    let mut app = long_sectioned_home((100, 28));
+    send(&mut app, 1.0, Msg::Key(Key::Char('2')));
+    for _ in 0..19 {
         send(&mut app, 1.1, Msg::Key(Key::Down));
     }
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-40"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-57"));
+    // The part starts at the title In Testing, so that title moves into the top line.
     let buf = draw(&mut app);
-    click(&mut app, 1.5, find(&buf, "▲ 3 more"));
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-41"));
+    assert!(find_in(&buf, "In Testing · 3", find(&buf, "To take").1 + 1).is_some());
+    click(&mut app, 1.5, find(&buf, "▲ 6 more"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-39"));
     let buf = draw(&mut app);
-    assert!(find_in(&buf, "In Progress · 3", find(&buf, "MY TICKETS").1 + 1).is_some());
-    click(&mut app, 1.6, find(&buf, "▼ 6 more"));
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-31"));
+    assert!(find_in(&buf, "In Progress · 3", find(&buf, "To take").1 + 1).is_some());
+    click(&mut app, 1.6, find(&buf, "▼ 7 more"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-51"));
     let buf = draw(&mut app);
     let fx = click(&mut app, 1.7, find(&buf, "In Testing · 3"));
     assert!(fx.is_empty(), "{fx:?}");
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-31"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-51"));
     assert_eq!(app.card, None);
 }
 
@@ -794,6 +806,7 @@ fn two_clicks_open_the_start_card_of_a_ticket_outside_vision_and_two_clicks_on_a
         local(two_tickets(), Vec::new()),
         Some(queue_with_outside()),
     );
+    send(&mut app, 1.4, Msg::Key(Key::Char('2')));
     let buf = draw(&mut app);
     let row = find(&buf, "DEMO-21");
     click(&mut app, 1.5, row);
@@ -1080,7 +1093,7 @@ fn the_wheel_moves_the_selection_of_home_scrolls_the_log_and_scrolls_a_card() {
     // Home: the wheel over a box acts as the arrows.
     let mut app = home(SIZE);
     let buf = draw(&mut app);
-    mouse(&mut app, 1.5, MouseKind::WheelDown, find(&buf, "DEMO-9"));
+    mouse(&mut app, 1.5, MouseKind::WheelDown, find(&buf, "DEMO-7"));
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-7"));
     // The log: one step moves the cursor three rows.
     let mut app = working_live(SIZE);

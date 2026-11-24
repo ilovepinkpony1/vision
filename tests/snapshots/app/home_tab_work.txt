@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+   In progress 1    To take 2    Ready to merge 1       1 ticket · Vision moves it while this window is open
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
+

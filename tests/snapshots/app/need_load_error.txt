@@ -3,7 +3,7 @@
 
     needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
 
-  IN PROGRESS                                        2 tickets · Vision moves them while this window is open
+   In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
  │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
  │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
@@ -12,11 +12,11 @@
  │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
  ╰───────╭─ What waits for you ─────────────────────────────────────────────────────────────────────╮───────╯
          │                                                                                          │
-  MY TICK│  Vision could not read what waits for you:                                               │ 2 open
- ╭─ To Do│  the ledger is locked                                                                    │───────╮
- │   DEMO│                                                                                          │       │
- │   DEMO│  esc close                                                                               │equest │
- ╰───────│                                                                                          │───────╯
+         │  Vision could not read what waits for you:                                               │
+         │  the ledger is locked                                                                    │
+         │                                                                                          │
+         │  esc close                                                                               │
+         │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 
 
@@ -28,5 +28,5 @@
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 
- ↑↓ move   enter open or start   n needs   m models   s stats   p pause   ? keys   K kill switch   q quit
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
 
