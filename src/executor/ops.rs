@@ -179,6 +179,9 @@ pub struct OperationResult {
     pub conflict: bool,
     /// The sensitive paths that wait for the approval of the person.
     pub held: Vec<String>,
+    /// The size of a diff above `gates.max_diff_lines` that waits for the approval of the
+    /// person, in words.
+    pub oversize: Option<String>,
     /// For the mode shadow: what the verb would do.
     pub intent: Option<Value>,
     pub source: Option<String>,
@@ -205,6 +208,10 @@ struct Stored {
     gate: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     held: Vec<String>,
+    /// The diff is larger than `gates.max_diff_lines`: the reason, such as "the diff changes
+    /// 4252 lines, more than gates.max_diff_lines (3000)". The operation waits for the person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oversize: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     intent: Option<Value>,
     /// When the operation was recorded.
@@ -367,6 +374,7 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
     // may have changed since the last request.
     let mut stored = stored_of(&row);
     stored.held.clear();
+    stored.oversize = None;
     stored.intent = None;
     stored.gate = None;
     if let Some(name) = secrets.found_in(&call.args) {
@@ -424,6 +432,22 @@ pub fn request(ctx: &Ctx, ledger: &Ledger, op: &OperationRun) -> Result<Operatio
                         stored.held = paths;
                         return pending(ctx, ledger, &row, mode, &stored);
                     }
+                    Verdict::Oversize { reason, held } => {
+                        let touches = if held.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                ", and it touches {}, which the approved plan does not name",
+                                held.join(", ")
+                            )
+                        };
+                        stored.detail = format!(
+                            "{reason}{touches}, so it waits for your approval. Run `{command}` to let it run, or split the ticket"
+                        );
+                        stored.oversize = Some(reason);
+                        stored.held = held;
+                        return pending(ctx, ledger, &row, mode, &stored);
+                    }
                     Verdict::Pass => {}
                 }
             }
@@ -478,9 +502,9 @@ pub fn operations_of(ledger: &Ledger, ticket: &TicketKey) -> Result<Vec<Operatio
 }
 
 /// `vision approve KEY VERB COMMIT`: runs each operation of the verb that waits for the person
-/// at that commit, if the ticket is still at that commit. The secrets and the size gates run
-/// again; the approval covers the sensitive paths. A stale commit is an error that tells what
-/// changed. The caller holds the lock of the tick.
+/// at that commit, if the ticket is still at that commit. The secrets gate runs again; the
+/// approval covers the sensitive paths and a diff above `gates.max_diff_lines`. A stale commit
+/// is an error that tells what changed. The caller holds the lock of the tick.
 ///
 /// With `only` (`--op ID`), the approval is for that one operation: no other operation runs,
 /// and an operation that no longer waits at that commit is an error that sends nothing. The app
@@ -759,7 +783,7 @@ pub fn release_failed(ledger: &Ledger, key: &TicketKey) -> Result<usize> {
 }
 
 /// The operations that wait for `vision approve`, oldest first, as data: the mode ask, and the
-/// diffs held for a sensitive path. These are the operations of [`needs`].
+/// diffs held for a sensitive path or for their size. These are the operations of [`needs`].
 pub fn waiting(ledger: &Ledger) -> Result<Vec<OperationResult>> {
     ledger
         .operations_in_states(&[STATE_PENDING])?
@@ -781,7 +805,14 @@ pub fn needs(ledger: &Ledger) -> Result<Vec<Need>> {
         let call = call_of(&row);
         let stored = stored_of(&row);
         let at = short(&call.head);
-        let text = if stored.held.is_empty() {
+        let text = if let Some(reason) = &stored.oversize {
+            let touches = if stored.held.is_empty() {
+                String::new()
+            } else {
+                format!(", and it touches {}", stored.held.join(", "))
+            };
+            format!("{} at {at} is held: {reason}{touches}", row.verb)
+        } else if stored.held.is_empty() {
             let args = call.args.to_string();
             let args = if args == "{}" {
                 String::new()
@@ -882,8 +913,17 @@ fn supersede(ctx: &Ctx, ledger: &Ledger, row: &OperationRow, head: &str) -> Resu
 /// What the gates say about one call.
 enum Verdict {
     Pass,
-    Refuse { gate: Gate, reason: String },
+    Refuse {
+        gate: Gate,
+        reason: String,
+    },
     Hold(Vec<String>),
+    /// The diff is larger than `gates.max_diff_lines`: it waits for the person. `held` names
+    /// the sensitive paths that the same approval covers.
+    Oversize {
+        reason: String,
+        held: Vec<String>,
+    },
 }
 
 impl Verdict {
@@ -894,6 +934,7 @@ impl Verdict {
             Verdict::Hold(paths) => {
                 format!("the sensitive gate would hold it for {}", paths.join(", "))
             }
+            Verdict::Oversize { reason, .. } => format!("the size gate would hold it: {reason}"),
         }
     }
 }
@@ -965,7 +1006,13 @@ fn test_gates(
         _ => None,
     };
     let sized = taken.as_ref().map_or(files.as_slice(), |(own, _)| own);
-    if let Err(reason) = gates::size_gate(sized, config.gates.max_diff_lines) {
+    // A diff above the limit waits for the person, and the approval covers it.
+    let size = if approved {
+        Ok(())
+    } else {
+        gates::size_gate(sized, config.gates.max_diff_lines)
+    };
+    if let Err(reason) = size {
         let reason = match &taken {
             Some((_, start)) => reason.replacen(
                 "the diff changes",
@@ -977,19 +1024,31 @@ fn test_gates(
             ),
             None => reason,
         };
-        return Ok(Verdict::Refuse {
-            gate: Gate::Size,
-            reason,
-        });
+        let held = sensitive_held(ctx, config, ticket, sized)?;
+        return Ok(Verdict::Oversize { reason, held });
     }
     if !approved {
-        let plan = read_optional(&ctx.paths.ticket_doc(&ticket.key, APPROVED_PLAN))?;
-        let held = gates::sensitive_gate(sized, &config.gates.sensitive, plan.as_deref());
+        let held = sensitive_held(ctx, config, ticket, sized)?;
         if !held.is_empty() {
             return Ok(Verdict::Hold(held));
         }
     }
     Ok(Verdict::Pass)
+}
+
+/// The sensitive paths of the diff that the approved plan of the ticket does not name.
+fn sensitive_held(
+    ctx: &Ctx,
+    config: &Config,
+    ticket: &TicketContext,
+    files: &[FileDiff],
+) -> Result<Vec<String>> {
+    let plan = read_optional(&ctx.paths.ticket_doc(&ticket.key, APPROVED_PLAN))?;
+    Ok(gates::sensitive_gate(
+        files,
+        &config.gates.sensitive,
+        plan.as_deref(),
+    ))
 }
 
 /// Each string of the arguments with its path, such as `args.body`.
@@ -1050,6 +1109,7 @@ fn execute(
     let pr = ledger.ticket(&row.ticket)?.and_then(|r| r.pr);
     let input = act_input(row, call, pr, false);
     stored.held.clear();
+    stored.oversize = None;
     let record = crate::running::start(&ctx.paths, "operation", &row.verb, &row.ticket);
     let answer = runner.act(input, timeout_of(verb));
     drop(record);
@@ -1209,7 +1269,8 @@ fn commit_matches(head: &str, commit: &str) -> bool {
 }
 
 fn waits_for_person(row: &OperationRow) -> bool {
-    row.mode == Mode::Ask.as_str() || !stored_of(row).held.is_empty()
+    let stored = stored_of(row);
+    row.mode == Mode::Ask.as_str() || !stored.held.is_empty() || stored.oversize.is_some()
 }
 
 fn refuse(
@@ -1345,7 +1406,7 @@ fn result_of(row: &OperationRow) -> Result<OperationResult> {
             "ask" => Outcome::Waiting {
                 command: approve_command(&row.ticket, &row.verb, &call.head),
             },
-            _ if !stored.held.is_empty() => Outcome::Waiting {
+            _ if !stored.held.is_empty() || stored.oversize.is_some() => Outcome::Waiting {
                 command: approve_command(&row.ticket, &row.verb, &call.head),
             },
             _ => Outcome::Pending,
@@ -1366,6 +1427,7 @@ fn result_of(row: &OperationRow) -> Result<OperationResult> {
         documents: stored.documents,
         conflict: stored.conflict,
         held: stored.held,
+        oversize: stored.oversize,
         intent: stored.intent,
         source: row.source.clone(),
         turn: row.turn.clone(),

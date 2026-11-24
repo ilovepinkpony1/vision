@@ -161,6 +161,7 @@ pub fn write(mode: &str) -> WriteItem {
         args: json!({"text": "Export the report of the month as a CSV file.\n\nThe file keeps the order of the columns of the table."}),
         intent: None,
         held: Vec::new(),
+        oversize: None,
         step: "refine".into(),
         writes_only: true,
     }

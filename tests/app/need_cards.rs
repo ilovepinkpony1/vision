@@ -273,6 +273,15 @@ fn the_cards_of_a_write_that_waits() {
             vec![approval("auto", &["db/migrate/0042_orders.sql"])],
         ),
     );
+    let NeedItem::Approval(mut big) = approval("auto", &[]) else {
+        unreachable!()
+    };
+    big.oversize =
+        Some("the diff changes 4252 lines, more than gates.max_diff_lines (3000)".into());
+    check(
+        "need_approval_oversize",
+        &open_with(SIZE, vec![NeedItem::Approval(big)]),
+    );
 }
 
 #[test]

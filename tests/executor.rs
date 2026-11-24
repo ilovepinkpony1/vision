@@ -486,28 +486,68 @@ fn an_attribute_of_the_repo_cannot_hide_a_file_from_the_gates() {
 }
 
 #[test]
-fn a_diff_that_is_too_large_is_refused() {
+fn a_diff_that_is_too_large_waits_for_the_person_and_the_approval_sends_it() {
     let demo = Demo::new();
     demo.edit_config(|doc| doc["gates"]["max_diff_lines"] = toml_edit::value(5));
     let lines: String = (1..=12).map(|n| format!("line {n}\n")).collect();
-    demo.commit(&[("big.txt", &lines)], "A big file");
-    let result =
-        executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
-    assert_eq!(
-        result.outcome,
-        Outcome::Refused {
-            gate: "size".into()
-        }
+    let head = demo.commit(&[("big.txt", &lines)], "A big file");
+    let (ctx, ledger) = (demo.ctx(), demo.ledger());
+    let result = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert!(
+        matches!(result.outcome, Outcome::Waiting { .. }),
+        "{result:?}"
     );
+    let reason = "the diff changes 12 lines, more than gates.max_diff_lines (5)";
+    assert_eq!(result.oversize.as_deref(), Some(reason));
+    assert!(result.detail.contains(reason), "{result:?}");
+    assert!(result.detail.contains("vision approve"), "{result:?}");
+    assert!(demo.remote_branch(BRANCH).is_none());
+    // A new request at the same commit still waits, and nothing leaves.
+    let again = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert_eq!(again.id, result.id);
+    assert!(matches!(again.outcome, Outcome::Waiting { .. }));
+    assert!(demo.remote_branch(BRANCH).is_none());
+    let needs = executor::needs(&ctx, &ledger).unwrap();
+    assert_eq!(needs.len(), 1, "{needs:?}");
+    assert_eq!(needs[0].id, format!("git.push {head}"));
+    assert!(needs[0].text.contains(reason), "{needs:?}");
+    let run = demo.run(&["status", "--json"]);
+    run.expect_code(0);
+    // The approval covers the size: the push runs.
+    let ran = executor::approve(&ctx, &ledger, &key(), "git.push", &head, None).unwrap();
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].outcome, Outcome::Confirmed, "{ran:?}");
+    assert_eq!(ran[0].oversize, None);
+    assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));
+    assert!(executor::needs(&ctx, &ledger).unwrap().is_empty());
+}
+
+#[test]
+fn one_approval_covers_the_size_and_the_sensitive_paths_of_a_diff() {
+    let demo = Demo::new();
+    // The default list of sensitive paths names db/migrate/.
+    demo.edit_config(|doc| doc["gates"]["max_diff_lines"] = toml_edit::value(5));
+    let head = demo.commit(
+        &[("db/migrate/001_big.rb", &lines(12, "line"))],
+        "A big migration",
+    );
+    let (ctx, ledger) = (demo.ctx(), demo.ledger());
+    let result = executor::request(&ctx, &ledger, &op("git.push", json!({}))).unwrap();
+    assert!(
+        matches!(result.outcome, Outcome::Waiting { .. }),
+        "{result:?}"
+    );
+    assert!(result.oversize.is_some(), "{result:?}");
+    assert_eq!(result.held, ["db/migrate/001_big.rb"]);
     assert!(
         result
             .detail
-            .contains("the diff changes 12 lines, more than gates.max_diff_lines (5)"),
+            .contains("and it touches db/migrate/001_big.rb"),
         "{result:?}"
     );
-    assert!(demo.remote_branch(BRANCH).is_none());
-    let run = demo.run(&["status", "--json"]);
-    run.expect_code(0);
+    let ran = executor::approve(&ctx, &ledger, &key(), "git.push", &head, None).unwrap();
+    assert_eq!(ran[0].outcome, Outcome::Confirmed, "{ran:?}");
+    assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));
 }
 
 /// Records the take of DEMO-12 as `vision take --step` records a ticket that is in progress
@@ -550,21 +590,14 @@ fn the_size_gate_counts_only_the_change_after_a_take_from_outside() {
 
     // The change of Vision after the take still has its limit.
     demo.commit(&[("more.txt", &lines(3, "more"))], "A second fix");
-    let refused =
-        executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
-    assert_eq!(
-        refused.outcome,
-        Outcome::Refused {
-            gate: "size".into()
-        },
-        "{refused:?}"
-    );
+    let held = executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
+    assert!(matches!(held.outcome, Outcome::Waiting { .. }), "{held:?}");
     assert!(
-        refused.detail.contains(&format!(
+        held.detail.contains(&format!(
             "the diff after the take of the branch at {} changes 6 lines, more than gates.max_diff_lines (5)",
             &taken[..12]
         )),
-        "{refused:?}"
+        "{held:?}"
     );
     assert_eq!(demo.remote_branch(BRANCH).as_deref(), Some(head.as_str()));
 }
@@ -579,11 +612,8 @@ fn the_size_gate_counts_from_the_base_after_a_take_of_another_branch() {
     demo.commit(&[("fix.txt", "fix\n")], "A fix");
     let result =
         executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
-    assert_eq!(
-        result.outcome,
-        Outcome::Refused {
-            gate: "size".into()
-        },
+    assert!(
+        matches!(result.outcome, Outcome::Waiting { .. }),
         "{result:?}"
     );
     assert!(
@@ -606,11 +636,8 @@ fn the_size_gate_counts_from_the_base_when_the_take_is_not_in_the_history() {
     demo.commit(&[("other.txt", &lines(8, "other"))], "Another change");
     let result =
         executor::request(&demo.ctx(), &demo.ledger(), &op("git.push", json!({}))).unwrap();
-    assert_eq!(
-        result.outcome,
-        Outcome::Refused {
-            gate: "size".into()
-        },
+    assert!(
+        matches!(result.outcome, Outcome::Waiting { .. }),
         "{result:?}"
     );
     assert!(

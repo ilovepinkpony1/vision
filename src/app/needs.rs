@@ -324,6 +324,8 @@ pub struct WriteItem {
     pub intent: Option<Value>,
     /// The sensitive paths that the diff touches and that the approved plan does not name.
     pub held: Vec<String>,
+    /// The size of a diff above `gates.max_diff_lines`, in words, when the size holds it.
+    pub oversize: Option<String>,
     /// The step of the ticket now.
     pub step: String,
     /// A retry runs only the writes of the step again: its turn held its end facts, or it is

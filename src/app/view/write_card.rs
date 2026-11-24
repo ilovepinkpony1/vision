@@ -25,7 +25,25 @@ const DECIDE: [Key; 2] = [Key::Char('y'), Key::Char('a')];
 pub(super) fn approval(app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts {
     let mut body = Rows::default();
     head(&mut body, item);
-    if item.held.is_empty() {
+    if let Some(reason) = &item.oversize {
+        let touches = if item.held.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", and it touches {}, which the approved plan does not name",
+                item.held.join(", ")
+            )
+        };
+        body.para(
+            3,
+            &format!(
+                "{}{touches}, so it waits for your approval.",
+                upper_first(reason)
+            ),
+            TEXT,
+            ink(T.warn),
+        );
+    } else if item.held.is_empty() {
         body.para(
             3,
             &format!(
@@ -262,6 +280,15 @@ pub(super) fn args_box(body: &mut Rows, args: &Value) {
         }
     }
     body.text(3, format!("╰{}╯", "─".repeat(TEXT - 2)), ink(line));
+}
+
+/// The text with its first letter in upper case, to start a sentence.
+fn upper_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// A value in words: a text as it is, `none` for null, and other values as compact JSON.

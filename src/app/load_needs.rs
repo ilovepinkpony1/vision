@@ -208,6 +208,7 @@ fn write_item(
         args: op.args.clone(),
         intent: op.intent.clone(),
         held: op.held.clone(),
+        oversize: op.oversize.clone(),
         step: view.and_then(|v| v.step.clone()).unwrap_or_default(),
         writes_only: facts.writes_only(),
     }
