@@ -27,7 +27,8 @@
 #
 # The steps after open-pr push their own commits: fix-ci and comments name git.push in after.
 #
-# Each loop goes through a turn step with a cap: fix-ci (ci_fix) and comments (comments). Each
+# The loop of fix-ci goes through a turn step with a cap (ci_fix). comments has no cap: a
+# requested change that it refuses in caps.refusals rounds asks the person with a card. Each
 # wait step names the values that mean "not yet" in `wait`, and its `limit` in seconds: any
 # other value, or a longer wait, needs the person. At a commit where CI already ran, ci.run of
 # ci-review is the operation of that commit, so it runs no second time.
@@ -136,10 +137,9 @@ kind = "turn"
 agent = "shepherd"
 turn = "worker"
 before = ["job:comments"]
-reads = ["comments.json", "approved-plan.md"]
+reads = ["comments.json", "approved-plan.md", "refusals.json"]
 expects = ["clean", "doc:verdicts.json"]
 after = ["git.push", { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } }]
-cap = "comments"
 next = "ci-review"
 
 [[step]]

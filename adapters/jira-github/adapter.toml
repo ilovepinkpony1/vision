@@ -179,9 +179,10 @@
 # the ticket the flag needs-you at once, with the value in the reason.
 #
 # Each turn step of a loop has a cap: fix-ci and fix-ci-review (ci_fix), qa and fix-qa
-# (qa_fix), comments (comments), review (review_rounds). Each wait step names the values that
-# mean "not yet" in `wait`, and its `limit` in seconds: any other value, or a longer wait,
-# needs the person.
+# (qa_fix), review (review_rounds). comments has no cap: a requested change that it refuses in
+# caps.refusals rounds asks the person with a card. Each wait step names the values that mean
+# "not yet" in `wait`, and its `limit` in seconds: any other value, or a longer wait, needs
+# the person.
 #
 # The proof gets the approved plan in args.plan. A line `Proof: green` of the plan declares the
 # whole proof green (a change with no new behavior), and a line `Proof: green <path>` declares
@@ -485,13 +486,12 @@ kind = "turn"
 agent = "shepherd"
 turn = "worker"
 before = ["job:comments"]
-reads = ["comments.json", "approved-plan.md"]
+reads = ["comments.json", "approved-plan.md", "refusals.json"]
 expects = ["clean", "doc:verdicts.json"]
 after = [
   "git.push",
   { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } },
 ]
-cap = "comments"
 next = "ci-review"
 
 [[step]]

@@ -192,10 +192,9 @@ kind = "turn"
 agent = "shepherd"
 turn = "worker"
 before = ["job:comments"]
-reads = ["comments.json", "approved-plan.md"]
+reads = ["comments.json", "approved-plan.md", "refusals.json"]
 expects = ["clean", "doc:verdicts.json"]
 after = ["git.push", { verb = "review.reply", args = { verdicts = "{doc:verdicts.json}" } }]
-cap = "comments"
 next = "ci-review"
 
 [[step]]

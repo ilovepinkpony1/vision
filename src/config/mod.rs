@@ -467,6 +467,10 @@ pub struct Caps {
     /// The most jobs that run in the background at one time. Each runs in the clone of its
     /// ticket, so two jobs of different clones do not meet.
     pub jobs_at_once: u32,
+    /// The rounds of review comments in which one requested change can be refused before the
+    /// person decides: at this refusal, the turn asks the person with a card. 0 turns the
+    /// count off.
+    pub refusals: u32,
 }
 
 impl Default for Caps {
@@ -480,6 +484,7 @@ impl Default for Caps {
             judge_minutes: 15,
             merge_look_minutes: 10,
             jobs_at_once: 2,
+            refusals: 3,
         }
     }
 }

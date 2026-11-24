@@ -5,7 +5,8 @@
 //! The rules run in this order:
 //!
 //! 0. A card with no entry goes to the person: `ask`.
-//! 1. A topic of the card or of the entry in `judge.always_ask` makes the outcome `ask`.
+//! 1. A topic of the card or of the entry in `judge.always_ask` makes the outcome `ask`. So
+//!    does the topic [`REFUSED_REVIEW`], whatever `judge.always_ask` holds.
 //! 2. An `answer` with the basis `decision` or `principle` needs at least one source, and each
 //!    source must exist and be active. If not, it becomes `propose`.
 //! 3. An `answer` with the basis `inference` stays an answer only when `sure` is true and
@@ -21,6 +22,10 @@ use serde::{Deserialize, Serialize};
 
 use super::card::{fold, Card, Reply};
 use crate::config::Judge;
+
+/// The topic of a card about a requested change of a review that the agent refused in
+/// `caps.refusals` rounds: only the person answers it (section 11.3).
+pub const REFUSED_REVIEW: &str = "refused-review";
 
 /// The outcome of one card (section 8.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -140,6 +145,19 @@ pub fn rule(
     };
 
     // Rule 1.
+    let refused = card
+        .topics
+        .iter()
+        .any(|topic| fold(topic) == fold(REFUSED_REVIEW));
+    if refused {
+        let reason = (entry.outcome != Outcome::Ask).then(|| {
+            format!("rule 1: the topic `{REFUSED_REVIEW}` is a refused request of a review, so the person answers")
+        });
+        return Ruling {
+            outcome: Outcome::Ask,
+            reason,
+        };
+    }
     let sensitive = card.topics.iter().chain(entry.topics.iter()).find(|topic| {
         let topic = fold(topic);
         !topic.is_empty() && judge.always_ask.iter().any(|a| fold(a) == topic)
@@ -316,6 +334,26 @@ mod tests {
                 reason: None
             }
         );
+    }
+
+    #[test]
+    fn rule_1_a_refused_request_of_a_review_always_goes_to_the_person() {
+        // Even a sure answer of the Judge, with an empty judge.always_ask.
+        let open = Judge {
+            always_ask: Vec::new(),
+            ..judge()
+        };
+        let e = entry(Outcome::Answer, Basis::Inference, &[], true);
+        let ruling = run(&card(&["Refused-Review", "comment:42"]), Some(&e), &open);
+        assert_eq!(ruling.outcome, Outcome::Ask);
+        assert!(
+            reason_of(&ruling).contains("`refused-review`"),
+            "{ruling:?}"
+        );
+        // The topic of the entry of the Judge cannot set it: only the card of the agent.
+        let mut e = entry(Outcome::Answer, Basis::Inference, &[], true);
+        e.topics = vec![REFUSED_REVIEW.into()];
+        assert_eq!(run(&card(&[]), Some(&e), &open).outcome, Outcome::Answer);
     }
 
     #[test]

@@ -17,6 +17,7 @@ use super::decide::{
 };
 use super::docs::{self, result_documents};
 use super::gates;
+use super::refusals;
 use super::state::{
     flags_of, flags_text, waits_on, Counts, FlagReason, Interrupt, Seen, NEEDS_YOU, STOPPED,
     WAITS_FOR_LIMIT,
@@ -622,6 +623,18 @@ fn test_turn_of(
         Check::Waits(_) => return Ok(()),
         other => other,
     };
+    // A requested change of a review that this round refuses once too often waits for the
+    // decision of the person (section 11.3).
+    let check = match check {
+        Check::Held => match refusal_stops(ctx, ledger, &ticket.key, step, &found)? {
+            Some(found) => Check::Failed {
+                fact: REFUSALS_FACT.into(),
+                found,
+            },
+            None => Check::Held,
+        },
+        other => other,
+    };
     let now = time::now_rfc3339();
     let (value, detail) = match &check {
         Check::Held => ("held".to_string(), json!({"turn": last.id, "held": true})),
@@ -669,6 +682,7 @@ fn test_turn_of(
     };
     if check == Check::Held {
         remember_seen_comments(ctx, &ticket.key, step, &found)?;
+        count_refusals(ctx, ledger, &ticket.key, step, &found, &last.id, &now)?;
     }
     // The commands of the secrets can be slow, so only a step with a gate reads them.
     let secrets = if step.expects.iter().any(|e| matches!(e, Expect::Gate(_))) {
@@ -983,6 +997,91 @@ fn remember_seen_comments(
     atomic_write(
         &ctx.paths.ticket_doc(key, executor::SEEN_COMMENTS),
         text.as_bytes(),
+    )
+}
+
+/// The end fact of a round of review comments that refuses a request once too often.
+const REFUSALS_FACT: &str = "refusals";
+
+/// The counts so far, the verdicts of a round, and the comments that it read.
+type RefusalInputs = (
+    refusals::Refusals,
+    Vec<docs::Verdict>,
+    Vec<refusals::Comment>,
+);
+
+/// What a round needs to count refused requests of a review. `None` for a step that is not a
+/// turn, or for a result with no `verdicts.json` that Vision can read.
+fn refusal_inputs(
+    ctx: &Ctx,
+    key: &TicketKey,
+    step: &Step,
+    found: &docs::ResultDocs,
+) -> Result<Option<RefusalInputs>> {
+    let StepKind::Turn(turn) = &step.kind else {
+        return Ok(None);
+    };
+    let Some(Ok(verdicts)) = found.docs.get("verdicts.json").map(|t| docs::verdicts(t)) else {
+        return Ok(None);
+    };
+    let counts =
+        refusals::parse(read_optional(&ctx.paths.ticket_doc(key, refusals::REFUSALS))?.as_deref());
+    let mut comments = Vec::new();
+    for name in turn.reads.iter().filter(|n| *n != refusals::REFUSALS) {
+        if let Some(text) = read_optional(&ctx.paths.ticket_doc(key, name))? {
+            comments.extend(refusals::comments(&text));
+        }
+    }
+    Ok(Some((counts, verdicts, comments)))
+}
+
+/// The refused requests of a round that wait for the decision of the person, as one text for
+/// the resume of the agent. `None` when the round can hold, or when `caps.refusals` is 0.
+fn refusal_stops(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &TicketKey,
+    step: &Step,
+    found: &docs::ResultDocs,
+) -> Result<Option<String>> {
+    let limit = ctx.config()?.caps.refusals;
+    if limit == 0 {
+        return Ok(None);
+    }
+    let Some((counts, verdicts, comments)) = refusal_inputs(ctx, key, step, found)? else {
+        return Ok(None);
+    };
+    let decisions = refusals::decisions(&ledger.questions_of_ticket(key.as_str())?);
+    let stops = refusals::check(&counts.requests, &verdicts, &comments, &decisions, limit);
+    Ok((!stops.is_empty()).then(|| stops.join(" ")))
+}
+
+/// Counts the refused requests of a round whose end facts held, in `refusals.json`. The write
+/// comes before the end fact, and a second write for the same turn changes nothing. With
+/// `caps.refusals` 0, it counts nothing.
+fn count_refusals(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    key: &TicketKey,
+    step: &Step,
+    found: &docs::ResultDocs,
+    turn: &str,
+    now: &str,
+) -> Result<()> {
+    if ctx.config()?.caps.refusals == 0 {
+        return Ok(());
+    }
+    let Some((counts, verdicts, comments)) = refusal_inputs(ctx, key, step, found)? else {
+        return Ok(());
+    };
+    let decisions = refusals::decisions(&ledger.questions_of_ticket(key.as_str())?);
+    let next = refusals::count_round(&counts, &verdicts, &comments, &decisions, turn, now);
+    if next == counts {
+        return Ok(());
+    }
+    atomic_write(
+        &ctx.paths.ticket_doc(key, refusals::REFUSALS),
+        refusals::render(&next).as_bytes(),
     )
 }
 

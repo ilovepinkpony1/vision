@@ -87,8 +87,8 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
     assert_eq!(ci.on["red"], "fix-ci");
     assert_eq!(ci.start[0].name, "ci.run");
     assert_eq!(adapter.step("ready").unwrap().on["false"], "comments");
-    // A commit of the Shepherd goes through CI again before the merge, and each loop goes
-    // through a turn step with a cap.
+    // A commit of the Shepherd goes through CI again before the merge, and each loop of a fix
+    // goes through a turn step with a cap.
     assert_eq!(
         adapter.step("comments").unwrap().next.as_deref(),
         Some("ci-review")
@@ -97,9 +97,17 @@ fn the_demo_adapter_loads_with_the_full_path_of_a_ticket() {
     assert_eq!(ci_review.start[0].name, "ci.run");
     assert_eq!(ci_review.on["green"], "ready-to-merge");
     assert_eq!(ci_review.on["red"], "fix-ci");
-    assert_eq!(
-        adapter.step("comments").unwrap().cap.as_deref(),
-        Some("comments")
+    // The rounds of comments have no cap: a request that the Shepherd refuses in
+    // caps.refusals rounds goes to the person (section 11.3), so the step reads the counts.
+    let comments = adapter.step("comments").unwrap();
+    assert_eq!(comments.cap, None);
+    let vision::adapter::StepKind::Turn(turn) = &comments.kind else {
+        panic!("comments is a turn step")
+    };
+    assert!(
+        turn.reads.iter().any(|r| r == "refusals.json"),
+        "{:?}",
+        turn.reads
     );
     assert_eq!(
         adapter.step("fix-ci").unwrap().cap.as_deref(),

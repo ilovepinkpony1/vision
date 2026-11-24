@@ -221,6 +221,17 @@ impl Ledger {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The rows of the cards of one ticket, oldest first.
+    pub fn questions_of_ticket(&self, ticket: &str) -> Result<Vec<QuestionRow>> {
+        let sql = format!(
+            "SELECT {QUESTION_COLUMNS} FROM questions WHERE ticket = ?1
+             ORDER BY created, length(id), id"
+        );
+        let mut stmt = self.conn().prepare(&sql)?;
+        let rows = stmt.query_map([ticket], question_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The rows in one of these states, oldest first.
     pub fn questions_in_states(&self, states: &[&str]) -> Result<Vec<QuestionRow>> {
         if states.is_empty() {

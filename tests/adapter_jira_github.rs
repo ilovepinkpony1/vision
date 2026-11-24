@@ -198,15 +198,25 @@ fn the_path_goes_through_ci_again_after_the_comments_and_each_loop_has_a_cap() {
         ("fix-ci-review", "ci_fix"),
         ("qa", "qa_fix"),
         ("fix-qa", "qa_fix"),
-        ("comments", "comments"),
     ] {
         assert_eq!(step(id).cap.as_deref(), Some(cap), "{id}");
     }
-    // Each cycle of the step graph passes a turn step with a cap.
+    // The comments step has no cap: the count of refused requests in refusals.json asks the
+    // person instead (design section 11.3).
+    assert_eq!(step("comments").cap, None);
+    let StepKind::Turn(turn) = &step("comments").kind else {
+        panic!("comments is a turn step");
+    };
+    assert!(
+        turn.reads.iter().any(|r| r == "refusals.json"),
+        "{:?}",
+        turn.reads
+    );
+    // Each cycle of the step graph passes a turn step with a cap, or the comments step.
     let capped: BTreeSet<&str> = adapter
         .steps
         .iter()
-        .filter(|s| matches!(s.kind, StepKind::Turn(_)) && s.cap.is_some())
+        .filter(|s| matches!(s.kind, StepKind::Turn(_)) && (s.cap.is_some() || s.id == "comments"))
         .map(|s| s.id.as_str())
         .collect();
     for start in &adapter.steps {

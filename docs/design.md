@@ -200,6 +200,7 @@ comments = 3
 judge_minutes = 15
 merge_look_minutes = 10        # minutes between two looks for a merge outside Vision (section 11.3)
 jobs_at_once = 2              # the most jobs that run in the background at one time
+refusals = 3                  # the refusal of one requested change of a review at which the person decides with a card (section 11.3). 0 turns it off
 
 [judge]
 answer_when_sure = true       # the Judge also answers alone from its own inference
@@ -595,7 +596,7 @@ An ask step (section 11.2) creates the cards of its documents as one batch. The 
 
 The runner applies these rules to the output of the Judge. A rule in code always wins over the output.
 
-1. If a topic of the card or of the answer is in `judge.always_ask`, the outcome is `ask`.
+1. If a topic of the card or of the answer is in `judge.always_ask`, the outcome is `ask`. A card with the topic `refused-review` also gets `ask`, whatever `judge.always_ask` holds (section 11.3).
 2. An `answer` with the basis `decision` or `principle` must name at least one source. Each source must exist and be active. If not, the outcome becomes `propose`.
 3. If `sure` is true and `judge.answer_when_sure` is true, an `answer` with the basis `inference` stays an answer. If not, the outcome becomes `propose`.
 4. An `answer` or a `propose` must name a choice or a text. If not, the outcome becomes `ask`.
@@ -1226,11 +1227,19 @@ The proof is a job. It runs the changed tests at the last commit, and they must 
 
 The proof gets the approved plan in `args.plan`. A line `Proof: green` in the plan declares the whole proof green, for a change with no new behavior. The changed tests then only have to pass at the last commit. A line `Proof: green <path>` declares one test file green, and the proof does not run that file on the base commit.
 
+Refused requests of a review. A turn step that reads `refusals.json` and ends with `verdicts.json` counts the requested changes that it refuses. The step `comments` of the bundled adapters is such a step, and it has no `cap`. A refusal is a row with the verdict `incorrect`, `out-of-scope`, or `low-priority`. After the end facts of a round hold, Vision adds one to the count of each refused request in `refusals.json` of the ticket folder. The file also keeps the text of the request and the reason of each refusal. A fix, with the verdict `valid` or `already-done`, removes the count.
+
+A comment of a new round is the same request as a counted one in two cases. It is in the same thread, or it is a new inline comment of the same reviewer within 3 lines of the same file. A review comment or a conversation comment is the same request only by its id. Another reviewer, another file, or a line further away starts its own count. The file remembers the turns that it counted, so a second pass over one turn counts nothing new.
+
+The refusal that makes a count reach `caps.refusals` (default 3) does not hold. The end fact `refusals` fails, and the resume tells the agent to ask the person one card. The card has the kind `code`, the options "Fix it" and "Keep refusing", and the topics `refused-review` and `comment:<id>`. Its text says what the comment asks, and its context gives each earlier reason. Rule 1 of section 8.3 sends this card to the person, and the round waits for the answer.
+
+The answer goes back to the same session. After "Keep refusing", the refusal holds, and the count of the request starts again from 0. A card that the person marks as needless counts as "Keep refusing". After "Fix it", the round holds only when the agent fixes the request with the verdict `valid`. An answer counts only when it is newer than the last change of the count. With `caps.refusals = 0`, Vision counts nothing and stops nothing.
+
 ### 11.4 The demo adapter
 
 `adapters/demo` needs no network. Its tracker is a JSON file. Its forge is a bare git repo with a JSON file of pull requests. Its CI is a script of the project. The integration tests use it with the fake `claude`. A person can use it with the real one to try Vision on a toy repo.
 
-Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `open-pr`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. The commits of `build` and `review` stay in the clone. Then the act step `open-pr` runs `git.push`, and `pr.open` with the text of `pr.md`. So nothing leaves the machine before the review. `fix-ci` and `comments` push their own commits with `after`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. Each loop goes through a turn step with a cap, and each wait step has `wait` and `limit`.
+Its path is the reference path: `refine`, `plan`, `plan-ready`, `build`, `review`, `open-pr`, `ci`, `ready`, `comments`, `ci-review`, `ready-to-merge`, and `done`. The commits of `build` and `review` stay in the clone. Then the act step `open-pr` runs `git.push`, and `pr.open` with the text of `pr.md`. So nothing leaves the machine before the review. `fix-ci` and `comments` push their own commits with `after`. A red CI run goes to `fix-ci` and back to `ci`. After the step `comments`, a commit of the Shepherd goes through CI again in the wait step `ci-review` before the merge. At a commit where CI already ran, `ci.run` is the operation of that commit, so it does not run again. The loop of `fix-ci` goes through a turn step with a cap. The step `comments` has no cap, because the count of refused requests asks the person instead. Each wait step has `wait` and `limit`.
 
 The three demo adapters have the same rules of a continue. They suggest `done` for a merged pull request or the status Done. A change request gives `comments`, and a push by hand gives `ci-review`, both with `back = true`. An open and ready pull request gives `comments`, and an open draft gives `ci`.
 
