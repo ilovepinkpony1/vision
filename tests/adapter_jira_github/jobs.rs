@@ -752,6 +752,7 @@ fn comments_each_kind_of_comment_that_waits_is_one_row() {
             review_with(45, "old", "APPROVED", ""),
             review_with(46, "person", "COMMENTED", "My own note."),
             review_with(47, "lead", "COMMENTED", "Answered by hand."),
+            review_with(48, "lead", "COMMENTED", "Answered with the skill."),
         ];
         s.issue_comments = vec![
             issue_comment(60, "lead", "Please add a note to the README.\nThanks."),
@@ -766,6 +767,16 @@ fn comments_each_kind_of_comment_that_waits_is_one_row() {
                 "> Why a new file?\n\nIt keeps the export apart.\n\n<!-- vision-reply review 42 -->",
             ),
             issue_comment(63, "person", "> Answered by hand.\n\nYes."),
+            // The form of the skill resolve-review, with no mark of Vision, answers too.
+            issue_comment(
+                64,
+                "person",
+                "(Claude) Re-review #48: Fixed in abc1234: the export keeps CSV.",
+            ),
+            issue_comment(65, "lead", "Can the export also write JSON?"),
+            issue_comment(66, "person", "(Claude) Re #65: Not in this ticket."),
+            // Another login cannot answer a comment for the person in this form.
+            issue_comment(67, "other", "(Claude) Re #60: Done."),
         ];
     }
     let result = comments_job(&t, json!({}));
@@ -777,7 +788,8 @@ fn comments_each_kind_of_comment_that_waits_is_one_row() {
             ("inline", 30),
             ("review", 40),
             ("conversation", 60),
-            ("conversation", 61)
+            ("conversation", 61),
+            ("conversation", 67)
         ])
     );
     let review = &rows[2];
@@ -795,7 +807,7 @@ fn comments_each_kind_of_comment_that_waits_is_one_row() {
     );
     assert!(result
         .detail()
-        .contains("5 comment(s) of #7 wait for a reply (2 inline, 1 review, 2 conversation)"));
+        .contains("6 comment(s) of #7 wait for a reply (2 inline, 1 review, 3 conversation)"));
 }
 
 #[test]

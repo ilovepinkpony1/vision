@@ -965,7 +965,8 @@ fn verdict_items(text: Option<&Value>, why: &str) -> Res<Vec<Value>> {
 
 /// Posts the reply of each row of verdicts.json in the right place: an inline comment gets a
 /// reply in its thread, and a review or a conversation comment gets a new conversation comment
-/// that quotes its first line and ends with its mark. The `kind` of a row (copied from
+/// in the form of the skill resolve-review, `(Claude) Re-review #<id>: <reply>` or
+/// `(Claude) Re #<id>: <reply>`, that ends with its mark. The `kind` of a row (copied from
 /// comments.json) names the place; with no kind, the id must be of one kind only.
 fn review_reply(
     config: &Config,
@@ -1073,13 +1074,7 @@ fn review_reply(
                 items.push(json!({"user": {"login": own[0]}, "body": reply}));
             }
         } else {
-            let first = if place == "review" {
-                forge::review_first_line(&reviews[&id])
-            } else {
-                forge::first_line(&text_of(talk[&id].get("body")), 200)
-            };
-            let quote = format!("> {}", forge::no_mentions(&first));
-            let body = json!({ "body": forge::reply_body(place, id, &quote, &reply) });
+            let body = json!({ "body": forge::reply_body(place, id, &reply) });
             gh.client.call(
                 "POST",
                 &gh.path(&format!("issues/{number}/comments")),

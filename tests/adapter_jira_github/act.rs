@@ -1060,7 +1060,7 @@ fn kinds_test() -> (AdapterTest, GitHubWorld, String) {
     w.add_reply_route(&t.server);
     let verdicts = json!([
         {"comment_id": 10, "kind": "inline", "verdict": "valid", "reply": "Renamed."},
-        {"comment_id": 40, "kind": "review", "verdict": "valid", "reply": "Renamed, and CSV stays."},
+        {"comment_id": 40, "kind": "review", "verdict": "valid", "reply": "(Claude) Renamed, and CSV stays."},
         {"comment_id": 60, "verdict": "out-of-scope", "reply": "That belongs to a later ticket."},
     ])
     .to_string();
@@ -1098,14 +1098,16 @@ fn reply_kinds_each_kind_gets_its_reply_once() {
         ]
     );
     assert_eq!(posts[0].body, json!({"body": "Renamed."}));
+    // The form of the skill resolve-review: the tag, the comment, then the verdict, with no
+    // quote before it, so that a bot that reviews again reads the verdict.
     assert_eq!(
         posts[1].body["body"],
-        "> Please rename the export.\n\nRenamed, and CSV stays.\n\n<!-- vision-reply review 40 -->"
+        "(Claude) Re-review #40: Renamed, and CSV stays.\n\n<!-- vision-reply review 40 -->"
     );
     assert_eq!(
         posts[2].body["body"],
-        "> Add a note  vision-reply review 40  to the README.\n\nThat belongs to a later ticket.\n\n<!-- vision-reply conversation 60 -->",
-        "a quote never carries the mark of a different comment"
+        "Re #60: That belongs to a later ticket.\n\n<!-- vision-reply conversation 60 -->",
+        "a reply with no tag names its comment too, and the mark in the comment of another login changes nothing"
     );
     let again = call();
     assert_eq!(again.state(), "confirmed", "{again:?}");
@@ -1123,7 +1125,7 @@ fn reply_kinds_each_kind_gets_its_reply_once() {
 }
 
 #[test]
-fn reply_kinds_a_quote_calls_nobody() {
+fn reply_kinds_a_reply_quotes_nothing_so_it_calls_nobody() {
     let (t, w, _v) = kinds_test();
     w.lock().issue_comments = vec![issue_comment(
         61,
@@ -1140,13 +1142,13 @@ fn reply_kinds_a_quote_calls_nobody() {
         .run();
     assert_eq!(result.state(), "confirmed", "{result:?}");
     let body = kind_posts(&t)[0].body["body"].as_str().unwrap().to_string();
-    assert!(
-        body.starts_with("> @\u{200b}lead and @\u{200b}acme/team: is a@\u{200b}b.c right?\n\nYes."),
-        "{body}"
+    assert_eq!(
+        body, "Re #61: Yes.\n\n<!-- vision-reply conversation 61 -->",
+        "the reply copies no text of the comment"
     );
     assert!(
-        !body.contains("@lead"),
-        "a mention in a quote would notify the person a second time"
+        !body.contains('@'),
+        "a mention copied from the comment would notify the person a second time"
     );
 }
 

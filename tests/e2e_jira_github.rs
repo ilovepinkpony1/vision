@@ -1000,8 +1000,8 @@ fn a_ticket_goes_from_jira_to_a_merged_pull_request_on_github() {
     assert_eq!(
         talk,
         [
-            "> Please follow the names of the other tests.\n\nDone: the test file is test_calc_subtract.sh now.\n\n<!-- vision-reply review 601 -->",
-            "> Can the calculator also divide?\n\nDivision belongs to a different ticket.\n\n<!-- vision-reply conversation 701 -->"
+            "Re-review #601: Done: the test file is test_calc_subtract.sh now.\n\n<!-- vision-reply review 601 -->",
+            "Re #701: Division belongs to a different ticket.\n\n<!-- vision-reply conversation 701 -->"
         ]
     );
     assert_eq!(

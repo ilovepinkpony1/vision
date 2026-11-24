@@ -563,20 +563,6 @@ pub fn first_line(text: &str, limit: usize) -> String {
     String::new()
 }
 
-/// A text whose mentions call nobody: a zero-width space after each `@` that starts a name. A
-/// quote of a comment must not notify its people a second time.
-pub fn no_mentions(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    for (i, &c) in chars.iter().enumerate() {
-        out.push(c);
-        if c == '@' && chars.get(i + 1).is_some_and(|n| n.is_ascii_alphanumeric()) {
-            out.push('\u{200b}');
-        }
-    }
-    out
-}
-
 /// What the conversation comments of `own` (lowercase logins) answer: the (kind, id) of the
 /// mark of their last line, and the quoted first lines.
 pub fn reply_marks(
@@ -600,6 +586,11 @@ pub fn reply_marks(
                 marks.insert(mark);
             }
         }
+        // A reply in the form of the skill resolve-review, such as one that the person
+        // posted with the skill by hand, answers its comment too.
+        if let Some(mark) = lines.first().and_then(|first| skill_mark_of(first)) {
+            marks.insert(mark);
+        }
         quotes.extend(
             lines
                 .iter()
@@ -610,13 +601,67 @@ pub fn reply_marks(
     (marks, quotes)
 }
 
-/// A reply to a review or a conversation comment: a new conversation comment that quotes the
-/// first line of the comment, the reply, and the mark of the comment.
-pub fn reply_body(kind: &str, id: i64, original: &str, reply: &str) -> String {
-    format!(
-        "{original}\n\n{}\n\n<!-- vision-reply {kind} {id} -->",
-        reply.trim()
-    )
+/// A reply to a review or a conversation comment: a new conversation comment in the form of
+/// the skill resolve-review. It starts with the tag of the reply, such as `(Claude)`, then
+/// `Re-review #<id>:` for a review or `Re #<id>:` for a conversation comment, then the reply,
+/// and it ends with the mark of the comment. A bot that reviews again reads the verdict at the
+/// start, so nothing, such as a quote of the comment, comes before it.
+pub fn reply_body(kind: &str, id: i64, reply: &str) -> String {
+    let marker = skill_marker(kind, id);
+    let (tag, rest) = split_tag(reply.trim());
+    // A reply that already names the comment keeps its words once.
+    let rest = rest.strip_prefix(marker.as_str()).unwrap_or(rest).trim();
+    let head = match tag {
+        Some(tag) => format!("{tag} {marker}"),
+        None => marker,
+    };
+    format!("{head} {rest}\n\n<!-- vision-reply {kind} {id} -->")
+}
+
+/// `Re-review #<id>:` for a review, `Re #<id>:` for a conversation comment.
+fn skill_marker(kind: &str, id: i64) -> String {
+    if kind == "review" {
+        format!("Re-review #{id}:")
+    } else {
+        format!("Re #{id}:")
+    }
+}
+
+/// The tag at the start of a reply, such as `(Claude)`, and the rest of the reply. A tag is a
+/// short name of letters, digits, spaces, `-`, or `_` in parentheses.
+fn split_tag(reply: &str) -> (Option<&str>, &str) {
+    let Some(inside) = reply.strip_prefix('(') else {
+        return (None, reply);
+    };
+    let Some(end) = inside.find(')') else {
+        return (None, reply);
+    };
+    let name = &inside[..end];
+    let plain = name
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'));
+    if name.trim().is_empty() || name.chars().count() > 30 || !plain {
+        return (None, reply);
+    }
+    let tag_end = end + 2;
+    (Some(&reply[..tag_end]), reply[tag_end..].trim_start())
+}
+
+/// The comment that a reply in the form of the skill resolve-review answers, from its first
+/// line: `Re-review #<id>:` gives a review, and `Re #<id>:` a conversation comment, after an
+/// optional tag such as `(Claude)`.
+fn skill_mark_of(line: &str) -> Option<(String, i64)> {
+    let (_, rest) = split_tag(line.trim());
+    let (kind, rest) = if let Some(rest) = rest.strip_prefix("Re-review #") {
+        ("review", rest)
+    } else {
+        ("conversation", rest.strip_prefix("Re #")?)
+    };
+    let (id, _) = rest.split_once(':')?;
+    if !(1..=20).contains(&id.len()) || !id.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((kind.to_string(), id.parse().ok()?))
 }
 
 /// The last review state of each author (APPROVED, CHANGES_REQUESTED, or DISMISSED), by the
@@ -671,15 +716,6 @@ fn review_commits(
         }
     }
     (of_state, each)
-}
-
-pub fn review_first_line(review: &Value) -> String {
-    let line = first_line(&body_of(review), 200);
-    if line.is_empty() {
-        format!("{} asked for changes.", user_of(review))
-    } else {
-        line
-    }
 }
 
 /// The body of a comment or a review, or "".
@@ -745,7 +781,8 @@ impl Ignore {
 /// - `conversation`: a conversation comment of a login that is not in `own`.
 ///
 /// A review or a conversation comment waits until a conversation comment of `own` answers it:
-/// one with its mark, or one that quotes its first line. A comment that `ignore` names never
+/// one with its mark, one that starts with `Re-review #<id>:` or `Re #<id>:` (after a tag
+/// such as `(Claude)`), or an older one that quotes its first line. A comment that `ignore` names never
 /// waits: the rows leave it out, as if nobody wrote it. The text of each row is untrusted.
 ///
 /// Each row has a `mark` ([`comment_mark`]): its kind, its id, and the id of the last comment of
