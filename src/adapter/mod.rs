@@ -71,6 +71,54 @@ pub fn valid_document_name(name: &str) -> bool {
         && name != "turns"
 }
 
+/// One reference to a document of the ticket folder in a text argument: `{doc:NAME}`, or
+/// `{doc?:NAME}` for a document that can be missing. `start..end` is the place of the
+/// reference in the text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocRef<'a> {
+    pub start: usize,
+    pub end: usize,
+    pub name: &'a str,
+    pub optional: bool,
+}
+
+/// The references to documents in `text`, in order. The error names the first reference that
+/// does not close, or that does not name a plain file of the ticket folder.
+pub fn doc_refs(text: &str) -> Result<Vec<DocRef<'_>>, String> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(found) = text[from..].find("{doc") {
+        let start = from + found;
+        let rest = &text[start + 4..];
+        let (open, optional) = if rest.starts_with(':') {
+            ("{doc:", false)
+        } else if rest.starts_with("?:") {
+            ("{doc?:", true)
+        } else {
+            from = start + 4;
+            continue;
+        };
+        let after = start + open.len();
+        let Some(len) = text[after..].find('}') else {
+            return Err(format!("`{text}` opens {open} and never closes it"));
+        };
+        let name = &text[after..after + len];
+        if !valid_document_name(name) {
+            return Err(format!(
+                "`{open}{name}}}` does not name a plain file of the ticket folder"
+            ));
+        }
+        out.push(DocRef {
+            start,
+            end: after + len + 1,
+            name,
+            optional,
+        });
+        from = after + len + 1;
+    }
+    Ok(out)
+}
+
 /// A TOML value as JSON. A date or a time becomes its text.
 pub fn toml_to_json(value: &toml::Value) -> Value {
     match value {
@@ -119,6 +167,32 @@ mod tests {
         ] {
             assert!(!valid_document_name(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_reference_names_a_document_that_must_exist_or_can_be_missing() {
+        let text = "Title: {doc:pr.md}, {doc?:notes.md}, {document} {doc}";
+        let refs = doc_refs(text).unwrap();
+        assert_eq!(
+            refs.iter()
+                .map(|r| (r.name, r.optional, &text[r.start..r.end]))
+                .collect::<Vec<_>>(),
+            [
+                ("pr.md", false, "{doc:pr.md}"),
+                ("notes.md", true, "{doc?:notes.md}")
+            ]
+        );
+        assert!(doc_refs("no reference").unwrap().is_empty());
+        assert!(doc_refs("{doc?:pr.md")
+            .unwrap_err()
+            .contains("opens {doc?: and never closes it"));
+        assert!(doc_refs("{doc:pr.md")
+            .unwrap_err()
+            .contains("opens {doc: and never closes it"));
+        assert_eq!(
+            doc_refs("{doc?:../x}").unwrap_err(),
+            "`{doc?:../x}` does not name a plain file of the ticket folder"
+        );
     }
 
     #[test]

@@ -700,10 +700,16 @@ fn push_commit(
 
 // pr.open ---------------------------------------------------------------------------------------
 
-fn pr_text(text: Option<&Value>) -> Res<(String, String)> {
+/// The title and the body of a new pull request, from `args.text`. With `{doc?:pr.md}`, a ticket
+/// with no pr.md gives an empty text, which is fine only while a pull request is open.
+fn pr_text(text: Option<&Value>, branch: &str) -> Res<(String, String)> {
     let text = match text {
         Some(Value::String(t)) if !t.trim().is_empty() => t.trim().to_string(),
-        _ => return fail("pr.open needs args.text: the text of pr.md, {doc:pr.md}"),
+        _ => {
+            return fail(format!(
+                "no pull request is open for {branch}, and the ticket has no text for a new one: write pr.md in the ticket folder, with the title on the first line, then retry the ticket"
+            ))
+        }
     };
     let lines = splitlines(&text);
     let title = lines[0].trim().trim_start_matches('#').trim().to_string();
@@ -758,7 +764,7 @@ fn pr_open(
     if reconcile {
         return failed(&format!("no pull request is open for {branch}"));
     }
-    let (title, body) = pr_text(args_of(call).get("text"))?;
+    let (title, body) = pr_text(args_of(call).get("text"), &branch)?;
     state.acted = true;
     let request = json!({
         "title": title, "head": branch, "base": config.base_branch()?, "body": body, "draft": true,

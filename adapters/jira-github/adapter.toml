@@ -422,10 +422,10 @@ expects = ["clean", "doc:fix-notes.md"]
 cap = "qa_fix"
 next = "review"               # each fix is reviewed and tested again before the push
 
-[[step]]
-id = "open-pr"
+[[step]]                      # {doc?:pr.md}: a ticket taken from outside has no pr.md, and pr.open
+id = "open-pr"                # needs no text while its pull request is open
 kind = "act"
-run = ["git.push", { verb = "pr.open", args = { text = "{doc:pr.md}" } }]
+run = ["git.push", { verb = "pr.open", args = { text = "{doc?:pr.md}" } }]
 next = "ci"
 
 [[step]]

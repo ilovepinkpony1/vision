@@ -2612,27 +2612,11 @@ fn gate(mut table: Table, at: &str, problems: &mut Problems) -> Option<Gate> {
     fine.then_some(Gate { doc, rule })
 }
 
-/// Tests each `{doc:NAME}` of the strings of a value: it closes, and it names a plain file of
-/// the ticket folder.
+/// Tests each `{doc:NAME}` and `{doc?:NAME}` of the strings of a value: it closes, and it names
+/// a plain file of the ticket folder.
 fn check_doc_refs(value: &Value) -> Result<(), String> {
     match value {
-        Value::String(text) => {
-            let mut rest = text.as_str();
-            while let Some(start) = rest.find("{doc:") {
-                let after = &rest[start + 5..];
-                let Some(end) = after.find('}') else {
-                    return Err(format!("`{text}` opens {{doc: and never closes it"));
-                };
-                let name = &after[..end];
-                if !valid_document_name(name) {
-                    return Err(format!(
-                        "`{{doc:{name}}}` does not name a plain file of the ticket folder"
-                    ));
-                }
-                rest = &after[end + 1..];
-            }
-            Ok(())
-        }
+        Value::String(text) => super::doc_refs(text).map(|_| ()),
         Value::Array(items) => items.iter().try_for_each(check_doc_refs),
         Value::Object(map) => map.values().try_for_each(check_doc_refs),
         _ => Ok(()),

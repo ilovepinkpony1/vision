@@ -664,6 +664,28 @@ fn pr_an_existing_pull_request_is_returned() {
 }
 
 #[test]
+fn pr_an_empty_text_confirms_an_open_pull_request_and_opens_no_new_one() {
+    // A ticket taken from outside Vision has no pr.md, so `{doc?:pr.md}` gives an empty text.
+    let (t, w) = pr_test();
+    let empty = json!({"text": ""});
+    let result = t.act("pr.open").args(empty.clone()).run();
+    assert_eq!(result.state(), "failed", "{result:?}");
+    assert!(
+        has(&result, &format!("no pull request is open for {BRANCH}"))
+            && has(&result, "write pr.md in the ticket folder"),
+        "{result:?}"
+    );
+    w.lock().pr = Some(pull(true));
+    let result = t.act("pr.open").args(empty).run();
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert_eq!(result.json["set"]["pr"], 7);
+    assert!(t
+        .server
+        .calls(Some("POST"), Some(&format!("{REPO_PATH}/pulls")))
+        .is_empty());
+}
+
+#[test]
 fn pr_the_reconcile_only_reads() {
     let (t, w) = pr_test();
     let args = json!({"text": PR_TEXT});

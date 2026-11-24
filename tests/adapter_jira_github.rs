@@ -371,7 +371,7 @@ fn the_steps_name_their_documents_and_their_evidence() {
     };
     let run: Vec<String> = act.run.iter().map(|e| e.label()).collect();
     assert_eq!(run, ["git.push", "pr.open"]);
-    assert_eq!(act.run[1].args["text"], "{doc:pr.md}");
+    assert_eq!(act.run[1].args["text"], "{doc?:pr.md}");
     assert_eq!(open.next.as_deref(), Some("ci"));
     for id in ["ci", "ci-rerun"] {
         assert_eq!(step(id).on["green"], "ready", "{id}");

@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use crate::adapter::valid_document_name;
+use crate::adapter::{doc_refs, valid_document_name};
 use crate::util::ids;
 
 /// The longest document of a result that the pipeline writes.
@@ -517,7 +517,8 @@ pub fn comment_marks(text: &str) -> BTreeSet<String> {
 
 /// Replaces each `{doc:NAME}` in a string argument with the text of the document `NAME` of the
 /// ticket folder. `read` gives the text, or `None` for a missing document. The error names the
-/// document and what to do.
+/// document and what to do. A `{doc?:NAME}` of a missing document gives an empty text, and the
+/// verb decides what that means: `pr.open` needs no text for a pull request that is open.
 pub fn expand_args(
     args: &Map<String, Value>,
     read: &dyn Fn(&str) -> Option<String>,
@@ -529,31 +530,28 @@ pub fn expand_args(
 
 fn expand(value: &mut Value, read: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
     match value {
-        Value::String(text) if text.contains("{doc:") => {
-            let mut out = String::new();
-            let mut rest = text.as_str();
-            while let Some(start) = rest.find("{doc:") {
-                out.push_str(&rest[..start]);
-                let after = &rest[start + 5..];
-                let Some(end) = after.find('}') else {
-                    return Err(format!("`{text}` opens {{doc: and never closes it"));
-                };
-                let name = &after[..end];
-                if !valid_document_name(name) {
-                    return Err(format!(
-                        "`{{doc:{name}}}` does not name a plain file of the ticket folder"
-                    ));
+        Value::String(text) if text.contains("{doc") => {
+            let expanded = {
+                let mut out = String::new();
+                let mut at = 0;
+                for found in doc_refs(text)? {
+                    out.push_str(&text[at..found.start]);
+                    match read(found.name) {
+                        Some(doc) => out.push_str(&doc),
+                        None if found.optional => {}
+                        None => {
+                            return Err(format!(
+                                "an argument names the document {}, which the ticket folder does not have",
+                                found.name
+                            ))
+                        }
+                    }
+                    at = found.end;
                 }
-                let Some(doc) = read(name) else {
-                    return Err(format!(
-                        "an argument names the document {name}, which the ticket folder does not have"
-                    ));
-                };
-                out.push_str(&doc);
-                rest = &after[end + 1..];
-            }
-            out.push_str(rest);
-            *text = out;
+                out.push_str(&text[at..]);
+                out
+            };
+            *text = expanded;
         }
         Value::Array(items) => {
             for item in items {
@@ -762,5 +760,19 @@ mod tests {
         assert!(expand_args(open.as_object().unwrap(), &read)
             .unwrap_err()
             .contains("never closes"));
+    }
+
+    #[test]
+    fn an_optional_document_that_is_missing_gives_an_empty_text() {
+        let read = |name: &str| (name == "pr.md").then(|| "Add subtract".to_string());
+        let args = json!({"text": "{doc?:pr.md}", "notes": "[{doc?:notes.md}]"});
+        assert_eq!(
+            expand_args(args.as_object().unwrap(), &read).unwrap(),
+            json!({"text": "Add subtract", "notes": "[]"})
+        );
+        let bad = json!({"text": "{doc?:../x}"});
+        assert!(expand_args(bad.as_object().unwrap(), &read)
+            .unwrap_err()
+            .contains("does not name a plain file"));
     }
 }

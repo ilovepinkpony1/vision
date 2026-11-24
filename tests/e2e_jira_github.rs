@@ -2056,6 +2056,38 @@ fn a_ticket_in_progress_outside_vision_is_taken_at_its_step() {
     );
 }
 
+/// A ticket that the person started outside Vision never ran the step build, so its folder
+/// has no pr.md. A later loop through open-pr, such as after a fix of a QA finding, still pushes,
+/// and pr.open confirms the open pull request without a text.
+#[test]
+fn a_ticket_taken_from_outside_passes_open_pr_without_pr_md() {
+    let p = Project::new();
+    let (_, pushed, number) = started_outside_vision(&p);
+    p.run(&["take", KEY, "--step", "open-pr"]).expect_code(0);
+    assert!(p.doc("pr.md").is_none(), "the take writes no pr.md");
+
+    p.tick_to("ci");
+    let open = p
+        .ledger()
+        .operations_of(KEY, Some("pr.open"))
+        .unwrap()
+        .into_iter()
+        .last()
+        .expect("the operation pr.open");
+    assert_eq!(
+        open.external_id.as_deref(),
+        Some(number.to_string().as_str())
+    );
+    assert_eq!(p.row().unwrap().pr, Some(number));
+    assert_eq!(p.head(), pushed);
+    assert_eq!(
+        p.writes().get("POST /repos/acme/widgets/pulls"),
+        None,
+        "Vision opened no second pull request: {:?}",
+        p.writes()
+    );
+}
+
 #[test]
 fn waiting_comments_suggest_comments_and_an_observe_that_fails_suggests_nothing() {
     let p = Project::new();

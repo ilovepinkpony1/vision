@@ -997,6 +997,8 @@ from = "09:00"                # a wait step: the visit starts at the first such 
 
 A text argument of an entry can hold `{doc:NAME}`. The runner puts the text of that document of the ticket folder in its place. If the document does not exist, the ticket gets the flag `needs-you`, and the verb does not run.
 
+A text argument can also hold `{doc?:NAME}`, for a document that can be missing. A missing document then gives an empty text and no flag, and the verb decides what an empty text means. The adapter `jira-github` gives `pr.open` the text `{doc?:pr.md}`. A ticket that a person started outside Vision has no `pr.md`, because the step `build` never ran. A loop through `open-pr`, such as after a fix of a QA finding, still pushes the branch. Then `pr.open` confirms the open pull request, which needs no text. With no open pull request, `pr.open` refuses an empty text and asks for `pr.md`.
+
 An entry of `expects` can also be a table: `{ job = "<name>", args = {...} }`. Its arguments follow the same `{doc:NAME}` rule, with one difference. A missing document gives an empty text and no flag, and the job decides what an empty text means.
 
 A turn step with the key `findings` can have `on` in the place of `next`. This `on` has exactly the keys `findings` and `none`. The loader refuses `on` without `findings`, `on` together with `next`, and a target that is not a step.
