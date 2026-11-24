@@ -1061,6 +1061,59 @@ fn ci_log_no_run_and_a_storage_that_is_not_https() {
         .contains("not https, so it was not read"));
 }
 
+#[test]
+fn ci_log_reads_the_jobs_of_a_big_run_in_small_pages() {
+    // GitHub builds each job of a run with its steps. For a run of 81 jobs with 17 steps each,
+    // a page of 60 or more jobs took over 10 s, and GitHub answered HTTP 502 each time.
+    let (t, _w) = ci_log_test();
+    let jobs: Vec<Value> = (1..=81)
+        .map(|n| {
+            let conclusion = if n == 75 { "failure" } else { "success" };
+            json!({"id": 1000 + n, "name": format!("rspec {n}"), "conclusion": conclusion,
+                   "steps": [{"name": "Run tests", "conclusion": conclusion}]})
+        })
+        .collect();
+    t.server.route(
+        "GET",
+        &format!("{REPO_PATH}/actions/runs/41/jobs"),
+        move |record| {
+            let per: usize = record
+                .query
+                .get("per_page")
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(30);
+            if per > 50 {
+                return Reply::json(502, json!({"message": "Server Error"}));
+            }
+            let page: usize = record
+                .query
+                .get("page")
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(1);
+            let start = (page.saturating_sub(1) * per).min(jobs.len());
+            let end = (page * per).min(jobs.len());
+            Reply::json(
+                200,
+                json!({"total_count": jobs.len(), "jobs": jobs[start..end].to_vec()}),
+            )
+        },
+    );
+    t.server.json_route(
+        "GET",
+        &format!("{REPO_PATH}/actions/jobs/1075/logs"),
+        json!({}),
+        404,
+    );
+    let result = t
+        .job("ci-log")
+        .field("head", json!(HEAD))
+        .secrets(all_secrets())
+        .run();
+    assert_eq!(result.code, 0, "{result:?}");
+    let content = result.json["documents"][0]["content"].as_str().unwrap();
+    assert!(content.contains("Failed jobs: rspec 75"), "{content}");
+}
+
 // app-start -------------------------------------------------------------------------------------
 
 /// The app of the test: an HTTP server on the port of `VISION_TEST_APP_PORT` that prints one

@@ -1273,6 +1273,14 @@ fn ci_log(config: &Config, call: &Map<String, Value>) -> Res<Value> {
     )
 }
 
+/// The jobs of a run on one page. GitHub builds each job with its steps, and it answers HTTP 502
+/// when a page takes about 10 s. For a run of 81 jobs with 17 steps each, every page of 60 or
+/// more jobs got 502, and a page of 30 jobs took 6 s.
+const JOBS_PER_PAGE: usize = 20;
+
+/// The pages of jobs that ci-log reads: up to 500 jobs.
+const JOBS_MAX_PAGES: usize = 25;
+
 /// The text of ci-log.txt and the detail: the end of the log of each failed job of a run.
 pub fn ci_log_text(
     gh: &GitHub,
@@ -1306,8 +1314,8 @@ pub fn ci_log_text(
             &gh.path(&format!("actions/runs/{id}/jobs")),
             &format!("list the jobs of the run {id}"),
             &[("filter".to_string(), "latest".to_string())],
-            100,
-            5,
+            JOBS_PER_PAGE,
+            JOBS_MAX_PAGES,
         )?
         .into_iter()
         .filter(Value::is_object)
