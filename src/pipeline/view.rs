@@ -51,6 +51,10 @@ pub struct TicketView {
     /// The cost of the turns of the ticket so far, in dollars.
     pub cost_usd: f64,
     pub pr: Option<i64>,
+    /// The web page of the pull request of `pr`, from the last look at it. `None` before the
+    /// first look, and for a forge that gives no page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
     pub branch: Option<String>,
     pub clone: Option<String>,
     pub updated: Option<String>,
@@ -318,10 +322,22 @@ fn row_view(
         marks: marks(ctx, ledger, &ticket)?,
         cost_usd,
         pr: row.pr,
+        pr_url: pr_url(&ticket, row.pr),
         branch: row.branch.clone(),
         clone: row.clone.clone(),
         updated: row.updated.clone(),
     }))
+}
+
+/// The web page of the pull request `pr` from the last look of the ticket: a link of the web,
+/// and only for the same pull request, so that a page of an older one never shows.
+fn pr_url(ticket: &Ticket, pr: Option<i64>) -> Option<String> {
+    let seen = ticket.counts.seen.as_ref()?.pr.as_ref()?;
+    if Some(seen.number) != pr {
+        return None;
+    }
+    let url = seen.url.as_deref()?.trim();
+    (url.starts_with("https://") || url.starts_with("http://")).then(|| url.to_string())
 }
 
 fn need_word(kind: NeedKind) -> &'static str {
@@ -768,6 +784,29 @@ pub fn marks_text(marks: &Marks) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_page_of_a_pull_request_comes_from_the_last_look_at_the_same_one() {
+        let ticket = |url: &str| {
+            let counts = serde_json::json!({"seen": {"at": "2026-11-24T12:00:00Z",
+                "pr": {"number": 7, "url": url}}});
+            Ticket::of(TicketRow {
+                key: "DEMO-12".into(),
+                state: Some("ci".into()),
+                pr: Some(7),
+                counts: Some(counts.to_string()),
+                ..TicketRow::default()
+            })
+            .unwrap()
+        };
+        let page = "https://github.com/demo/calc/pull/7";
+        assert_eq!(pr_url(&ticket(page), Some(7)).as_deref(), Some(page));
+        // Another pull request, no pull request, and a text that is no link of the web.
+        assert_eq!(pr_url(&ticket(page), Some(8)), None);
+        assert_eq!(pr_url(&ticket(page), None), None);
+        assert_eq!(pr_url(&ticket(""), Some(7)), None);
+        assert_eq!(pr_url(&ticket("javascript:alert(1)"), Some(7)), None);
+    }
 
     fn known(outcome: Outcome) -> OpFact {
         OpFact::Known {

@@ -346,12 +346,14 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
         if !ticket.has_clone() && !matches!(step.kind, StepKind::Wait(_)) {
             continue;
         }
-        let result =
-            ensure_visit(ctx, &pass.ledger, &mut ticket, &step).and_then(|()| match &step.kind {
-                StepKind::Turn(_) => test_turn(ctx, &pass.ledger, &mut ticket, &step),
-                StepKind::Wait(_) => observe_wait(ctx, &pass.ledger, &mut ticket, &step, pass.now),
-                _ => Ok(()),
-            });
+        let result = ensure_visit(ctx, &pass.ledger, &mut ticket, &step).and_then(|()| match &step
+            .kind
+        {
+            StepKind::Turn(_) => test_turn(ctx, &pass.ledger, &mut ticket, &step),
+            StepKind::Wait(_) => observe_wait(ctx, &pass.ledger, &mut ticket, &step, pass.now),
+            StepKind::Human(human) => approve_plan_auto(ctx, &pass.ledger, &ticket, &human.action),
+            _ => Ok(()),
+        });
         if let Err(e) = result {
             ctx.log(&format!(
                 "pipeline: the facts of {} could not be tested: {e:#}",
@@ -1135,6 +1137,46 @@ fn principles_of(
         });
     }
     Some((Value::Array(loaded).to_string(), uses))
+}
+
+/// The action of a human step that the tick can do itself, with `plan.auto_approve`.
+pub(crate) const APPROVE_PLAN: &str = "approve-plan";
+
+/// With `plan.auto_approve`, the tick approves the plan of a ticket at the step of
+/// `approve-plan` itself (section 11.3). It writes `approved-plan.md` and the event `human`
+/// of the visit, as `vision approve-plan` does, with the actor `tick` and `auto` = true, so the
+/// step moves on at this tick. A ticket with no `plan.md` waits for the person.
+fn approve_plan_auto(ctx: &Ctx, ledger: &Ledger, ticket: &Ticket, action: &str) -> Result<()> {
+    if action != APPROVE_PLAN || !ctx.config()?.plan.auto_approve {
+        return Ok(());
+    }
+    let visit = ticket.visit();
+    let mark = human_mark(&ticket.key, visit.seq, APPROVE_PLAN);
+    if ledger.event_detail(&mark)?.is_some() {
+        return Ok(());
+    }
+    let Some(bytes) = std::fs::read(ctx.paths.ticket_doc(&ticket.key, "plan.md")).ok() else {
+        return Ok(());
+    };
+    let full = super::view::plan_hash(&bytes);
+    atomic_write(
+        &ctx.paths.ticket_doc(&ticket.key, "approved-plan.md"),
+        &bytes,
+    )?;
+    ledger.add_event(
+        &Event::now("tick", "human")
+            .ticket(ticket.key.as_str())
+            .external_id(&mark)
+            .detail(json!({
+                "action": APPROVE_PLAN, "hash": full, "step": visit.step, "auto": true,
+            })),
+    )?;
+    ctx.log(&format!(
+        "approve-plan: {} {} by plan.auto_approve",
+        ticket.key,
+        &full[..7]
+    ));
+    Ok(())
 }
 
 /// The human actions that the person did for a ticket, from the events `human`.

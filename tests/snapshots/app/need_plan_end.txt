@@ -5,10 +5,10 @@
          │  ## Decisions                                                                            │
    In pro│                                                                                          │
  ╭───────│  - The export keeps the order of the columns.                                            │───────╮
- │ ▸ DEMO│  - The file uses commas and a header row.                                                │   38m │
+ │ ▸   DE│  - The file uses commas and a header row.                                                │   38m │
  │       │                                                                                          │       │
  │       │  ## Proof                                                                                │       │
- │   DEMO│                                                                                          │2h 10m │
+ │    DE│                                                                                          │2h 10m │
  │       │  test_export.py fails on the base and passes after the change.                           │       │
  ╰───────│                                                                                          │───────╯
          │  - Step 1 of the build writes one part of the export.                                    │

@@ -5,14 +5,14 @@
 
    In progress 3    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.09     41m │
- │             ●━◉─○─○─○─○─○─○─○─○─○─○─○  plan · needs you: 1 question                                      │
+ │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.09     41m │
+ │               ●━◉─○─○─○─○─○─○─○─○─○─○─○  plan · needs you: 1 question                                    │
  │                                                                                                          │
- │   DEMO-3    Rename the setting of the weekly email                                         $2.50   5h 0m │
- │             ●━●━●━●━◉─○─○─○─○─○─○─○─○  review · stopped · Enter continues it                             │
+ │     DEMO-3    Rename the setting of the weekly email                                       $2.50   5h 0m │
+ │               ●━●━●━●━◉─○─○─○─○─○─○─○─○  review · stopped · Enter continues it                           │
  │                                                                                                          │
- │   DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
- │             ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                                 │
+ │    DEMO-7    Show the totals under the table of orders                                    $6.12  2h 10m │
+ │               ●━●━●━●━●━●━◉─○─○─○─○─○─○  ci · waits for CI · no result yet                               │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 

@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
- │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
+ │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
+ │               ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
  │       ╭─ DEMO-12 · builder asks at the step build · your 1 answer ───────────────────────────────╮       │
- │   DEMO│                                                                                          │2h 10m │
+ │    DE│                                                                                          │2h 10m │
  │       │  1 ✓ draft    review                                                                     │       │
  ╰───────│                                                                                          │───────╯
          │  This answer goes to builder when you send it. Nothing went to Vision yet.               │

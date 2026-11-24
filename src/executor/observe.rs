@@ -59,6 +59,9 @@ pub struct PrFacts {
     pub approved_by: Vec<String>,
     pub changes_requested: bool,
     pub comments_waiting: u64,
+    /// The web page of the pull request, when the forge gives one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// The CI of a ticket.

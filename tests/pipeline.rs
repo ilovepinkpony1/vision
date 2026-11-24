@@ -216,6 +216,44 @@ fn retry_with_a_new_branch_moves_the_ticket_to_a_branch_of_the_pattern_made_from
 }
 
 #[test]
+fn with_plan_auto_approve_the_tick_approves_the_plan_and_the_build_starts() {
+    let world = World::new();
+    simple_scenarios(&world);
+    world.edit_config(|doc| doc["plan"]["auto_approve"] = toml_edit::value(true));
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_to("build");
+    let plan = world.doc("plan.md").expect("the plan");
+    assert_eq!(
+        world.doc("approved-plan.md").as_deref(),
+        Some(plan.as_str())
+    );
+    let approvals: Vec<Value> = world
+        .ledger()
+        .events_of_ticket(KEY)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "human")
+        .map(|e| {
+            assert_eq!(e.actor, "tick", "{e:?}");
+            serde_json::from_str(e.detail.as_deref().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(approvals.len(), 1, "{approvals:?}");
+    assert_eq!(approvals[0]["action"], "approve-plan");
+    assert_eq!(approvals[0]["auto"], true);
+    assert_eq!(approvals[0]["step"], "plan-ready");
+    assert!(
+        world.log_text().contains("by plan.auto_approve"),
+        "{}",
+        world.log_text()
+    );
+    // Nothing waits for the person.
+    let needs = world.run(&["needs"]);
+    needs.expect_code(0);
+    assert!(!needs.stdout.contains("approve-plan"), "{needs:?}");
+}
+
+#[test]
 fn a_wrong_plan_hash_is_refused_and_an_edited_plan_keeps_the_first_text_of_the_agent() {
     let world = World::new();
     simple_scenarios(&world);

@@ -5,10 +5,10 @@
          ╭─ DEMO-12 · the first write of tracker.describe ──────────────────────────────────────────╮
    In pro│                                                                                          │
  ╭───────│  Replaces the description of the ticket in the tracker.                                  │───────╮
- │ ▸ DEMO│  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │   38m │
+ │ ▸   DE│  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │   38m │
  │       │  The verb tracker.describe is in the mode hold, so nothing was sent.                     │       │
  │       │                                                                                          │       │
- │   DEMO│  The write that waits                                                                    │2h 10m │
+ │    DE│  The write that waits                                                                    │2h 10m │
  │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
  ╰───────│  │ text  Export the report of the month as a CSV file.                                │  │───────╯
          │  │                                                                                    │  │

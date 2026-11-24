@@ -162,12 +162,12 @@ fn text_from_outside_never_controls_the_terminal_and_its_cut_keeps_wide_characte
         );
     }
     let line = text(&buf).lines().nth(5).unwrap().to_string();
-    // The title starts at column 15 and has room for 76 cells. 28 cells of plain text and 23
-    // wide characters take 74 cells; a 24th would need the cells 75 and 76, where … must go,
+    // The title starts at column 17 and has room for 74 cells. 28 cells of plain text and 22
+    // wide characters take 72 cells; a 23rd would need the cells 73 and 74, where … must go,
     // so the cut ends one cell early and keeps each wide character whole.
-    let wide: String = "日本語".repeat(30).chars().take(23).collect();
+    let wide: String = "日本語".repeat(30).chars().take(22).collect();
     let expected = format!("Fix  [31mthe  export of the {wide}…");
-    assert_eq!(vision::app::text::width(&expected), 75);
+    assert_eq!(vision::app::text::width(&expected), 73);
     assert!(line.contains(&format!(" {expected} ")), "{line}");
     let second = text(&buf).lines().nth(6).unwrap().to_string();
     assert!(

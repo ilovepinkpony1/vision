@@ -64,8 +64,11 @@ allow_domains = ["localhost", "127.0.0.1"]
 allow_unix_sockets = []
 
 [gates]
-max_diff_lines = 3000
-sensitive = [".github/", "db/migrate/"]
+max_diff_lines = 3000         # a push or a staging merge with more changed lines waits for your approval. 0 turns the size gate off
+sensitive = [".github/", "db/migrate/"]   # a diff that touches one of these paths, and that the approved plan does not name, waits for your approval. [] turns it off
+
+[plan]
+auto_approve = false          # true: the tick approves each plan itself, and the ticket goes on to the build with no stop
 
 [journal]                     # one entry for each turn in journal/, the source of truth, and an index over it
 mempalace_url = ""            # the MCP server of MemPalace over HTTP, such as "http://127.0.0.1:8765/mcp". "" means: no index, the search reads the files.

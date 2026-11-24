@@ -1521,3 +1521,42 @@ fn while_the_line_of_t_is_open_the_header_and_the_links_of_the_view_are_no_parts
         );
     }
 }
+
+#[test]
+fn a_click_on_the_github_mark_opens_the_pull_request_and_a_ticket_without_one_has_no_mark() {
+    use vision::app::view::home::GITHUB;
+    let mut app = home(SIZE);
+    let buf = draw(&mut app);
+    // DEMO-7 has a pull request with a page: its mark is two cells left of its key.
+    let key = find(&buf, "DEMO-7");
+    let mark = (key.0 - 2, key.1);
+    assert_eq!(buf[mark].symbol(), GITHUB);
+    let selected = app.home.selected.clone();
+    let fx = click(&mut app, 1.5, mark);
+    let links: Vec<&Effect> = fx
+        .iter()
+        .filter(|e| matches!(e, Effect::OpenLink(_)))
+        .collect();
+    assert_eq!(links, [&Effect::OpenLink(PR_URL.into())], "{fx:?}");
+    assert_eq!(
+        app.home.selected, selected,
+        "the mark does not select the row"
+    );
+    // The cell after the mark opens it too, and the key selects the row as before.
+    assert_eq!(
+        app.hits.click_at(mark.0 + 1, mark.1),
+        Some(&Act::Link(PR_URL.into()))
+    );
+    assert_eq!(
+        app.hits.click_at(key.0, key.1),
+        Some(&Act::Ticket("DEMO-7".into()))
+    );
+    // DEMO-12 has no pull request: no mark, the same column of the key, and the row there.
+    let other = find(&buf, "DEMO-12");
+    assert_eq!(other.0, key.0);
+    assert_eq!(buf[(other.0 - 2, other.1)].symbol(), " ");
+    assert_eq!(
+        app.hits.click_at(other.0 - 2, other.1),
+        Some(&Act::Ticket("DEMO-12".into()))
+    );
+}

@@ -46,6 +46,8 @@ pub struct Config {
     pub curator: Curator,
     pub sandbox: Sandbox,
     pub gates: Gates,
+    /// How a plan gets its approval (section 11.3).
+    pub plan: PlanValues,
     pub git: Git,
     /// The journal of the turns and its index in MemPalace (section 16).
     pub journal: Journal,
@@ -84,6 +86,7 @@ impl Default for Config {
             curator: Curator::default(),
             sandbox: Sandbox::default(),
             gates: Gates::default(),
+            plan: PlanValues::default(),
             git: Git::default(),
             journal: Journal::default(),
             archive: Archive::default(),
@@ -552,8 +555,21 @@ impl Default for Sandbox {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Gates {
+    /// A diff with more changed lines waits for the approval of the person. 0 turns the size
+    /// gate off.
     pub max_diff_lines: u64,
+    /// A diff that touches one of these paths, and that the approved plan does not name, waits
+    /// for the approval of the person. An empty list turns the sensitive gate off.
     pub sensitive: Vec<String>,
+}
+
+/// How a plan gets its approval (section 11.3).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PlanValues {
+    /// True: at the step of `approve-plan`, the tick approves the plan itself, as `vision
+    /// approve-plan` would, and the ticket goes on with no stop.
+    pub auto_approve: bool,
 }
 
 impl Default for Gates {

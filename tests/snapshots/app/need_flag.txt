@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
  │       ╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮       │
  │       │                                                                                          │       │
- │   DEMO│  A rule stopped DEMO-12 at the step build.                                               │2h 10m │
+ │    DE│  A rule stopped DEMO-12 at the step build.                                               │2h 10m │
  │       │                                                                                          │       │
  ╰───────│  The proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change.            │───────╯
          │                                                                                          │

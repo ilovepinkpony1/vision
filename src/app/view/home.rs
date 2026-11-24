@@ -14,6 +14,11 @@
 //! selection and says how many rows are above and below. The top line of the queue then shows
 //! the status of the first row in view.
 //!
+//! A ticket in progress with a pull request shows the GitHub mark of a Nerd Font left of its
+//! key, and a click on the mark opens the page of the pull request in the browser. A ticket
+//! with no pull request, or with no page from the last look, shows no mark, and its key stays
+//! in the same column.
+//!
 //! A click on a ticket selects it, and a click on the selected ticket opens it as Enter does.
 //! The wheel over the box moves the selection as the arrows do, a click on the mark of the rows
 //! above or below the box selects the next row out of view, and a click on the bar "needs you"
@@ -236,15 +241,19 @@ fn needs_bar(app: &App, c: &mut Canvas, y: i32) {
     c.put(16, y, &cut(&text, room), ink(T.fg));
 }
 
-/// The column of the titles: after the longest key, and at least at the column of the design.
+/// The GitHub mark of the Nerd Fonts (`nf-fa-github`). Its cell opens the pull request.
+pub const GITHUB: &str = "\u{f09b}";
+
+/// The column of the key of a ticket in progress: after the column of the GitHub mark.
+const HELD_KEY: i32 = 7;
+
+/// The column of the titles: after the longest key, and at least at the column of the design,
+/// which leaves room for a key of 7 characters after the GitHub mark.
 fn key_column(held: &[Held], queue: &[&PickRow]) -> i32 {
-    let longest = held
-        .iter()
-        .map(|h| width(&h.view.key))
-        .chain(queue.iter().map(|r| width(&r.key)))
-        .max()
-        .unwrap_or(0) as i32;
-    (5 + longest + 1).clamp(15, 30)
+    let held = held.iter().map(|h| HELD_KEY + width(&h.view.key) as i32);
+    let queue = queue.iter().map(|r| 5 + width(&r.key) as i32);
+    let end = held.chain(queue).max().unwrap_or(0);
+    (end + 1).clamp(17, 30)
 }
 
 /// The rows of the queue box when it shows a message instead of tickets: while it loads, after
@@ -460,10 +469,14 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
         c.put(3, y, "▸", ink(T.accent).bold());
     }
     let key_color = if selected { T.accent } else { T.fg };
+    if let Some(url) = &view.pr_url {
+        c.put(5, y, GITHUB, ink(T.fg));
+        c.click(5, y, 2, 1, Act::Link(url.clone()));
+    }
     c.put(
-        5,
+        HELD_KEY,
         y,
-        &cut(&view.key, (kx - 6) as usize),
+        &cut(&view.key, (kx - HELD_KEY - 1).max(1) as usize),
         ink(key_color).bold(),
     );
     let right = format!(

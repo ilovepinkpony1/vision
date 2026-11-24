@@ -5,10 +5,10 @@
 
    In pro╭─ DEMO-12 · builder asks at the step build · your 1 answer ───────────────────────────────╮
  ╭───────│                                                                                          │───────╮
- │ ▸ DEMO│  1 ✓ draft    review                                                                     │   38m │
+ │ ▸   DE│  1 ✓ draft    review                                                                     │   38m │
  │       │                                                                                          │       │
  │       │  This answer goes to builder when you send it. Nothing went to Vision yet.               │       │
- │   DEMO│                                                                                          │2h 10m │
+ │    DE│                                                                                          │2h 10m │
  │       │▸ 1  Must the export keep the order of the columns?                                       │       │
  ╰───────│     a  Keep the order                                                                    │───────╯
          │     refused: Q-0002 already has an answer                                                │

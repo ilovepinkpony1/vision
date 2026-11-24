@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO╭─ DEMO-12 · a notice · N-1 ───────────────────────────────────────────────────────────────╮   38m │
+ │ ▸   DE╭─ DEMO-12 · a notice · N-1 ───────────────────────────────────────────────────────────────╮   38m │
  │       │                                                                                          │       │
  │       │  The gate qa of the step qa passed, so the ticket went on. Its report qa.md has 2        │       │
- │   DEMO│  issues that do not block:                                                               │2h 10m │
+ │    DE│  issues that do not block:                                                               │2h 10m │
  │       │                                                                                          │       │
  ╰───────│  ISSUE-001  low  The export button has a typo                                            │───────╯
          │  ISSUE-002  low  The hover color of the export button differs from the color of each     │

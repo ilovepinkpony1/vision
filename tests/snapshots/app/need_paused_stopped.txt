@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
- │             ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                     │
+ │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
+ │               ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
  │                                                                                                          │
- │   DEMO╭─ DEMO-12 · you took over its session ────────────────────────────────────────────────────╮2h 10m │
+ │    DE╭─ DEMO-12 · you took over its session ────────────────────────────────────────────────────╮2h 10m │
  │       │                                                                                          │       │
  ╰───────│  You took over the session of DEMO-12.                                                   │───────╯
          │                                                                                          │

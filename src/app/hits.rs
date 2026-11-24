@@ -67,6 +67,9 @@ pub enum Act {
     Step(String),
     /// A line of the activity of the live view: the events of its turn.
     Turn(String),
+    /// A link of the web, such as the page of a pull request: the browser of the system opens
+    /// it.
+    Link(String),
 }
 
 impl Act {

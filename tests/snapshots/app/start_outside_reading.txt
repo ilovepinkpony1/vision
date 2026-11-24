@@ -3,10 +3,10 @@
 
    In progress 2    To take 3    Ready to merge 0                                  from the tracker · 3 open
  ╭─ To Do · 2 ──────────────────────────────────────────────────────────────────────────────────────────────╮
- │   DEMO-15   Keep the filter of the list when the page loads again                                        │
- │   DEMO-9    Fix the date format in the weekly email                  it already has an open pull request │
+ │   DEMO-15     Keep the filter of the list when the page loads again                                      │
+ │   DEMO-9      Fix the date format in the weekly email                it already has an open pull request │
  ├─ In Review · 1 ──────────────────────────────────────────────────────────────────────────────────────────┤
- │ ▸ DEMO-21   Export the report as a CSV file                                                              │
+ │ ▸ DEMO-21     Export the report as a CSV file                                                            │
  ╰───────────╭─ Start DEMO-21 ──────────────────────────────────────────────────────────────────╮───────────╯
              │                                                                                  │
              │  Export the report as a CSV file                                                 │

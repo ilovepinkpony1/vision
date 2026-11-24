@@ -78,6 +78,7 @@ pub fn view(key: &str, title: &str, step: &str, now: &str) -> TicketView {
         marks: Marks::default(),
         cost_usd: 0.0,
         pr: None,
+        pr_url: None,
         branch: Some(format!("vision/{key}")),
         clone: Some("~/clones/demo-1".into()),
         updated: None,
@@ -325,6 +326,15 @@ pub fn local(tickets: Vec<Held>, needs: Vec<Need>) -> Local {
 
 /// The two tickets in progress of the samples.
 pub fn two_tickets() -> Vec<Held> {
+    let mut ci = waiting(
+        "DEMO-7",
+        "Show the totals under the table of orders",
+        "ci",
+        "waits: the watched value is none",
+    );
+    // DEMO-7 has a pull request with a page, so Home shows its GitHub mark. DEMO-12 has none.
+    ci.view.pr = Some(7);
+    ci.view.pr_url = Some(PR_URL.into());
     vec![
         working(
             "DEMO-12",
@@ -333,14 +343,12 @@ pub fn two_tickets() -> Vec<Held> {
             "builder",
             6,
         ),
-        waiting(
-            "DEMO-7",
-            "Show the totals under the table of orders",
-            "ci",
-            "waits: the watched value is none",
-        ),
+        ci,
     ]
 }
+
+/// The page of the pull request of DEMO-7.
+pub const PR_URL: &str = "https://github.com/demo/calc/pull/7";
 
 pub fn queue() -> Vec<PickRow> {
     vec![

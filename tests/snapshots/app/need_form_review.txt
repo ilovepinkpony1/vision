@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO╭─ DEMO-12 · builder asks at the step build · your 3 answers ──────────────────────────────╮   38m │
+ │ ▸   DE╭─ DEMO-12 · builder asks at the step build · your 3 answers ──────────────────────────────╮   38m │
  │       │                                                                                          │       │
  │       │  1 ✓ draft   2 · open   3 ✓ draft    review                                              │       │
- │   DEMO│                                                                                          │2h 10m │
+ │    DE│                                                                                          │2h 10m │
  │       │  These answers go to builder when you send them. Nothing went to Vision yet.             │       │
  ╰───────│                                                                                          │───────╯
          │  1  Must the export keep the order of the columns?                                       │

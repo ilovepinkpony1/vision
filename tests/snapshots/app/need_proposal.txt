@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-12   Export the report of the month as a CSV file                                   $1.03     38m │
+ │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
  │       ╭─ a proposal of the Curator · P-0003 ─────────────────────────────────────────────────────╮       │
  │       │                                                                                          │       │
- │   DEMO│  The Curator proposes 2 changes to the memory.                                           │2h 10m │
+ │    DE│  The Curator proposes 2 changes to the memory.                                           │2h 10m │
  │       │                                                                                          │       │
  ╰───────│  Two answers of the person say the same thing as D-0004. The Curator merges them.        │───────╯
          │                                                                                          │

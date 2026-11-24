@@ -3,11 +3,11 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────╭─ Keys ─────────────────────────────────────────────────────────────╮──────────────────╮
- │ ▸ DEMO-12   Expor│                                                                    │    $1.03     38m │
- │             ●━●━●│  ↑↓  j k      move through the tickets of the tab                  │                  │
+ │ ▸   DEMO-12   Exp│                                                                    │    $1.03     38m │
+ │               ●━●│  ↑↓  j k      move through the tickets of the tab                  │                  │
  │                  │  enter        open a ticket, or start one                          │                  │
- │   DEMO-7    Show │  tab          the next tab                                         │    $6.12  2h 10m │
- │             ●━●━●│  1 2 3        in progress, to take, ready to merge                 │                  │
+ │    DEMO-7    Sho│  tab          the next tab                                         │    $6.12  2h 10m │
+ │               ●━●│  1 2 3        in progress, to take, ready to merge                 │                  │
  ╰──────────────────│  n            answer what waits for you                            │──────────────────╯
                     │  m            the model of each agent                              │
                     │  s            the stats                                            │

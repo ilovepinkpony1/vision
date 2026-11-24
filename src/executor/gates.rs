@@ -8,7 +8,8 @@
 //!   each commit: a secret that one commit adds and a later commit removes still leaves.
 //! - [`size_gate`] finds a diff with more changed lines than `gates.max_diff_lines`. The
 //!   executor holds such a diff for the person, as it holds a sensitive path. For a ticket
-//!   taken from outside Vision, the executor gives it the diff after the take.
+//!   taken from outside Vision, the executor gives it the diff after the take. The limit 0
+//!   turns the size gate off.
 //! - [`sensitive_gate`] gives the paths of `gates.sensitive` that the diff touches and that the
 //!   approved plan does not name. The executor holds such a diff for the person. For a ticket
 //!   taken from outside Vision, it also gets the diff after the take.
@@ -374,8 +375,11 @@ fn mask_private_keys(text: &str) -> String {
 }
 
 /// The reason when a diff has more changed lines than `max`. The executor holds such a diff
-/// for the approval of the person.
+/// for the approval of the person. `max` 0 holds no diff.
 pub fn size_gate(files: &[FileDiff], max: u64) -> Result<(), String> {
+    if max == 0 {
+        return Ok(());
+    }
     let changed = changed_lines(files);
     if changed > max {
         return Err(format!(
@@ -767,6 +771,8 @@ Binary files a/logo.png and b/logo.png differ
             err.contains("the diff changes 7 lines, more than gates.max_diff_lines (6)"),
             "{err}"
         );
+        // The limit 0 turns the gate off.
+        assert!(size_gate(&files, 0).is_ok());
     }
 
     #[test]

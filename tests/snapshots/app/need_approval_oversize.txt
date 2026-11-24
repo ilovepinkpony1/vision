@@ -5,10 +5,10 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭───────╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮───────╮
- │ ▸ DEMO│                                                                                          │   38m │
+ │ ▸   DE│                                                                                          │   38m │
  │       │  Replaces the description of the ticket in the tracker.                                  │       │
  │       │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │       │
- │   DEMO│  The diff changes 4252 lines, more than gates.max_diff_lines (3000), so it waits for     │2h 10m │
+ │    DE│  The diff changes 4252 lines, more than gates.max_diff_lines (3000), so it waits for     │2h 10m │
  │       │  your approval.                                                                          │       │
  ╰───────│                                                                                          │───────╯
          │  What it sends                                                                           │

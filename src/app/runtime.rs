@@ -409,6 +409,7 @@ impl Runtime {
                 }
                 Effect::OpenSession(key) => self.opens.push(Handoff::Session(key)),
                 Effect::OpenReview(name) => self.opens.push(Handoff::Review(name)),
+                Effect::OpenLink(url) => open_link(&url),
                 Effect::LoadNeeds(load) => {
                     let paths = self.paths.clone();
                     let tx = self.tx.clone();
@@ -640,5 +641,34 @@ pub fn run_terminal(
                 None => break,
             }
         }
+    }
+}
+
+/// Opens a link of the web in the browser of the system: `open` on macOS, `xdg-open` on each
+/// other system. Only an `https` or `http` link opens. The opener gets no terminal, and a
+/// thread waits for it, so it leaves no zombie. A failure goes to the log of the app.
+fn open_link(url: &str) {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        eprintln!("vision app: not a link of the web, so it did not open: {url:?}");
+        return;
+    }
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let child = std::process::Command::new(opener)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(e) => eprintln!("vision app: {opener} could not open {url}: {e}"),
     }
 }

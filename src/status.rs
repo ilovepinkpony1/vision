@@ -422,6 +422,7 @@ mod tests {
             marks: Default::default(),
             cost_usd: 0.0,
             pr: None,
+            pr_url: None,
             branch: None,
             clone: None,
             updated: None,

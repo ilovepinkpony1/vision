@@ -5,10 +5,10 @@
          │                                                                                          │
    In pro│   1 · open    review                                                                     │
  ╭───────│                                                                                          │───────╮
- │ ▸ DEMO│  Must the export keep the order of the columns?                                          │   38m │
+ │ ▸   DE│  Must the export keep the order of the columns?                                          │   38m │
  │       │                                                                                          │       │
  │       │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │       │
- │   DEMO│  Example       The table shows date, client, total. The file can keep that order or      │2h 10m │
+ │    DE│  Example       The table shows date, client, total. The file can keep that order or      │2h 10m │
  │       │                sort the columns by name.                                                 │       │
  ╰───────│                                                                                          │───────╯
          │    a  Keep the order  the file has the columns of the table, in the same    recommended  │

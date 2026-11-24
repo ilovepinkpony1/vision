@@ -3,8 +3,8 @@
 
    In progress 1    To take 2    Ready to merge 1             1 ticket · each pull request waits for a merge
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸ DEMO-7    Show the totals under the table of orders                                      $6.12  2h 10m │
- │             ●━●━●━●━●━●━●━●━●━●━●━◉─○  ready-to-merge · waits for CI · no result yet                     │
+ │ ▸  DEMO-7    Show the totals under the table of orders                                    $6.12  2h 10m │
+ │               ●━●━●━●━●━●━●━●━●━●━●━◉─○  ready-to-merge · waits for CI · no result yet                   │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 

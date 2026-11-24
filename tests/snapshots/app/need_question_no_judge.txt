@@ -5,10 +5,10 @@
 
    In pro╭─ DEMO-12 · builder asks at the step build · Question 1 of 1 ─────────────────────────────╮
  ╭───────│                                                                                          │───────╮
- │ ▸ DEMO│   1 · open    review                                                                     │   38m │
+ │ ▸   DE│   1 · open    review                                                                     │   38m │
  │       │                                                                                          │       │
  │       │  Must the export keep the order of the columns?                                          │       │
- │   DEMO│                                                                                          │2h 10m │
+ │    DE│                                                                                          │2h 10m │
  │       │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │       │
  ╰───────│  Example       The table shows date, client, total. The file can keep that order or      │───────╯
          │                sort the columns by name.                                                 │

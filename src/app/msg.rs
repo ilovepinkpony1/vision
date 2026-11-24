@@ -184,6 +184,8 @@ pub enum Effect {
     OpenSession(String),
     /// Give the terminal to `vision memory review --proposal NAME` in the same way.
     OpenReview(String),
+    /// Open a link of the web in the browser of the system, and keep the terminal.
+    OpenLink(String),
     /// Read the things that wait for the person. The number names the load.
     LoadNeeds(u64),
     /// Read the facts of the check of a chain.

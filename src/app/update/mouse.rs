@@ -15,7 +15,8 @@
 //! The header has a back part, a forward part, and a name for each place on the way from Home,
 //! such as the key of the ticket over its log: a click goes there. A key of the keys card
 //! closes the card and acts as that key on the screen. A step of the path opens the log at that
-//! step, and a line of the activity opens the events of its turn.
+//! step, and a line of the activity opens the events of its turn. The GitHub mark of a ticket
+//! on Home opens the page of its pull request in the browser of the system.
 //!
 //! A click outside each part does nothing. A step of the wheel that moves nothing and takes no
 //! arm away marks no change, so it makes no redraw.
@@ -89,6 +90,7 @@ fn run(app: &mut App, act: Act, fx: &mut Vec<Effect>) {
         }
         Act::Step(step) => super::live::click_step(app, &step),
         Act::Turn(turn) => super::live::click_turn(app, &turn, fx),
+        Act::Link(url) => fx.push(Effect::OpenLink(url)),
     }
 }
 

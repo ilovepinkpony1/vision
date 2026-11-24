@@ -3,22 +3,22 @@
 
    In progress 2    To take 20    Ready to merge 0                      from the tracker · 20 open
  ╭─ In Testing · 3 ──────────────────────────────────────────────────────────────────── ▲ 6 more ─╮
- │   DEMO-31   Count the visits of each page once a day                                           │
- │   DEMO-34   Hide the button of the export for a guest                                          │
- │   DEMO-40   Load the next page of the list when the person scrolls                             │
+ │   DEMO-31     Count the visits of each page once a day                                         │
+ │   DEMO-34     Hide the button of the export for a guest                                        │
+ │   DEMO-40     Load the next page of the list when the person scrolls                           │
  ├─ To Do · 2 ────────────────────────────────────────────────────────────────────────────────────┤
- │   DEMO-30   Show the name of the shop in the subject of the email                              │
- │   DEMO-38   Add a link to the help page in the menu                                            │
+ │   DEMO-30     Show the name of the shop in the subject of the email                            │
+ │   DEMO-38     Add a link to the help page in the menu                                          │
  ├─ Backlog · 9 ──────────────────────────────────────────────────────────────────────────────────┤
- │   DEMO-35   Let the person pick the first day of the week                                      │
- │   DEMO-50   Clean up the old report number 50                                                  │
- │   DEMO-51   Clean up the old report number 51                                                  │
- │   DEMO-52   Clean up the old report number 52                                                  │
- │   DEMO-53   Clean up the old report number 53                                                  │
- │   DEMO-54   Clean up the old report number 54                                                  │
- │   DEMO-55   Clean up the old report number 55                                                  │
- │   DEMO-56   Clean up the old report number 56                                                  │
- │ ▸ DEMO-57   Clean up the old report number 57                                                  │
+ │   DEMO-35     Let the person pick the first day of the week                                    │
+ │   DEMO-50     Clean up the old report number 50                                                │
+ │   DEMO-51     Clean up the old report number 51                                                │
+ │   DEMO-52     Clean up the old report number 52                                                │
+ │   DEMO-53     Clean up the old report number 53                                                │
+ │   DEMO-54     Clean up the old report number 54                                                │
+ │   DEMO-55     Clean up the old report number 55                                                │
+ │   DEMO-56     Clean up the old report number 56                                                │
+ │ ▸ DEMO-57     Clean up the old report number 57                                                │
  │                                                                                                │
  ╰────────────────────────────────────────────────────────────────────────────────────────────────╯
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
