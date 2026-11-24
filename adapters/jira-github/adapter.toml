@@ -62,7 +62,11 @@
 #                          holds the head: the same test as holds), deployment_sha, and
 #                          deployed_at. With no deployment yet, deployed is false and the two
 #                          others are null. An env with no `deployment` key has none of the three,
-#                          so a watch of envs.<name>.deployed reads none there.
+#                          so a watch of envs.<name>.deployed reads none there. While the branch
+#                          of an env holds the head, observe also reads the last run of
+#                          ci_workflow at the tip of that branch: envs.<name>.ci (green, red,
+#                          running, or none), ci_run, and ci_url. An env whose branch does not
+#                          hold the head has none of the three, so a watch reads none there.
 #   test_command           The command of the proof. It runs with one test file as its last
 #                          argument: `sh -c '<test_command> "$@"' sh <file>`, in a plain
 #                          environment with no secret, such as "python3 -m pytest -q".
@@ -210,7 +214,8 @@
 # exists. The paths are those of the answer of observe, as for `watch`: tracker_status (the
 # status name of the Jira issue, such as "In Review"), pr.draft, pr.merged, pr.closed (closed
 # and not merged), pr.conflict, pr.changes_requested, pr.comments_waiting, review.state,
-# ci.state, and envs.<name>.holds and envs.<name>.deployed. One more path comes from Vision:
+# ci.state, and envs.<name>.holds, envs.<name>.deployed, and envs.<name>.ci. One more path
+# comes from Vision:
 # head.state, the head of the open pull request against the branch of the clone, after a
 # fetch. Its values: none (no open pull request), same, forward (the pull request has later
 # commits, such as a push by hand, also when it went on without commits of Vision that no push
@@ -328,6 +333,66 @@
 # that moved.
 # With no `conflict`, such a failure sets the flag needs-you, and the merge waits in its folder
 # for the person.
+#
+# The push of a deploy starts a run of ci_workflow at the tip of the env branch, and an env that
+# deploys only a green tip never takes a red one. `envs.staging.ci` is the state of that run
+# while the branch holds the head. An interrupt on it in deployed-staging, such as
+# interrupt = { "envs.staging.ci" = { red = "ci-staging-rerun" }, "review.state" = { ... } },
+# starts the repair. `ci.rerun` with args.env runs the failed jobs of the run at the tip of the
+# env branch, and the job `ci-log` with args.env reads the log of that run:
+#
+#   [[step]]                      # the run at the tip is red: its failed jobs run once more
+#   id = "ci-staging-rerun"
+#   kind = "wait"
+#   start = [{ verb = "ci.rerun", args = { env = "staging" } }]
+#   watch = "envs.staging.ci"
+#   on = { green = "deployed-staging", red = "fix-ci-staging" }
+#   wait = ["running", "none"]
+#   limit = 7200
+#
+#   [[step]]                      # Builder fixes the CI of the branch of the env
+#   id = "fix-ci-staging"
+#   kind = "turn"
+#   agent = "builder"
+#   turn = "worker"
+#   before = [{ job = "env-fix", args = { env = "staging" } }]
+#   reads = ["env-fix.md", "ci-log.txt"]
+#   expects = ["clean", "doc:ci-fix.md"]
+#   cap = "ci_fix"
+#   next = "fixed-staging"
+#
+#   [[step]]                      # the fix of code that only the env branch has goes there
+#   id = "fixed-staging"
+#   kind = "check"
+#   doc = "ci-fix.md"
+#   line = "Fixed in: staging"
+#   stop_line = "Fixed in: none"  # a cause outside the code: the person decides
+#   next = "push-fix-staging"
+#   fail = "fixed-staging-branch"
+#
+#   [[step]]
+#   id = "push-fix-staging"
+#   kind = "act"
+#   run = [{ verb = "deploy.fix", args = { env = "staging", text = "{doc:ci-fix.md}" } }]
+#   next = "deployed-staging"
+#
+#   [[step]]                      # a fix of the change of the ticket goes through the pull request
+#   id = "fixed-staging-branch"
+#   kind = "check"
+#   doc = "ci-fix.md"
+#   line = "Fixed in: branch"
+#   next = "push-fix-branch"      # an act step: git.push, then CI and the review again
+#   fail = "deployed-staging"
+#
+# The job env-fix fetches the tip of the env branch, makes the git worktree .vision/fix/<env>
+# inside the clone at that tip, and writes env-fix.md (the run, the files of the change of the
+# ticket, and what to do) and ci-log.txt. `links` of its table names entries that git ignores,
+# such as a generated configuration, and the job links each one from the clone into the
+# worktree, so that the tests can run there. Builder edits the files of that folder only. The
+# sandbox of a turn cannot write the git folder of a worktree, so deploy.fix stages each change,
+# commits it with the first line of ci-fix.md and the identity of the session, and pushes it as
+# a fast-forward of the branch. It refuses a folder with no change, a conflict marker, and a
+# branch that moved.
 #
 # `envs.staging.holds` is true when the staging branch holds the head commit. It says that the
 # merge happened, not that the env already runs the new code. `envs.staging.deployed` says
@@ -621,6 +686,11 @@ mode = "auto"
 leaves = true
 timeout = 1200                # a conflict also fetches the env branch and starts the merge in a worktree
 
+[verbs."deploy.fix"]          # commits and pushes the fix of the CI of an env branch from .vision/fix/<env>
+mode = "auto"
+leaves = true
+timeout = 600
+
 [verbs."deploy.merge"]        # commits and pushes the merge that Merger resolved in .vision/merge/<env>
 mode = "auto"
 leaves = true
@@ -769,5 +839,13 @@ secrets = true
 # base-merge fetches the base branch with FORGE_TOKEN and starts its merge in the clone. It runs
 # git only, with no hook of the project.
 [jobs.base-merge]
+timeout = 900
+secrets = true
+
+# env-fix fetches the tip of an env branch with FORGE_TOKEN, makes the worktree .vision/fix/<env>
+# at that tip, and reads the log of its run. It runs git and reads GitHub only. `links` names
+# entries that git ignores, which it links from the clone into the worktree, such as
+# links = ["config/database.yml", "node_modules"].
+[jobs.env-fix]
 timeout = 900
 secrets = true

@@ -1002,6 +1002,35 @@ fn ci_log_test() -> (AdapterTest, GitHubWorld) {
 }
 
 #[test]
+fn ci_log_with_an_env_reads_the_run_at_the_tip_of_its_branch() {
+    let (t, w) = ci_log_test();
+    let tip = "d".repeat(40);
+    w.lock().runs = vec![crate::fixtures::Run::new(41)
+        .sha(&tip)
+        .conclusion(Some("failure"))
+        .json()];
+    t.server.json_route(
+        "GET",
+        &format!("{REPO_PATH}/git/ref/heads/staging"),
+        json!({"object": {"sha": tip}}),
+        200,
+    );
+    let result = t
+        .job("ci-log")
+        .field("head", json!(HEAD))
+        .args(json!({"env": "staging"}))
+        .secrets(all_secrets())
+        .config(t.config(json!({"envs": [{"name": "staging", "branch": "staging"}]})))
+        .run();
+    assert_eq!(result.code, 0, "{result:?}");
+    let content = result.json["documents"][0]["content"].as_str().unwrap();
+    assert!(
+        content.contains(&format!("The run 41 of ci.yml at {}", &tip[..12])),
+        "{content}"
+    );
+}
+
+#[test]
 fn ci_log_the_end_of_each_failed_job_log() {
     let (t, _w) = ci_log_test();
     let result = t

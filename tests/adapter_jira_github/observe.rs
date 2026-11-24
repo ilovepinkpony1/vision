@@ -789,10 +789,76 @@ fn ticket_each_env_tells_whether_it_holds_the_head() {
         facts["envs"],
         json!({
             "staging": {"branch": "staging", "head": OTHER, "holds": false},
-            "demo": {"branch": "demo", "head": HEAD, "holds": true},
+            "demo": {"branch": "demo", "head": HEAD, "holds": true,
+                     "ci": "none", "ci_run": null, "ci_url": null},
             "gone": {"branch": "gone", "head": null, "holds": false},
         })
     );
+}
+
+#[test]
+fn ticket_an_env_that_holds_the_head_gives_the_ci_of_its_tip() {
+    let (t, w) = ticket_test();
+    let s = &t.server;
+    let tip = "d".repeat(40);
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/git/ref/heads/staging"),
+        json!({"object": {"sha": tip}}),
+        200,
+    );
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/compare/staging...{HEAD}"),
+        json!({"status": "behind"}),
+        200,
+    );
+    // The push of the deploy started a red run at the tip; the head of the ticket is green.
+    w.lock().runs = vec![
+        Run::new(41).sha(&tip).conclusion(Some("failure")).json(),
+        run(40),
+    ];
+    let config = json!({"envs": [{"name": "staging", "branch": "staging"}]});
+    let facts = observe_ticket(&t, json!(7), config.clone());
+    let staging = &facts["envs"]["staging"];
+    assert_eq!(staging["holds"], true);
+    assert_eq!(staging["ci"], "red");
+    assert_eq!(staging["ci_run"], 41);
+    assert_eq!(
+        staging["ci_url"],
+        "https://github.example/acme/widgets/actions/runs/41"
+    );
+    assert_eq!(facts["ci"]["state"], "green", "the head keeps its own run");
+
+    // A run that runs at the tip.
+    w.lock().runs = vec![Run::new(42)
+        .sha(&tip)
+        .status("in_progress")
+        .conclusion(None)
+        .json()];
+    let facts = observe_ticket(&t, json!(7), config.clone());
+    assert_eq!(facts["envs"]["staging"]["ci"], "running");
+
+    // A branch that does not hold the head: no run of its tip is read, and no fact is given.
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/compare/staging...{HEAD}"),
+        json!({"status": "ahead"}),
+        200,
+    );
+    let tip_runs = |s: &crate::jira_github_support::FakeServer| {
+        s.calls(Some("GET"), Some(&format!("{REPO_PATH}/actions/runs")))
+            .iter()
+            .filter(|c| c.query.get("head_sha").map(String::as_str) == Some(tip.as_str()))
+            .count()
+    };
+    let before = tip_runs(s);
+    let facts = observe_ticket(&t, json!(7), config);
+    assert_eq!(
+        facts["envs"]["staging"],
+        json!({"branch": "staging", "head": tip, "holds": false})
+    );
+    assert_eq!(tip_runs(s), before);
 }
 
 #[test]
@@ -824,12 +890,14 @@ fn ticket_the_deployment_of_an_env_tells_whether_the_env_runs_the_head() {
     assert_eq!(
         facts["staging"],
         json!({"branch": "staging", "head": HEAD, "holds": true, "deployed": false,
-               "deployment_sha": null, "deployed_at": null})
+               "deployment_sha": null, "deployed_at": null,
+               "ci": "none", "ci_run": null, "ci_url": null})
     );
     assert_eq!(
         facts["demo"],
-        json!({"branch": "demo", "head": HEAD, "holds": true}),
-        "an env with no deployment key gets no new fact"
+        json!({"branch": "demo", "head": HEAD, "holds": true,
+               "ci": "none", "ci_run": null, "ci_url": null}),
+        "an env with no deployment key gets no deployment fact"
     );
     let calls = s.calls(Some("GET"), Some(&deployments));
     assert_eq!(calls.len(), 1, "one call for the one env with a deployment");

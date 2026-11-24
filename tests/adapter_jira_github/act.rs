@@ -14,8 +14,8 @@ use crate::fixtures::{
 };
 use crate::jira_github_support::world::{install, World};
 use crate::jira_github_support::{
-    assert_no_secret_in_files, git, git_output, header_hash, read_calls, secret, secret_forms,
-    secrets_without, AdapterTest, Outcome, Reply, Repos, BRANCH, KEY,
+    all_secrets, assert_no_secret_in_files, git, git_output, header_hash, read_calls, secret,
+    secret_forms, secrets_without, AdapterTest, Outcome, Reply, Repos, BRANCH, KEY,
 };
 
 fn issue_path() -> String {
@@ -1268,6 +1268,52 @@ fn rerun_the_failed_jobs_run_again() {
 }
 
 #[test]
+fn rerun_with_an_env_runs_the_failed_jobs_of_the_run_at_the_tip_of_its_branch() {
+    let (t, w, _s) = rerun_test();
+    let tip = "d".repeat(40);
+    // The head of the ticket is green; the push of the deploy made a red run at the tip.
+    w.lock().runs = vec![Run::new(41).sha(&tip).conclusion(Some("failure")).json()];
+    t.server.json_route(
+        "GET",
+        &format!("{REPO_PATH}/git/ref/heads/staging"),
+        json!({"object": {"sha": tip}}),
+        200,
+    );
+    let config = t.config(json!({"envs": [{"name": "staging", "branch": "staging"}]}));
+    let result = t
+        .act("ci.rerun")
+        .field("head", json!(HEAD))
+        .args(json!({"env": "staging"}))
+        .config(config.clone())
+        .run();
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    assert_eq!(result.json["external_id"], "run-41");
+    assert_eq!(t.server.count("POST", &rerun_path()), 1);
+
+    // No run at the tip, and an env that `envs` does not list.
+    w.lock().runs = vec![run_ended(41, "failure")];
+    let none = t
+        .act("ci.rerun")
+        .field("head", json!(HEAD))
+        .args(json!({"env": "staging"}))
+        .config(config)
+        .run();
+    assert_eq!(none.state(), "failed", "{none:?}");
+    assert!(
+        has(&none, "(the tip of staging), so nothing runs again"),
+        "{none:?}"
+    );
+    let unknown = t
+        .act("ci.rerun")
+        .field("head", json!(HEAD))
+        .args(json!({"env": "prod"}))
+        .run();
+    assert_eq!(unknown.state(), "failed", "{unknown:?}");
+    assert!(has(&unknown, "needs the env prod in `envs`"), "{unknown:?}");
+    assert_eq!(t.server.count("POST", &rerun_path()), 1);
+}
+
+#[test]
 fn rerun_a_green_or_running_run_needs_nothing() {
     let (t, w, _s) = rerun_test();
     for state in [Run::new(41).json(), run_open(41, "in_progress")] {
@@ -1852,6 +1898,361 @@ fn deploy_merge_refuses_no_merge_a_marker_a_change_with_no_conflict_and_a_branch
         Some(other.as_str())
     );
     assert!(!c.folder().exists(), "a merge of an old tip goes away");
+}
+
+// env-fix and deploy.fix ------------------------------------------------------------------------
+
+/// A test that only staging has. It fails, so the run at the tip of staging is red.
+const RED_TEST: &str = "def test_mul():\n    assert 2 * 3 == 5\n";
+const GREEN_TEST: &str = "def test_mul():\n    assert 2 * 3 == 6\n";
+
+/// A clone and its bare remote with a branch staging whose CI is red at its tip, because of a
+/// test that another branch brought. The fake GitHub reads the tip of staging from the bare
+/// remote and answers a red run at that tip, with the log of its failed job.
+struct StagingFix {
+    t: AdapterTest,
+    repos: Repos,
+    tip: String,
+    _world: GitHubWorld,
+}
+
+impl StagingFix {
+    fn new() -> StagingFix {
+        let t = AdapterTest::new();
+        let repos = Repos::new(&t.path("repos"));
+        let remote = repos.remote.display().to_string();
+        git(
+            &["checkout", "--quiet", "-b", "staging", "main"],
+            &repos.clone,
+        );
+        repos.write(&[("test_mul.py", RED_TEST)]);
+        let tip = repos.commit("a test of another branch");
+        git(
+            &["push", "--quiet", &remote, "staging:refs/heads/staging"],
+            &repos.clone,
+        );
+        git(&["checkout", "--quiet", BRANCH], &repos.clone);
+        git(&["branch", "--quiet", "-D", "staging"], &repos.clone);
+        // A Vision clone ignores its .vision folder. local.cfg is a generated file of the
+        // project that git ignores, and the tests need it.
+        std::fs::write(
+            repos.clone.join(".git/info/exclude"),
+            "/.vision/\nlocal.cfg\n",
+        )
+        .unwrap();
+        std::fs::write(repos.clone.join("local.cfg"), "db = test\n").unwrap();
+        let bare = repos.remote.clone();
+        t.server.route(
+            "GET",
+            &format!("{REPO_PATH}/git/ref/heads/staging"),
+            move |_| {
+                let tip = git(&["rev-parse", "refs/heads/staging"], &bare);
+                Reply::json(200, json!({"object": {"sha": tip}}))
+            },
+        );
+        let world = GitHubWorld::new(&t.server, None);
+        world.lock().runs = vec![Run::new(41).sha(&tip).conclusion(Some("failure")).json()];
+        t.server.json_route(
+            "GET",
+            &format!("{REPO_PATH}/actions/runs/41/jobs"),
+            json!({"total_count": 1, "jobs": [
+                {"id": 5, "name": "test", "conclusion": "failure",
+                 "steps": [{"name": "Run tests", "conclusion": "failure"}]},
+            ]}),
+            200,
+        );
+        let url = t.server.url.clone();
+        t.server.route(
+            "GET",
+            &format!("{REPO_PATH}/actions/jobs/5/logs"),
+            move |_| Reply::empty(302).header("Location", &format!("{url}/storage/log-5")),
+        );
+        t.server.route("GET", "/storage/log-5", |_| {
+            Reply::text(200, "FAILED test_mul.py::test_mul - assert 6 == 5\n")
+        });
+        StagingFix {
+            t,
+            repos,
+            tip,
+            _world: world,
+        }
+    }
+
+    fn config(&self) -> Value {
+        self.t.config(json!({
+            "git_remote_url": self.repos.remote.display().to_string(),
+            "envs": [{"name": "staging", "branch": "staging"}],
+        }))
+    }
+
+    fn clone_text(&self) -> Value {
+        json!(self.repos.clone.display().to_string())
+    }
+
+    /// The job env-fix, with `links` in its table.
+    fn job(&self, links: Value) -> Outcome {
+        self.t
+            .job("env-fix")
+            .args(json!({"env": "staging"}))
+            .config(self.config())
+            .field("clone", self.clone_text())
+            .field("head", json!(self.repos.head))
+            .field("base_ref", json!("main"))
+            .field("table", json!({"links": links, "timeout": 900}))
+            .secrets(all_secrets())
+            .run()
+    }
+
+    /// deploy.fix with the text of ci-fix.md.
+    fn fix(&self, text: &str) -> Outcome {
+        self.t
+            .act("deploy.fix")
+            .args(json!({"env": "staging", "text": text}))
+            .config(self.config())
+            .field("clone", self.clone_text())
+            .field("head", json!(self.repos.head))
+            .field("git", json!({"name": BOT_NAME, "email": BOT_EMAIL}))
+            .run()
+    }
+
+    fn folder(&self) -> std::path::PathBuf {
+        self.repos.clone.join(".vision/fix/staging")
+    }
+
+    /// Writes a file in the fix folder, as Builder does. Its sandbox cannot write the git
+    /// folder of the worktree, so it neither stages nor commits.
+    fn edit(&self, name: &str, text: &str) {
+        std::fs::write(self.folder().join(name), text).unwrap();
+    }
+}
+
+#[test]
+fn env_fix_makes_the_fix_folder_at_the_tip_of_the_env_branch_and_says_what_to_do() {
+    let f = StagingFix::new();
+    let result = f.job(json!(["local.cfg", "app.py", "missing.cfg", "../up.cfg"]));
+    assert_eq!(result.code, 0, "{result:?}");
+    let doc = &result.json["documents"][0];
+    assert_eq!(doc["name"], "env-fix.md");
+    let content = doc["content"].as_str().unwrap();
+    for part in [
+        "# The CI of staging is red at the tip that holds DEMO-12",
+        &format!("- Tip of that branch: `{}`", f.tip),
+        &format!("- Head of the ticket: `{}`", f.repos.head),
+        "- Run: 41 (red, attempt 1): https://github.example/acme/widgets/actions/runs/41",
+        "- Fix folder: `.vision/fix/staging`",
+        "## Files that the change of DEMO-12 touches\n\n- `app.py`",
+        "`local.cfg`",
+        "`app.py`: the branch has its own",
+        "`missing.cfg`: the clone has none",
+        "`../up.cfg`: not a plain relative path",
+        "`Fixed in: branch`",
+        "`Fixed in: staging`",
+        "`Fixed in: none`",
+        "do not stage, commit, or push",
+    ] {
+        assert!(content.contains(part), "{part} in:\n{content}");
+    }
+    let log = &result.json["documents"][1];
+    assert_eq!(log["name"], "ci-log.txt");
+    let log = log["content"].as_str().unwrap();
+    assert!(log.contains("The run 41 of ci.yml"), "{log}");
+    assert!(log.contains("FAILED test_mul.py::test_mul"), "{log}");
+    // The worktree is at the tip of staging, with the ignored file of the clone as a link.
+    let folder = f.folder();
+    assert_eq!(git(&["rev-parse", "HEAD"], &folder), f.tip);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("test_mul.py")).unwrap(),
+        RED_TEST
+    );
+    assert!(folder
+        .join("local.cfg")
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(git(&["status", "--porcelain"], &folder), "");
+    assert_eq!(
+        git(&["rev-parse", "refs/vision/fix/staging"], &f.repos.clone),
+        f.tip
+    );
+    // The clone keeps its branch, its head, and its clean work tree.
+    assert_eq!(
+        git(&["symbolic-ref", "--short", "HEAD"], &f.repos.clone),
+        BRANCH
+    );
+    assert_eq!(git(&["rev-parse", "HEAD"], &f.repos.clone), f.repos.head);
+    assert_eq!(git(&["status", "--porcelain"], &f.repos.clone), "");
+    assert_no_secret_in_files(&[&f.repos.clone, &f.repos.remote, &f.t.home, &f.t.scratch]);
+    // A second run makes the folder again, in the place of the old one.
+    f.edit("test_mul.py", GREEN_TEST);
+    assert_eq!(f.job(json!([])).code, 0);
+    assert_eq!(
+        std::fs::read_to_string(f.folder().join("test_mul.py")).unwrap(),
+        RED_TEST
+    );
+    let list = git(&["worktree", "list", "--porcelain"], &f.repos.clone);
+    assert_eq!(list.matches("worktree ").count(), 2, "{list}");
+}
+
+#[test]
+fn deploy_fix_commits_the_edits_of_the_fix_folder_and_pushes_them_as_a_fast_forward() {
+    let f = StagingFix::new();
+    assert_eq!(f.job(json!(["local.cfg"])).code, 0);
+    f.edit("test_mul.py", GREEN_TEST);
+    let result = f.fix("# Commit: test: the mul test expects 6\n\nFixed in: staging\n");
+    assert_eq!(result.state(), "confirmed", "{result:?}");
+    let fix = f
+        .repos
+        .remote_head("staging")
+        .expect("staging on the remote");
+    assert!(
+        has(
+            &result,
+            &format!("pushed the fix {} to staging", &fix[..12])
+        ),
+        "{result:?}"
+    );
+    assert!(has(&result, "test_mul.py"), "{result:?}");
+    assert_eq!(
+        result.json["external_id"],
+        json!(format!("deploy-fix-staging-{fix}"))
+    );
+    // One commit on the tip, with the first line of the text, the identity of the call, and
+    // only the edit: the link to the ignored file stays out.
+    assert_eq!(
+        git(&["rev-list", "--parents", "-n", "1", &fix], &f.repos.remote),
+        format!("{fix} {}", f.tip)
+    );
+    assert_eq!(
+        git(
+            &["log", "-1", "--format=%an <%ae>|%s", &fix],
+            &f.repos.remote
+        ),
+        format!("{BOT_NAME} <{BOT_EMAIL}>|test: the mul test expects 6")
+    );
+    assert_eq!(
+        git(&["show", &format!("{fix}:test_mul.py")], &f.repos.remote),
+        GREEN_TEST.trim_end()
+    );
+    assert_eq!(
+        git(&["ls-tree", "--name-only", &fix], &f.repos.remote),
+        "app.py\ntest_mul.py"
+    );
+    assert!(!f.folder().exists());
+    assert!(!git(&["worktree", "list"], &f.repos.clone).contains(".vision/fix"));
+    assert_no_secret_in_files(&[&f.repos.clone, &f.repos.remote, &f.t.home, &f.t.scratch]);
+
+    // The reconcile finds the fix by the commit of the external id.
+    f.t.server.json_route(
+        "GET",
+        &format!("{REPO_PATH}/compare/staging...{fix}"),
+        json!({"status": "identical"}),
+        200,
+    );
+    let found =
+        f.t.act("deploy.fix")
+            .args(json!({"env": "staging", "text": "x"}))
+            .config(f.config())
+            .field("clone", f.clone_text())
+            .field("head", json!(f.repos.head))
+            .field("external_id", json!(format!("deploy-fix-staging-{fix}")))
+            .reconcile()
+            .run();
+    assert_eq!(found.state(), "confirmed", "{found:?}");
+    let lost =
+        f.t.act("deploy.fix")
+            .args(json!({"env": "staging", "text": "x"}))
+            .config(f.config())
+            .field("clone", f.clone_text())
+            .field("head", json!(f.repos.head))
+            .reconcile()
+            .run();
+    assert_eq!(lost.state(), "failed", "{lost:?}");
+}
+
+#[test]
+fn deploy_fix_with_no_message_names_the_ticket_and_the_branch() {
+    let f = StagingFix::new();
+    assert_eq!(f.job(json!([])).code, 0);
+    f.edit("test_mul.py", GREEN_TEST);
+    assert_eq!(f.fix("Fixed in: staging\n").state(), "confirmed");
+    let fix = f.repos.remote_head("staging").unwrap();
+    assert_eq!(
+        git(&["log", "-1", "--format=%s", &fix], &f.repos.remote),
+        "Fix the CI of staging for DEMO-12"
+    );
+}
+
+#[test]
+fn deploy_fix_refuses_no_folder_no_change_a_marker_a_branch_that_moved_and_the_base_branch() {
+    let f = StagingFix::new();
+    let none = f.fix("test: fix");
+    assert_eq!(none.state(), "failed", "{none:?}");
+    assert!(
+        has(&none, "no fix waits in .vision/fix/staging"),
+        "{none:?}"
+    );
+
+    assert_eq!(f.job(json!([])).code, 0);
+    let same = f.fix("test: fix");
+    assert_eq!(same.state(), "failed", "{same:?}");
+    assert!(
+        has(&same, "has no change, so nothing goes to staging"),
+        "{same:?}"
+    );
+
+    f.edit(
+        "test_mul.py",
+        "<<<<<<< HEAD\nx = 1\n=======\nx = 2\n>>>>>>> other\n",
+    );
+    let marker = f.fix("test: fix");
+    assert_eq!(marker.state(), "failed", "{marker:?}");
+    assert!(
+        has(&marker, "conflict marker at test_mul.py:1"),
+        "{marker:?}"
+    );
+    assert_eq!(
+        git(&["diff", "--cached", "--name-only"], &f.folder()),
+        "",
+        "a refused fix leaves nothing staged"
+    );
+
+    // Another push lands on staging while the fix waits: no force, and the folder goes.
+    f.edit("test_mul.py", GREEN_TEST);
+    let remote = f.repos.remote.display().to_string();
+    git(
+        &["checkout", "--quiet", "-b", "other", &f.tip],
+        &f.repos.clone,
+    );
+    f.repos.write(&[("other.md", "Another push.\n")]);
+    let moved_to = f.repos.commit("another push");
+    git(
+        &["push", "--quiet", &remote, "other:refs/heads/staging"],
+        &f.repos.clone,
+    );
+    git(&["checkout", "--quiet", BRANCH], &f.repos.clone);
+    let moved = f.fix("test: fix");
+    assert_eq!(moved.state(), "failed", "{moved:?}");
+    assert!(has(&moved, "staging moved from"), "{moved:?}");
+    assert_eq!(
+        f.repos.remote_head("staging").as_deref(),
+        Some(moved_to.as_str())
+    );
+    assert!(!f.folder().exists());
+
+    // The base branch is never an env branch to fix.
+    let config = f.t.config(json!({
+        "git_remote_url": remote,
+        "envs": [{"name": "prod", "branch": "main"}],
+    }));
+    let base =
+        f.t.act("deploy.fix")
+            .args(json!({"env": "prod", "text": "x"}))
+            .config(config)
+            .field("clone", f.clone_text())
+            .field("head", json!(f.repos.head))
+            .run();
+    assert!(has(&base, "pushes only a staging branch"), "{base:?}");
 }
 
 // review.rerequest ------------------------------------------------------------------------------

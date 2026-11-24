@@ -1,8 +1,8 @@
 //! `job`: one job, such as the proof (design section 11.1).
 //!
 //! A job gets no secret, unless its table in adapter.toml sets `secrets = true`. Only `ci-log`,
-//! `comments`, and `base-merge` do, because they only read GitHub or run git, and run no code of
-//! the project. Each command
+//! `comments`, `base-merge`, and `env-fix` do, because they only read GitHub or run git, and run
+//! no code of the project. Each command
 //! of the project (the tests, the linter, the second reviewer, the app) runs with a plain
 //! environment, in its own session and process group, with a time limit. A file name from the
 //! diff reaches it only as one item of an argument list, never inside the text of a shell
@@ -37,11 +37,12 @@ const USER_AGENT: &str = "vision-jira-github-adapter";
 
 type Job = fn(&Config, &Map<String, Value>) -> Res<Value>;
 
-const JOBS: [(&str, Job); 7] = [
+const JOBS: [(&str, Job); 8] = [
     ("app-start", app_start),
     ("base-merge", base_merge),
     ("ci-log", ci_log),
     ("comments", comments),
+    ("env-fix", super::act::env_fix),
     ("precheck", super::precheck::precheck),
     ("proof", proof),
     ("second-review", second_review),
@@ -1267,6 +1268,19 @@ fn ci_log(config: &Config, call: &Map<String, Value>) -> Res<Value> {
     let workflow = config.text_need("ci_workflow", why)?;
     let keep = (config.number("log_tail_kb", 64.0)? * 1024.0).trunc() as usize;
     let gh = GitHub::new(config, why, None)?;
+    // With args.env, the log is the one of the run at the tip of the env branch.
+    let head = match super::act::env_of(config, call, why)? {
+        Some(env) => match gh.branch_head(&env.branch)? {
+            Some(tip) => tip,
+            None => {
+                return fail(format!(
+                    "{why}: the branch {} of the env {} does not exist on GitHub",
+                    env.branch, env.name
+                ))
+            }
+        },
+        None => head,
+    };
     let (content, detail) = ci_log_text(&gh, config, &head, &workflow, keep, None)?;
     Ok(
         json!({"ok": true, "detail": detail, "documents": [{"name": "ci-log.txt", "content": content}]}),

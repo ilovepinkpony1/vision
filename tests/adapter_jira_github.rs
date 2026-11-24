@@ -113,6 +113,7 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
         "ci.rerun",
         "tracker.move",
         "deploy",
+        "deploy.fix",
         "deploy.merge",
         "review.reply",
         "review.rerequest",
@@ -129,7 +130,7 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
         .filter(|v| !v.read)
         .map(|v| v.name.as_str())
         .collect();
-    assert_eq!(writes.len(), 12, "{writes:?}");
+    assert_eq!(writes.len(), 13, "{writes:?}");
     for verb in ["review.resolve", "review.minimize"] {
         assert!(
             !adapter.verbs[verb].leaves,
@@ -142,6 +143,7 @@ fn each_verb_starts_with_its_mode_and_the_reads_have_none() {
         "pr.open",
         "review.reply",
         "deploy.merge",
+        "deploy.fix",
     ] {
         assert!(adapter.verbs[verb].leaves, "{verb} sends text out");
     }
@@ -175,11 +177,12 @@ fn only_the_jobs_that_read_the_forge_get_the_secrets() {
             "base-merge",
             "ci-log",
             "comments",
+            "env-fix",
             "proof",
             "second-review"
         ])
     );
-    for job in ["ci-log", "comments", "base-merge"] {
+    for job in ["ci-log", "comments", "base-merge", "env-fix"] {
         assert!(adapter.jobs[job].secrets, "{job}");
     }
     for job in ["proof", "app-start", "second-review"] {

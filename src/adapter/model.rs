@@ -3595,6 +3595,50 @@ url = "http://localhost:3000"
     }
 
     #[test]
+    fn the_job_env_fix_takes_the_ignored_entries_to_link_and_refuses_a_path_out_of_the_clone() {
+        let builtin = with(
+            "base = \"origin/trunk\"",
+            "scripts = \"builtin:jira-github\"",
+        );
+        let text = builtin.replacen(
+            "[jobs.lint]",
+            "[jobs.env-fix]\nsecrets = true\nlinks = [\"config/database.yml\", \"node_modules/\"]\n\n[jobs.lint]",
+            1,
+        );
+        let adapter = parse(&text).unwrap();
+        let job = &adapter.jobs["env-fix"];
+        assert!(
+            job.secrets,
+            "env-fix fetches and reads GitHub with the token"
+        );
+        assert_eq!(job.env, JobEnv::Plain);
+        assert_eq!(job.timeout, Some(900));
+        assert_eq!(job.settings["links"][1], "node_modules/");
+        for (keys, expected) in [
+            (
+                "links = \"node_modules\"",
+                "links must be a list of paths of the clone",
+            ),
+            (
+                "links = [\"../secrets.yml\"]",
+                "links has ../secrets.yml, which is not a plain relative path",
+            ),
+            (
+                "links = [\"/etc/hosts\"]",
+                "links has /etc/hosts, which is not a plain relative path",
+            ),
+        ] {
+            let text = builtin.replacen(
+                "[jobs.lint]",
+                &format!("[jobs.env-fix]\n{keys}\n\n[jobs.lint]"),
+                1,
+            );
+            let err = error(&text);
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+    }
+
+    #[test]
     fn each_error_names_the_file_the_step_and_the_problem() {
         let cases: Vec<(String, &str)> = vec![
             (with("id = \"ci\"", "id = \"refine\""), "step `refine`: the id is used by more than one step (steps 1 and 3)"),

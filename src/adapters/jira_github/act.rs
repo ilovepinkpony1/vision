@@ -34,10 +34,11 @@ pub struct Acting {
 type Verb = fn(&Config, &Map<String, Value>, bool, &mut Acting) -> Res<Value>;
 type Read = fn(&Config, &Map<String, Value>) -> Res<Value>;
 
-const VERBS: [(&str, Verb); 12] = [
+const VERBS: [(&str, Verb); 13] = [
     ("ci.rerun", ci_rerun),
     ("ci.run", ci_run),
     ("deploy", deploy),
+    ("deploy.fix", deploy_fix),
     ("deploy.merge", deploy_merge),
     ("git.push", git_push),
     ("pr.open", pr_open),
@@ -1604,6 +1605,20 @@ fn ci_rerun(
     };
     let workflow = config.text_need("ci_workflow", why)?;
     let gh = GitHub::new(config, why, None)?;
+    // With args.env, the run is the one of the tip of the env branch, which the push of a
+    // deploy started: not the run of the head of the ticket.
+    let (commit, place) = match env_of(config, call, why)? {
+        Some(env) => match gh.branch_head(&env.branch)? {
+            Some(tip) => (tip, format!(" (the tip of {})", env.branch)),
+            None => {
+                return failed(&format!(
+                    "the branch {} of the env {} does not exist on GitHub",
+                    env.branch, env.name
+                ))
+            }
+        },
+        None => (head.clone(), String::new()),
+    };
     let (known_id, before) = if reconcile {
         stored_run(call.get("external_id"))
     } else {
@@ -1617,12 +1632,12 @@ fn ci_rerun(
             )?;
             truthy(Some(&run)).cloned()
         }
-        None => gh.last_run(Some(&head), &workflow)?,
+        None => gh.last_run(Some(&commit), &workflow)?,
     };
     let Some(run) = run else {
         return failed(&format!(
-            "no run of {workflow} at {}, so nothing runs again",
-            short(&head)
+            "no run of {workflow} at {}{place}, so nothing runs again",
+            short(&commit)
         ));
     };
     let run_id = py_opt(run.get("id"));
@@ -1713,6 +1728,31 @@ fn ci_rerun(
             ));
         }
         pause(poll, deadline);
+    }
+}
+
+/// The env of `args.env` of a call, or `None` when the call names no env. A name that `envs`
+/// of the [adapter] table does not list is a failure.
+pub(super) fn env_of(
+    config: &Config,
+    call: &Map<String, Value>,
+    why: &str,
+) -> Res<Option<super::core::Env>> {
+    let name = match args_of(call).get("env") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::String(n)) if !n.trim().is_empty() => n.trim().to_string(),
+        Some(other) => {
+            return fail(format!(
+                "{why} needs args.env as the name of an env of `envs`, not {}",
+                py_repr_str(&clean(&py_str(other), 40))
+            ))
+        }
+    };
+    match config.envs()?.into_iter().find(|e| e.name == name) {
+        Some(env) => Ok(Some(env)),
+        None => fail(format!(
+            "{why} needs the env {name} in `envs` of the [adapter] table, with its branch"
+        )),
     }
 }
 
@@ -1917,7 +1957,13 @@ pub(super) fn merge_waits(work: &Path) -> Res<bool> {
 
 /// The path of the list of the files with a conflict, in the git folder of the worktree `work`.
 fn conflict_list_path(work: &Path) -> Res<PathBuf> {
-    let list = Git::new(&["rev-parse", "--git-path", CONFLICT_LIST], Some(work)).text()?;
+    git_file(work, CONFLICT_LIST)
+}
+
+/// The path of a file of Vision in the git folder of the worktree `work`, where no commit and
+/// no sandbox of a turn reaches it.
+fn git_file(work: &Path, name: &str) -> Res<PathBuf> {
+    let list = Git::new(&["rev-parse", "--git-path", name], Some(work)).text()?;
     Ok(if Path::new(&list).is_absolute() {
         PathBuf::from(list)
     } else {
@@ -2043,7 +2089,10 @@ fn remove_merge(clone: &Path, folder: &str) {
         .unchecked()
         .run();
     let path = clone.join(folder);
-    if path.starts_with(clone.join(".vision").join("merge")) && path.exists() {
+    let vision = clone.join(".vision");
+    if (path.starts_with(vision.join("merge")) || path.starts_with(vision.join("fix")))
+        && path.exists()
+    {
         let _ = std::fs::remove_dir_all(&path);
     }
 }
@@ -2370,6 +2419,509 @@ fn conflict_marker(work: &Path, merge: &str) -> Res<Option<String>> {
         [_, path, line, _] => format!("{path}:{line}"),
         _ => clean(&first, 120),
     }))
+}
+
+// env-fix and deploy.fix ------------------------------------------------------------------------
+
+/// The document of the job env-fix for the agent that fixes the CI of an env branch.
+const ENV_FIX_DOC: &str = "env-fix.md";
+
+/// The file in the git folder of a fix worktree that names the tip of the env branch where the
+/// fix starts.
+const FIX_TIP: &str = "vision-fix-tip";
+
+/// The folder of the fix of the CI of an env, relative to the clone: inside `.vision/`, which
+/// the clone ignores.
+fn fix_folder(env: &str) -> String {
+    format!(".vision/fix/{env}")
+}
+
+/// The env of a job or verb that writes to an env branch: its name and its branch. It refuses
+/// the base branch, a name that cannot be a folder, and a branch name that git refuses.
+fn staging_env(
+    config: &Config,
+    call: &Map<String, Value>,
+    why: &str,
+    word: &str,
+) -> Res<(String, String)> {
+    let Some(env) = env_of(config, call, why)? else {
+        return fail(format!(
+            "{why} needs args.env: the name of an env of `envs`"
+        ));
+    };
+    if env.branch == config.base_branch()? || bad_ref(&env.branch) || !plain_name(&env.name) {
+        return refuse(format!(
+            "{why} refuses the branch {} of the env {}: it {word} only a staging branch",
+            py_repr_str(&env.branch),
+            env.name
+        ));
+    }
+    Ok((env.name, env.branch))
+}
+
+/// A relative path with no `..`, no root, and no empty part, as an entry of `links`.
+fn plain_relative(path: &str) -> bool {
+    let p = Path::new(path);
+    !path.trim().is_empty()
+        && p.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Links each entry of `links` of the job table from the clone into the fix worktree, so that
+/// the tests of the project can run there: files that git ignores, such as a generated
+/// configuration or the installed packages. An entry that the clone lacks, that the worktree
+/// already has, or that git does not ignore in the worktree (so that a commit could take it)
+/// gets no link. Gives the linked entries and the reasons of the others.
+fn link_ignored(clone: &Path, work: &Path, links: &[String]) -> (Vec<String>, Vec<String>) {
+    let (mut linked, mut skipped) = (Vec::new(), Vec::new());
+    for entry in links {
+        let entry = entry.trim().trim_end_matches('/');
+        if !plain_relative(entry) {
+            skipped.push(format!("`{entry}`: not a plain relative path"));
+            continue;
+        }
+        let (source, target) = (clone.join(entry), work.join(entry));
+        if !source.exists() {
+            skipped.push(format!("`{entry}`: the clone has none"));
+            continue;
+        }
+        if target.symlink_metadata().is_ok() {
+            skipped.push(format!("`{entry}`: the branch has its own"));
+            continue;
+        }
+        let ignored = Git::new(&["check-ignore", "-q", "--no-index", entry], Some(work))
+            .unchecked()
+            .run()
+            .is_ok_and(|o| o.code == Some(0));
+        if !ignored {
+            skipped.push(format!("`{entry}`: git does not ignore it"));
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::os::unix::fs::symlink(&source, &target) {
+            Ok(()) => linked.push(entry.to_string()),
+            Err(e) => skipped.push(format!("`{entry}`: {e}")),
+        }
+    }
+    (linked, skipped)
+}
+
+/// The files that the change of the ticket touches: the diff of the base ref of the adapter
+/// and the head, in the clone. `None` when git cannot tell.
+fn ticket_files(config: &Config, clone: &Path, head: &str) -> Option<Vec<String>> {
+    let base = config.base_ref.as_deref().map(str::trim).filter(|b| {
+        !b.is_empty()
+            && !b.starts_with('-')
+            && !b.contains("..")
+            && !b.contains(char::is_whitespace)
+    })?;
+    let range = format!("{base}...{head}");
+    let out = Git::new(&["diff", "--name-only", &range, "--"], Some(clone))
+        .unchecked()
+        .run()
+        .ok()?;
+    (out.code == Some(0)).then(|| names(&out.stdout_text()))
+}
+
+/// The keys of the table of the job env-fix: `links`, the entries that git ignores and that the
+/// job links from the clone into the fix worktree.
+pub static ENV_FIX_SETTINGS: crate::adapters::JobSettings = crate::adapters::JobSettings {
+    keys: &["links"],
+    check: check_env_fix,
+    env: crate::adapter::JobEnv::Plain,
+    no_secrets: false,
+    timeout: env_fix_timeout,
+};
+
+/// The time limit of the job env-fix when its table has none: the fetch can take 450 s and the
+/// worktree 600 s, but each one usually takes seconds.
+fn env_fix_timeout(_: &Map<String, Value>) -> (u64, u64) {
+    (900, 0)
+}
+
+/// The problems of `links` of the job env-fix: it is a list of plain relative paths.
+fn check_env_fix(settings: &Map<String, Value>) -> Vec<String> {
+    let example = "such as links = [\"config/database.yml\", \"node_modules\"]";
+    match settings.get("links") {
+        None => Vec::new(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item.as_str() {
+                Some(text) if plain_relative(text.trim().trim_end_matches('/')) => None,
+                _ => Some(format!(
+                    "links has {}, which is not a plain relative path of the clone, {example}",
+                    clean(&py_str(item), 60)
+                )),
+            })
+            .collect(),
+        Some(_) => vec![format!(
+            "links must be a list of paths of the clone, {example}"
+        )],
+    }
+}
+
+/// The job env-fix: the CI of the tip of an env branch is red, so an agent fixes it. The job
+/// fetches the tip as `refs/vision/fix/<env>`, makes the worktree `.vision/fix/<env>` at that
+/// tip with no branch (an old one goes first), links the ignored files of `links` of the job
+/// table into it, and writes env-fix.md and ci-log.txt: the run, the end of the log of each
+/// failed job, the files of the change of the ticket, and what to do. The job never commits
+/// and never pushes: deploy.fix does that after the turn.
+pub(super) fn env_fix(config: &Config, call: &Map<String, Value>) -> Res<Value> {
+    let why = "the job env-fix";
+    let Some(clone) = clone_of(call) else {
+        return fail(format!("{why} needs the clone of the ticket"));
+    };
+    let key = check_key(call.get("key"), "the ticket key")?;
+    let (name, branch) = staging_env(config, call, why, "fixes")?;
+    let head = commit_of(truthy(call.get("head")))
+        .map(str::to_string)
+        .unwrap_or_default();
+    let workflow = config.text_need("ci_workflow", why)?;
+    let url = remote_url(config, why)?;
+    let settings = [
+        NO_REDIRECT.to_string(),
+        auth_config(&url, &secret("FORGE_TOKEN", why)?),
+    ];
+    let reference = format!("refs/vision/fix/{name}");
+    let refspec = format!("+refs/heads/{branch}:{reference}");
+    Git::new(
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-recurse-submodules",
+            &url,
+            &refspec,
+        ],
+        Some(&clone),
+    )
+    .timeout(450)
+    .config(&settings)
+    .run()?;
+    let tip = Git::new(
+        &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+        Some(&clone),
+    )
+    .text()?;
+    let folder = fix_folder(&name);
+    remove_merge(&clone, &folder);
+    std::fs::create_dir_all(clone.join(".vision").join("fix"))
+        .map_err(|e| Error::Unexpected(format!("OSError: {e}")))?;
+    Git::new(
+        &["worktree", "add", "--detach", "--quiet", &folder, &tip],
+        Some(&clone),
+    )
+    .timeout(600)
+    .run()?;
+    let work = clone.join(&folder);
+    std::fs::write(git_file(&work, FIX_TIP)?, format!("{tip}\n"))
+        .map_err(|e| Error::Unexpected(format!("OSError: {e}")))?;
+    let links: Vec<String> = match call.get("table").and_then(|t| t.get("links")) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let (linked, skipped) = link_ignored(&clone, &work, &links);
+
+    let gh = GitHub::new(config, why, None)?;
+    let run = gh.last_run(Some(&tip), &workflow)?;
+    let state = forge::run_state(run.as_ref());
+    let run_line = match &run {
+        Some(run) => format!(
+            "{} ({state}, attempt {}): {}",
+            py_opt(run.get("id")),
+            attempt_of(run),
+            text_of(run.get("html_url"))
+        ),
+        None => format!("none: no run of {workflow} at this tip"),
+    };
+    let keep = (config.number("log_tail_kb", 64.0)? * 1024.0).trunc() as usize;
+    let (log, log_detail) = jobs::ci_log_text(&gh, config, &tip, &workflow, keep, None)?;
+
+    let files = match (head.is_empty(), ticket_files(config, &clone, &head)) {
+        (false, Some(files)) if !files.is_empty() => files
+            .iter()
+            .map(|f| format!("- `{f}`"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        (false, Some(_)) => "None.".to_string(),
+        _ => "Not known: git could not compare the head with the base ref.".to_string(),
+    };
+    let links_text = match (linked.is_empty(), skipped.is_empty()) {
+        (true, true) => String::new(),
+        _ => {
+            let mut text = String::from("\n## Links from the clone\n\n");
+            if !linked.is_empty() {
+                text.push_str(&format!(
+                    "The fix folder links these ignored entries of the clone, so that the tests can run there: {}.\n",
+                    linked
+                        .iter()
+                        .map(|l| format!("`{l}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !skipped.is_empty() {
+                text.push_str(&format!("No link for: {}.\n", skipped.join("; ")));
+            }
+            text
+        }
+    };
+    let content = format!(
+        "# The CI of {branch} is red at the tip that holds {key}\n\n\
+         Vision merged the head of {key} into `{branch}`, the branch of the env {name}. That push started a run of {workflow} at the tip of the branch, and the run stayed red after one more try of its failed jobs. An env that deploys only a green tip does not take the change of {key} until a run there is green.\n\n\
+         - Env: {name}\n\
+         - Branch of the env: `{branch}`\n\
+         - Tip of that branch: `{tip}`\n\
+         - Head of the ticket: `{head}`\n\
+         - Run: {run_line}\n\
+         - Fix folder: `{folder}`\n\n\
+         `ci-log.txt` holds the end of the log of each failed job of the run.\n\n\
+         ## Files that the change of {key} touches\n\n{files}\n{links_text}\n\
+         ## Where the fix goes\n\n\
+         Find the cause first. Then write `ci-fix.md`. Its first line is the commit message of the fix, and one line of it says where the fix is:\n\n\
+         - `Fixed in: branch`: the cause is in the change of {key}. Fix it in the clone, on the branch of the ticket, and commit there. The fix goes through the pull request again, and a new deploy takes it to `{branch}`.\n\
+         - `Fixed in: staging`: the cause is in code that only `{branch}` has, such as a test of another branch, or the way that two branches meet there. Fix it in the fix folder, and edit its files only: do not stage, commit, or push. After the turn, `deploy.fix` commits each change of the fix folder with the first line of `ci-fix.md` and pushes it to `{branch}`, only while the branch is still at `{tip}`.\n\
+         - `Fixed in: none`: the cause is outside the code, such as a machine of the CI. Change nothing, and give the reason. The person decides.\n\n\
+         Keep notes out of the fix folder: each file there goes into the commit.\n"
+    );
+    let detail = format!(
+        "the fix folder {folder} is at {} of {branch}; the run there is {state}; {log_detail}",
+        short(&tip)
+    );
+    Ok(json!({
+        "ok": true,
+        "detail": detail,
+        "documents": [
+            {"name": ENV_FIX_DOC, "content": content},
+            {"name": "ci-log.txt", "content": log},
+        ],
+    }))
+}
+
+/// The commit message of a fix from the text of the turn: its first line with text, with no
+/// `#` of a heading and no `Commit:` label, at most 200 characters. With no such line, a
+/// message that names the ticket and the branch.
+fn fix_message(text: Option<&Value>, key: &str, branch: &str) -> String {
+    let text = text.and_then(Value::as_str).unwrap_or("");
+    let first = text
+        .lines()
+        .map(|l| l.trim().trim_start_matches('#').trim())
+        .map(|l| l.strip_prefix("Commit:").map_or(l, str::trim))
+        .find(|l| !l.is_empty() && !l.starts_with("Fixed in:"))
+        .unwrap_or("");
+    let first = clean(first, 200);
+    if first.is_empty() {
+        format!("Fix the CI of {branch} for {key}")
+    } else {
+        first
+    }
+}
+
+/// The commit of a fix that an uncertain answer of deploy.fix stored in its external id:
+/// `deploy-fix-<env>-<commit>`.
+fn stored_fix(external_id: Option<&Value>, env: &str) -> Option<String> {
+    let text = external_id.and_then(Value::as_str)?;
+    let commit = super::core::line_end(text).strip_prefix(&format!("deploy-fix-{env}-"))?;
+    is_full_commit(commit).then(|| commit.to_string())
+}
+
+fn is_full_commit(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Commits the changes that an agent made in the fix folder of an env (see the job env-fix)
+/// and pushes the commit to the branch of the env. The sandbox of a turn cannot write the git
+/// folder of a worktree, so the agent only edits files, and this verb stages each change and
+/// commits it with the first line of `args.text` and the identity of the call. A fix that a
+/// person committed by hand on the tip goes as it is. It pushes only a commit whose parent is
+/// the tip that the branch still has, so the push is a fast-forward, and never a commit that
+/// holds a conflict marker. After the push, the fix folder goes away.
+fn deploy_fix(
+    config: &Config,
+    call: &Map<String, Value>,
+    reconcile: bool,
+    state: &mut Acting,
+) -> Res<Value> {
+    let why = "deploy.fix";
+    let key = check_key(call.get("key"), "the ticket key")?;
+    let (name, branch) = staging_env(config, call, why, "pushes")?;
+    let gh = GitHub::new(config, why, None)?;
+    let clone = clone_of(call);
+    let folder = fix_folder(&name);
+    let work = clone.as_ref().map(|c| c.join(&folder));
+    let recorded_tip = work
+        .as_ref()
+        .filter(|w| w.is_dir())
+        .and_then(|w| git_file(w, FIX_TIP).ok())
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| is_full_commit(t));
+    if reconcile {
+        let folder_commit = work
+            .as_ref()
+            .filter(|w| w.is_dir())
+            .and_then(|w| {
+                Git::new(&["rev-parse", "--verify", "HEAD^{commit}"], Some(w))
+                    .text()
+                    .ok()
+            })
+            .filter(|c| Some(c) != recorded_tip.as_ref());
+        let Some(commit) = stored_fix(call.get("external_id"), &name).or(folder_commit) else {
+            return failed(&format!(
+                "no commit of a fix to look for: the push of the fix to {branch} did not happen"
+            ));
+        };
+        return match gh.holds(&branch, &commit)? {
+            Some(true) => {
+                if let Some(clone) = &clone {
+                    remove_merge(clone, &folder);
+                }
+                confirmed(
+                    &format!("{branch} holds the fix {}", short(&commit)),
+                    format!("deploy-fix-{name}-{commit}"),
+                )
+            }
+            _ => failed(&format!(
+                "{branch} does not hold the fix {}: its push did not happen",
+                short(&commit)
+            )),
+        };
+    }
+    let (Some(clone), Some(work)) = (clone, work) else {
+        return fail("deploy.fix needs the clone of the ticket");
+    };
+    if !work.is_dir() {
+        return failed(&format!(
+            "no fix waits in {folder}. Run the step again, so that the job env-fix makes the fix folder"
+        ));
+    }
+    let Some(tip) = recorded_tip else {
+        return failed(&format!(
+            "the fix folder {folder} names no tip of {branch}. Run the step again, so that the job env-fix makes it again"
+        ));
+    };
+    let now = Git::new(&["rev-parse", "--verify", "HEAD^{commit}"], Some(&work)).text()?;
+    let commit = if now == tip {
+        Git::new(&["add", "-A"], Some(&work)).run()?;
+        let files = names(&Git::new(&["diff", "--cached", "--name-only"], Some(&work)).text()?);
+        if files.is_empty() {
+            return failed(&format!(
+                "the fix folder {folder} has no change, so nothing goes to {branch}"
+            ));
+        }
+        if let Some(marker) = working_marker(&work, &files) {
+            let _ = Git::new(&["reset", "--quiet"], Some(&work))
+                .unchecked()
+                .run();
+            return failed(&format!(
+                "the fix in {folder} holds a conflict marker at {marker}. Remove it, then run the step again"
+            ));
+        }
+        let message = fix_message(args_of(call).get("text"), &key, &branch);
+        let mut settings = identity_settings(call);
+        settings.push("commit.gpgsign=false".into());
+        Git::new(
+            &["commit", "--quiet", "--no-verify", "-m", &message],
+            Some(&work),
+        )
+        .config(&settings)
+        .run()?;
+        Git::new(&["rev-parse", "--verify", "HEAD^{commit}"], Some(&work)).text()?
+    } else {
+        let parent = Git::new(&["rev-parse", "--verify", "HEAD^1"], Some(&work))
+            .unchecked()
+            .run()?;
+        if parent.code != Some(0) || parent.stdout_text().trim() != tip {
+            return failed(&format!(
+                "the commit {} in {folder} does not start at the tip {} of {branch}: push only one commit on that tip",
+                short(&now),
+                short(&tip)
+            ));
+        }
+        now
+    };
+    if let Some(marker) = conflict_marker(&work, &commit)? {
+        return failed(&format!(
+            "the fix {} holds a conflict marker at {marker}. Remove it, then run the step again",
+            short(&commit)
+        ));
+    }
+    let files = names(
+        &Git::new(
+            &["diff", "--name-only", &format!("{commit}^1"), &commit],
+            Some(&work),
+        )
+        .text()?,
+    );
+    let url = remote_url(config, why)?;
+    let auth = auth_config(&url, &secret("FORGE_TOKEN", why)?);
+    let remote = remote_head(&url, &branch, &auth)?;
+    if remote.as_deref() != Some(tip.as_str()) {
+        remove_merge(&clone, &folder);
+        return failed(&format!(
+            "{branch} moved from {} to {} after the fix started, and Vision never forces a push. Run the step again, so that the fix starts at the new tip",
+            short(&tip),
+            short_opt(remote.as_deref())
+        ));
+    }
+    let external = format!("deploy-fix-{name}-{commit}");
+    state.acted = true;
+    let output = push_commit(&clone, &url, &branch, &commit, &auth)?;
+    if output.code != Some(0) {
+        let text = output.stderr_text();
+        let lines: Vec<&str> = splitlines(&text)
+            .into_iter()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with("hint:"))
+            .collect();
+        let header = auth.split_once('=').map(|(_, v)| v).unwrap_or("");
+        let err = clean(&lines[lines.len().saturating_sub(4)..].join(" "), 300)
+            .replace(header, "[header]");
+        let all = lines.join(" ");
+        if ["[rejected]", "non-fast-forward", "fetch first"]
+            .iter()
+            .any(|w| all.contains(w))
+        {
+            remove_merge(&clone, &folder);
+            return failed(&format!(
+                "{branch} moved after the fix started, and Vision never forces a push: {err}. Run the step again, so that the fix starts at the new tip"
+            ));
+        }
+        return Ok(answer(
+            "uncertain",
+            &format!("git push of the fix failed: {err}"),
+            Some(external),
+            None,
+            None,
+        ));
+    }
+    if remote_head(&url, &branch, &auth)?.as_deref() != Some(commit.as_str()) {
+        return Ok(answer(
+            "uncertain",
+            &format!(
+                "git push ended, but {branch} is not at the fix {} on the remote",
+                short(&commit)
+            ),
+            Some(external),
+            None,
+            None,
+        ));
+    }
+    remove_merge(&clone, &folder);
+    confirmed(
+        &format!(
+            "pushed the fix {} to {branch} on its tip {}: {}",
+            short(&commit),
+            short(&tip),
+            files.join(", ")
+        ),
+        external,
+    )
 }
 
 // review.rerequest ------------------------------------------------------------------------------

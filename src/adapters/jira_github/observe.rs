@@ -163,6 +163,11 @@ fn ticket(config: &Config, call: &Map<String, Value>) -> Res<Value> {
             _ => false,
         };
         let mut facts = json!({"branch": env.branch, "head": tip, "holds": holds});
+        if let (true, Some(tip)) = (holds, &tip) {
+            for (k, v) in env_ci_facts(&gh, tip, &workflow)? {
+                facts[k] = v;
+            }
+        }
         if let Some(deployment) = &env.deployment {
             for (k, v) in deployed_facts(&gh, deployment, head.as_deref())? {
                 facts[k] = v;
@@ -179,6 +184,32 @@ fn ticket(config: &Config, call: &Map<String, Value>) -> Res<Value> {
         "ci": ci,
         "envs": envs,
     }))
+}
+
+/// The CI of the tip of an env branch that holds the head of the ticket: `ci` is the state of
+/// the last run of the CI workflow at that tip (green, red, running, or none), with `ci_run`
+/// and `ci_url` of that run. A push to a staging branch starts that run, and an env whose
+/// deploy waits for a green run never takes a red tip. observe asks for it only while the
+/// branch holds the head, so an env that does not hold it has none of the three facts.
+fn env_ci_facts(gh: &GitHub, tip: &str, workflow: &str) -> Res<Map<String, Value>> {
+    let run = gh.last_run(Some(tip), workflow)?;
+    let mut out = Map::new();
+    out.insert("ci".into(), json!(forge::run_state(run.as_ref())));
+    out.insert(
+        "ci_run".into(),
+        run.as_ref()
+            .and_then(|r| r.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    out.insert(
+        "ci_url".into(),
+        run.as_ref()
+            .and_then(|r| truthy(r.get("html_url")))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    Ok(out)
 }
 
 /// The facts of the newest deployment of a GitHub environment: `deployed` is true when its

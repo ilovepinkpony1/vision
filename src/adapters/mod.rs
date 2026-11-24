@@ -44,6 +44,7 @@ pub struct JobSettings {
 pub fn job_settings(builtin: &str, job: &str) -> Option<&'static JobSettings> {
     match (builtin, job) {
         (jira_github::NAME, "precheck") => Some(&jira_github::precheck::SETTINGS),
+        (jira_github::NAME, "env-fix") => Some(&jira_github::act::ENV_FIX_SETTINGS),
         _ => None,
     }
 }
