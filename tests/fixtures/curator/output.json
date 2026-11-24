@@ -34,6 +34,11 @@
     {
       "op": "question",
       "question": "Do internal users ever need XLSX?",
+      "options": [
+        {"label": "Never so far", "means": "Never so far: each internal user reads CSV."},
+        {"label": "Finance does", "means": "Finance needs XLSX for its macros."}
+      ],
+      "recommended": 0,
       "evidence": [
         "D-0004"
       ],

@@ -17,6 +17,16 @@
           "removes": {"type": "array", "items": {"type": "string"}},
           "target": {"type": "string"},
           "question": {"type": "string"},
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["label", "means"],
+              "additionalProperties": false,
+              "properties": {"label": {"type": "string"}, "means": {"type": "string"}}
+            }
+          },
+          "recommended": {"type": "integer"},
           "evidence": {"type": "array", "items": {"type": "string"}},
           "reason": {"type": "string"}
         }

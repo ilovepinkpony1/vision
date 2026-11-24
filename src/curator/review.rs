@@ -6,8 +6,14 @@
 //! `a` accepts, `e` opens the file in `$EDITOR` and then accepts the edited text when it passes
 //! the lint, `r` rejects (with an optional reason), `s` skips, and `q` leaves.
 //!
+//! A question of the Curator lists its answers, and marks the recommended one. A number picks
+//! an answer, Enter picks the recommended one, and `c` asks for an answer of the person's own.
+//! A question of an older proposal, with no answers, takes only an answer of the person's own.
+//!
 //! Without a terminal it prints the open proposals and exits; `--json` prints them as JSON.
-//! `--accept N|all [--answer TEXT]` and `--reject N|all [--why TEXT]` act without a terminal.
+//! `--accept N|all [--choice K | --answer TEXT]` and `--reject N|all [--why TEXT]` act without
+//! a terminal. An accepted question with answers and with neither `--choice` nor `--answer`
+//! takes its recommended answer.
 //! An answer to a question that names exactly one decision with an empty section `## Why`
 //! becomes that reason, as a commit of the person.
 //!
@@ -37,6 +43,7 @@ use crate::memory::store::Invalid;
 use crate::memory::{
     Accepted, ChangeState, DecisionId, FileDiff, Memory, Op, ProposalChange, ProposalView,
 };
+use crate::questions::card::Choice as AnswerOption;
 use crate::util::fs::{atomic_write, ensure_dir};
 use crate::util::{git, time};
 
@@ -63,6 +70,10 @@ pub struct ChangeOverview {
     pub path: Option<String>,
     pub removes: Vec<String>,
     pub question: Option<String>,
+    /// The answers of a question that the person can pick.
+    pub options: Vec<AnswerOption>,
+    /// The index of the recommended answer, from 0.
+    pub recommended: Option<usize>,
     pub note: Option<String>,
     pub commit: Option<String>,
     pub evidence: Vec<EvidenceView>,
@@ -117,6 +128,8 @@ fn build_overview(
             path: c.change.path.clone(),
             removes: c.change.removes.clone(),
             question: c.change.question.clone(),
+            options: c.change.options.clone(),
+            recommended: c.change.recommended,
             note: c.change.note.clone(),
             commit: c.change.commit.clone(),
             evidence: evidence(memory, &c.change),
@@ -293,6 +306,7 @@ impl AcceptedChange {
 /// question of the Curator: the next Curator run reads it, and when the question names exactly
 /// one decision with an empty section `## Why`, it becomes that reason first, as a commit of
 /// the person. An answer to a change that is not a question is an error.
+#[allow(clippy::too_many_arguments)]
 pub fn accept(
     ctx: &Ctx,
     ledger: &Ledger,
@@ -300,6 +314,7 @@ pub fn accept(
     name: &str,
     change: &ProposalChange,
     answer: Option<&str>,
+    choice: Option<usize>,
     edited: bool,
 ) -> Result<AcceptedChange> {
     let answer = answer.map(str::trim).filter(|a| !a.is_empty());
@@ -340,6 +355,8 @@ pub fn accept(
                 "op": change.op, "path": accepted.path, "commit": accepted.commit,
                 "question": change.question, "edited": edited,
                 "reason_of": reason_of.map(|d| d.to_string()),
+                "choice": choice.map(|c| c + 1),
+                "recommended": change.recommended.map(|r| r + 1),
             })
             .to_string(),
         ),
@@ -351,6 +368,38 @@ pub fn accept(
         accepted,
         reason_of,
     })
+}
+
+/// The text of answer `choice` (from 0) of a question: its full answer, else its label.
+pub fn answer_text(change: &ProposalChange, choice: usize) -> Result<String> {
+    let Some(option) = change.options.get(choice) else {
+        bail!(
+            "change {} has the answers 1 to {}, so there is no answer {}",
+            change.n,
+            change.options.len(),
+            choice + 1
+        );
+    };
+    let means = option.means.trim();
+    Ok(if means.is_empty() {
+        option.label.trim().to_string()
+    } else {
+        means.to_string()
+    })
+}
+
+/// The line for people about a picked answer, such as ` Your answer: 1. CSV (recommended).`
+fn picked_text(change: &ProposalChange, choice: Option<usize>) -> String {
+    let Some(n) = choice else {
+        return String::new();
+    };
+    let label = change.options.get(n).map_or("", |o| o.label.as_str());
+    let mark = if change.recommended == Some(n) {
+        " (recommended)"
+    } else {
+        ""
+    };
+    format!(" Your answer: {}. {label}{mark}.", n + 1)
 }
 
 /// Rejects one change, and records it with the reason of the person for the next Curator run.
@@ -489,7 +538,7 @@ pub fn command(ctx: &Ctx, args: ReviewArgs) -> Result<()> {
         }
         out.push('\n');
     }
-    out.push_str("Run `vision memory review` in a terminal, or use --accept N|all [--answer TEXT] and --reject N|all [--why TEXT].\n");
+    out.push_str("Run `vision memory review` in a terminal, or use --accept N|all [--choice K | --answer TEXT] and --reject N|all [--why TEXT]. An accepted question with no --choice and no --answer takes its recommended answer.\n");
     print!("{out}");
     Ok(())
 }
@@ -558,21 +607,58 @@ fn act(ctx: &Ctx, ledger: &Ledger, memory: &Memory, args: &ReviewArgs) -> Result
                 );
             }
         }
+        if let Some(k) = args.choice {
+            let [change] = changes.as_slice() else {
+                bail!(
+                    "--choice picks an answer of one question, and {name} has {} open changes. Name the question with --accept N",
+                    changes.len()
+                );
+            };
+            if change.op != Op::Question || change.options.is_empty() {
+                bail!(
+                    "--choice is for a question of the Curator with answers, and change {} of {name} is not one ({}). Use --answer TEXT for a question with no answers",
+                    change.n,
+                    change.describe()
+                );
+            }
+            if k == 0 || k > change.options.len() {
+                bail!(
+                    "change {} of {name} has the answers 1 to {}, so --choice {k} picks none",
+                    change.n,
+                    change.options.len()
+                );
+            }
+        }
         for change in changes {
+            // A picked answer, else the answer of the person, else the recommended answer of a
+            // question with answers.
+            let choice = match (args.choice, args.answer.as_deref()) {
+                (Some(k), _) => Some(k - 1),
+                (None, None) if change.op == Op::Question => {
+                    change.recommended.filter(|r| *r < change.options.len())
+                }
+                _ => None,
+            };
+            let answer = match choice {
+                Some(n) => Some(answer_text(&change, n)?),
+                None => args.answer.clone(),
+            };
             match accept(
                 ctx,
                 ledger,
                 memory,
                 &name,
                 &change,
-                args.answer.as_deref(),
+                answer.as_deref(),
+                choice,
                 false,
             ) {
                 Ok(done) => println!(
-                    "Accepted change {}: {}{}.{}",
+                    "Accepted change {}: {}{}.{}{}",
                     change.n,
                     change.describe(),
                     commit_text(&done.accepted),
+                    picked_text(&change, choice),
                     done.reason_text()
                 ),
                 Err(e) => {
@@ -715,6 +801,21 @@ pub fn change_text(change: &ChangeOverview, total: usize) -> String {
             }
         }
     }
+    if !change.options.is_empty() {
+        out.push_str("  Answers:\n");
+        for (i, option) in change.options.iter().enumerate() {
+            let mark = if change.recommended == Some(i) {
+                " (recommended)"
+            } else {
+                ""
+            };
+            out.push_str(&format!("    {}. {}{mark}\n", i + 1, option.label.trim()));
+            if !option.means.trim().is_empty() {
+                out.push_str(&indent(option.means.trim(), "       "));
+            }
+        }
+        out.push_str("    c. your own answer\n");
+    }
     for diff in &change.diffs {
         out.push_str(&format!("  Diff of {}:\n", diff.path));
         let body: Vec<&str> = diff
@@ -814,6 +915,17 @@ impl Drop for RawMode {
     }
 }
 
+/// The key of one byte of the terminal in raw mode: Enter, Ctrl-C or Ctrl-D, a letter in lower
+/// case, or a digit, which picks an answer of a question. Each other byte is no key.
+fn key_of_byte(b: u8) -> Option<Key> {
+    match b {
+        b'\r' | b'\n' => Some(Key::Enter),
+        3 | 4 => Some(Key::Quit),
+        b if b.is_ascii_alphanumeric() => Some(Key::Char(char::from(b.to_ascii_lowercase()))),
+        _ => None,
+    }
+}
+
 impl Keys for TerminalKeys {
     fn key(&mut self) -> Result<Key> {
         let Some(_raw) = RawMode::enter() else {
@@ -825,13 +937,8 @@ impl Keys for TerminalKeys {
             if lock.read(&mut byte)? == 0 {
                 return Ok(Key::Quit);
             }
-            match byte[0] {
-                b'\r' | b'\n' => return Ok(Key::Enter),
-                3 | 4 => return Ok(Key::Quit),
-                b if b.is_ascii_alphabetic() => {
-                    return Ok(Key::Char(char::from(b.to_ascii_lowercase())))
-                }
-                _ => continue,
+            if let Some(key) = key_of_byte(byte[0]) {
+                return Ok(key);
             }
         }
     }
@@ -931,6 +1038,9 @@ fn one_change(
     name: &str,
     change: &ProposalChange,
 ) -> Result<Choice> {
+    if change.op == Op::Question && !change.options.is_empty() {
+        return one_question(ctx, ledger, memory, keys, out, name, change);
+    }
     let can_edit = change
         .path
         .as_ref()
@@ -959,7 +1069,16 @@ fn one_change(
                 } else {
                     None
                 };
-                match accept(ctx, ledger, memory, name, change, answer.as_deref(), false) {
+                match accept(
+                    ctx,
+                    ledger,
+                    memory,
+                    name,
+                    change,
+                    answer.as_deref(),
+                    None,
+                    false,
+                ) {
                     Ok(done) => {
                         writeln!(
                             out,
@@ -982,7 +1101,7 @@ fn one_change(
                     continue;
                 };
                 match edit(memory, name, change, editor) {
-                    Ok(_) => match accept(ctx, ledger, memory, name, change, None, true) {
+                    Ok(_) => match accept(ctx, ledger, memory, name, change, None, None, true) {
                         Ok(done) => {
                             writeln!(
                                 out,
@@ -1022,5 +1141,116 @@ fn one_change(
             Key::Char('q') | Key::Quit => return Ok(Choice::Quit),
             _ => {}
         }
+    }
+}
+
+/// A question of the Curator with answers: a number picks an answer, Enter picks the
+/// recommended one, `c` asks for an answer of the person's own, `r` rejects the question, `s`
+/// skips it, and `q` leaves.
+fn one_question(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    memory: &Memory,
+    keys: &mut dyn Keys,
+    out: &mut dyn Write,
+    name: &str,
+    change: &ProposalChange,
+) -> Result<Choice> {
+    let total = change.options.len();
+    let recommended = change.recommended.filter(|r| *r < total);
+    loop {
+        let enter = recommended
+            .map(|r| format!(", Enter the recommended ({})", r + 1))
+            .unwrap_or_default();
+        write!(
+            out,
+            "1-{total} pick{enter}, c your own answer, r reject, s skip, q leave: "
+        )?;
+        out.flush()?;
+        let key = keys.key()?;
+        writeln!(out)?;
+        let (answer, choice) = match key {
+            Key::Enter => match recommended {
+                Some(r) => (answer_text(change, r)?, Some(r)),
+                None => continue,
+            },
+            Key::Char(c) if c.is_ascii_digit() => {
+                let n = c.to_digit(10).unwrap_or(0) as usize;
+                if n == 0 || n > total {
+                    writeln!(out, "Pick an answer from 1 to {total}.")?;
+                    continue;
+                }
+                (answer_text(change, n - 1)?, Some(n - 1))
+            }
+            Key::Char('c') => {
+                match answer_fills(memory, change) {
+                    Some(id) => write!(
+                        out,
+                        "Your answer. It becomes the reason of {id} (Enter to go back): "
+                    )?,
+                    None => write!(out, "Your answer (Enter to go back): ")?,
+                }
+                out.flush()?;
+                match keys.line()? {
+                    Some(text) if !text.trim().is_empty() => (text, None),
+                    _ => continue,
+                }
+            }
+            Key::Char('r') => {
+                write!(out, "Why, for the next Curator run (Enter for no reason): ")?;
+                out.flush()?;
+                let why = keys.line()?;
+                match reject(ctx, ledger, memory, name, change, why.as_deref()) {
+                    Ok(()) => {
+                        writeln!(out, "Rejected change {}.", change.n)?;
+                        return Ok(Choice::Next);
+                    }
+                    Err(e) => {
+                        writeln!(out, "Could not reject it: {e:#}")?;
+                        continue;
+                    }
+                }
+            }
+            Key::Char('s') => return Ok(Choice::Next),
+            Key::Char('q') | Key::Quit => return Ok(Choice::Quit),
+            _ => continue,
+        };
+        match accept(
+            ctx,
+            ledger,
+            memory,
+            name,
+            change,
+            Some(&answer),
+            choice,
+            false,
+        ) {
+            Ok(done) => {
+                writeln!(
+                    out,
+                    "Accepted change {}.{}{}",
+                    change.n,
+                    picked_text(change, choice),
+                    done.reason_text()
+                )?;
+                return Ok(Choice::Next);
+            }
+            Err(e) => writeln!(out, "Could not accept it: {e:#}")?,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_byte_of_the_terminal_is_enter_a_letter_or_a_digit() {
+        assert_eq!(key_of_byte(b'\r'), Some(Key::Enter));
+        assert_eq!(key_of_byte(3), Some(Key::Quit));
+        assert_eq!(key_of_byte(b'A'), Some(Key::Char('a')));
+        assert_eq!(key_of_byte(b'2'), Some(Key::Char('2')));
+        assert_eq!(key_of_byte(b' '), None);
+        assert_eq!(key_of_byte(0x1b), None);
     }
 }

@@ -521,10 +521,10 @@ fn curate_builds_a_proposal_with_its_replays_and_the_review_brings_it_to_main() 
     );
 
     // The interactive review: edit then accept change 2, reject change 3 with a reason, skip
-    // change 4, and answer the question of change 5.
+    // change 4, and answer the question of change 5 with an answer of the person's own.
     let ctx = home.ctx();
     let mut input = std::io::Cursor::new(
-        "e\nr\nThey differ in scope.\ns\na\nNever so far.\n"
+        "e\nr\nThey differ in scope.\ns\nc\nNever so far.\n"
             .as_bytes()
             .to_vec(),
     );
@@ -733,18 +733,145 @@ fn a_loose_output_of_a_real_session_still_makes_a_valid_principle() {
     home.run(&["memory", "lint"]).expect_code(0);
 }
 
+/// A question of the Curator with two answers: the first one is recommended.
+fn question_change(question: &str, evidence: &[&str], reason: &str) -> Value {
+    json!({"op": "question", "question": question, "evidence": evidence, "reason": reason,
+           "options": [
+               {"label": "The log tool", "means": "The log tool reads only CSV."},
+               {"label": "Finance", "means": "Finance imports the logs into a sheet."}
+           ],
+           "recommended": 0})
+}
+
+#[test]
+fn a_question_of_the_curator_offers_its_answers_and_takes_a_pick_the_recommended_one_or_your_own() {
+    let home = TestHome::new();
+    seed(&home);
+    let output = json!({"summary": "Three questions.", "changes": [
+        {"op": "retire", "target": "P-004", "reason": "The person corrected it twice."},
+        question_change("Why must the log export be CSV?", &["D-0004"], "D-0004 gave no reason."),
+        question_change("Is CSV still right for the export?", &["D-0001"], "D-0001 is old."),
+        question_change("Do both exports need CSV?", &["D-0001", "D-0004"], "Two answers chose CSV."),
+        // A question with one answer, or with no recommended one, is dropped.
+        {"op": "question", "question": "Is XLSX ever needed?", "reason": "r",
+         "options": [{"label": "No", "means": ""}], "recommended": 0},
+        {"op": "question", "question": "Is JSON ever needed?", "reason": "r",
+         "options": [{"label": "No", "means": ""}, {"label": "Yes", "means": ""}]},
+    ]});
+    curator_scenario(&home, output, 0.0);
+    home.run(&["curate"]).expect_code(0);
+    let views: Value =
+        serde_json::from_str(&home.run(&["memory", "review", "--json"]).stdout).unwrap();
+    assert_eq!(views[0]["open"], 4, "{views:#}");
+    assert_eq!(views[0]["changes"][1]["recommended"], 0);
+    assert_eq!(views[0]["changes"][1]["options"][1]["label"], "Finance");
+
+    // The list shows each answer, the recommended one, and the answer of your own.
+    let text = home.run(&["memory", "review"]);
+    text.expect_code(0);
+    for line in [
+        "  Answers:\n    1. The log tool (recommended)\n       The log tool reads only CSV.\n    2. Finance\n       Finance imports the logs into a sheet.\n    c. your own answer\n",
+        "--choice K | --answer TEXT",
+    ] {
+        assert!(text.stdout.contains(line), "no {line:?} in {text:?}");
+    }
+
+    // --choice names one answer of one question with answers.
+    for (args, says) in [
+        (
+            &["--accept", "2", "--choice", "3"][..],
+            "has the answers 1 to 2, so --choice 3 picks none",
+        ),
+        (
+            &["--accept", "1", "--choice", "1"][..],
+            "is not one (retire principles/P-004.md)",
+        ),
+        (
+            &["--accept", "all", "--choice", "1"][..],
+            "picks an answer of one question, and",
+        ),
+    ] {
+        let mut full = vec!["memory", "review"];
+        full.extend_from_slice(args);
+        let run = home.run(&full);
+        run.expect_code(1);
+        assert!(run.stderr.contains(says), "{args:?}: {run:?}");
+    }
+    assert_ne!(home.run(&["memory", "review", "--choice", "1"]).code, 0);
+
+    // A pick: the full answer becomes the reason of D-0004.
+    let run = home.run(&["memory", "review", "--accept", "2", "--choice", "2"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout
+            .contains(" Your answer: 2. Finance. Your answer is now the reason (## Why) of D-0004"),
+        "{run:?}"
+    );
+    assert!(main_file(&home, "decisions/D-0004.md")
+        .contains("## Why\nFinance imports the logs into a sheet.\n"));
+
+    // No --choice and no --answer: the recommended answer.
+    let run = home.run(&["memory", "review", "--accept", "3"]);
+    run.expect_code(0);
+    assert!(
+        run.stdout
+            .contains(" Your answer: 1. The log tool (recommended)."),
+        "{run:?}"
+    );
+    let rows = home
+        .ledger()
+        .human_rows_after(0, records::HUMAN_ACCEPT)
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[1].1.reason.as_deref(),
+        Some("The log tool reads only CSV.")
+    );
+    let value: Value = serde_json::from_str(rows[1].1.value.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (value["choice"].clone(), value["recommended"].clone()),
+        (json!(1), json!(1))
+    );
+
+    // The terminal: a number out of range asks again, `c` with no text goes back, and Enter
+    // takes the recommended answer.
+    let ctx = home.ctx();
+    let mut input = std::io::Cursor::new(b"s\n9\nc\n\n\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    vision::curator::review_lines(&ctx, &mut input, &mut out, None, None).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(
+        out.contains(
+            "1-2 pick, Enter the recommended (1), c your own answer, r reject, s skip, q leave: "
+        ),
+        "{out}"
+    );
+    assert!(out.contains("Pick an answer from 1 to 2."), "{out}");
+    assert!(out.contains("Your answer (Enter to go back): "), "{out}");
+    assert!(
+        out.contains("Accepted change 4. Your answer: 1. The log tool (recommended)."),
+        "{out}"
+    );
+    let rows = home
+        .ledger()
+        .human_rows_after(0, records::HUMAN_ACCEPT)
+        .unwrap();
+    assert_eq!(
+        rows[2].1.reason.as_deref(),
+        Some("The log tool reads only CSV.")
+    );
+    home.run(&["memory", "lint"]).expect_code(0);
+}
+
 #[test]
 fn an_answer_to_a_question_about_one_decision_with_no_reason_becomes_its_reason() {
     let home = TestHome::new();
     seed(&home);
     let output = json!({"summary": "Three questions.", "changes": [
         {"op": "retire", "target": "P-004", "reason": "The person corrected it twice."},
-        {"op": "question", "question": "Why must the log export be CSV?", "evidence": ["D-0004"],
-         "reason": "D-0004 gave no reason."},
-        {"op": "question", "question": "Is CSV still right for the export?", "evidence": ["D-0001"],
-         "reason": "D-0001 is old."},
-        {"op": "question", "question": "Do both exports need CSV?", "evidence": ["D-0001", "D-0004"],
-         "reason": "Two answers chose CSV."},
+        question_change("Why must the log export be CSV?", &["D-0004"], "D-0004 gave no reason."),
+        question_change("Is CSV still right for the export?", &["D-0001"], "D-0001 is old."),
+        question_change("Do both exports need CSV?", &["D-0001", "D-0004"], "Two answers chose CSV."),
     ]});
     curator_scenario(&home, output, 0.0);
     home.run(&["curate"]).expect_code(0);
@@ -932,6 +1059,8 @@ fn a_proposal_that_loses_a_line_is_rejected_and_main_stays() {
                 removes: vec![],
                 target: None,
                 question: None,
+                options: vec![],
+                recommended: None,
                 evidence: vec![],
                 reason: "Too wide.".into(),
             }],
@@ -990,6 +1119,8 @@ fn an_edited_change_passes_the_lint_and_keeps_each_line() {
                 removes: vec![],
                 target: None,
                 question: None,
+                options: vec![],
+                recommended: None,
                 evidence: vec![],
                 reason: "Too wide.".into(),
             }],

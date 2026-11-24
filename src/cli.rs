@@ -597,6 +597,10 @@ pub struct ReviewArgs {
     /// reads it. When the question names one decision with no reason, the answer becomes it
     #[arg(long, value_name = "TEXT", requires = "accept", conflicts_with_all = ["reject", "json"])]
     pub answer: Option<String>,
+    /// Pick answer K of a question of the Curator, from 1, with --accept N. Without --choice and
+    /// --answer, an accepted question with answers takes its recommended answer
+    #[arg(long, value_name = "K", requires = "accept", conflicts_with_all = ["answer", "reject", "json"])]
+    pub choice: Option<usize>,
 }
 
 /// One change of a proposal by its number, or each open change.

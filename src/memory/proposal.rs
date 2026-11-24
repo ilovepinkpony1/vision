@@ -11,7 +11,9 @@
 //! - `merge` writes the file that stays, and retires each file of `removes` (the files stay, so
 //!   that each id that a decision names keeps its file).
 //! - `retire` sets the status `retired` and keeps the reason in `## Retired`.
-//! - `question` changes no file. It waits for the person.
+//! - `question` changes no file. It waits for the person. It has 2 to 4 answers in `options`,
+//!   each with a short `label` and the full answer in `means`, and the index of the recommended
+//!   one in `recommended`, from 0. The person picks one, or writes an answer of their own.
 //!
 //! A change that names a missing file, or that would leave an invalid file, is skipped and
 //! named in [`Built::skipped`]. Two changes of one file are refused, so that each change can be
@@ -28,6 +30,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+
+pub use crate::questions::card::Choice;
 
 use ::time::Date;
 use anyhow::{anyhow, bail, Context, Result};
@@ -88,6 +92,12 @@ pub struct CuratorChange {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<String>,
+    /// The answers of a question that the person can pick.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<Choice>,
+    /// The index of the recommended answer of a question, from 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<String>,
     pub reason: String,
@@ -119,6 +129,13 @@ pub struct ProposalChange {
     pub removes: Vec<String>,
     #[serde(default)]
     pub question: Option<String>,
+    /// The answers of a question that the person can pick. A question of an older proposal has
+    /// none, and takes only an answer of the person.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<Choice>,
+    /// The index of the recommended answer of a question, from 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<usize>,
     /// Each path that the change writes.
     #[serde(default)]
     pub files: Vec<String>,
@@ -1082,6 +1099,43 @@ fn read_tree(dir: &std::path::Path) -> Result<BTreeMap<String, String>> {
 }
 
 /// The files of one change of the Curator, checked against the files before the proposal.
+/// The most answers that a question of the Curator can give.
+pub const MAX_ANSWERS: usize = 4;
+
+/// The answers of a question of the Curator and the index of the recommended one: 2 to
+/// [`MAX_ANSWERS`] answers, each with a label, and two answers never with the same label.
+fn answers_of(change: &CuratorChange) -> Result<(Vec<Choice>, usize), String> {
+    let options: Vec<Choice> = change
+        .options
+        .iter()
+        .map(|c| Choice {
+            label: c.label.trim().to_string(),
+            means: c.means.trim().to_string(),
+        })
+        .collect();
+    if options.len() < 2 || options.len() > MAX_ANSWERS {
+        return Err(format!(
+            "a question needs 2 to {MAX_ANSWERS} answers in `options`, and it has {}",
+            options.len()
+        ));
+    }
+    if options.iter().any(|c| c.label.is_empty()) {
+        return Err("each answer of a question needs a `label`".into());
+    }
+    let labels: BTreeSet<String> = options.iter().map(|c| c.label.to_lowercase()).collect();
+    if labels.len() != options.len() {
+        return Err("two answers of a question have the same `label`".into());
+    }
+    match change.recommended {
+        Some(n) if n < options.len() => Ok((options, n)),
+        Some(n) => Err(format!(
+            "`recommended` is {n}, but the question has the answers 0 to {}",
+            options.len() - 1
+        )),
+        None => Err("a question needs the index of its recommended answer in `recommended`".into()),
+    }
+}
+
 fn plan(
     change: &CuratorChange,
     n: usize,
@@ -1100,6 +1154,8 @@ fn plan(
         path: None,
         removes: Vec::new(),
         question: None,
+        options: Vec::new(),
+        recommended: None,
         files: Vec::new(),
         state: ChangeState::Open,
         commit: None,
@@ -1113,6 +1169,9 @@ fn plan(
                 return Err("a question needs the text in `question`".into());
             }
             out.question = Some(question.to_string());
+            let (options, recommended) = answers_of(change)?;
+            out.options = options;
+            out.recommended = Some(recommended);
         }
         Op::Add => {
             let path = change.path.as_deref().unwrap_or("");
@@ -1282,6 +1341,60 @@ mod tests {
             r#"{"op": "add", "reason": "r", "colour": 1}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_question_needs_two_to_four_answers_and_a_recommended_one() {
+        let question = |options: serde_json::Value, recommended: Option<usize>| {
+            let mut change: CuratorChange = serde_json::from_value(serde_json::json!({
+                "op": "question", "question": "Why CSV?", "reason": "r", "options": options,
+            }))
+            .unwrap();
+            change.recommended = recommended;
+            answers_of(&change)
+        };
+        let two = serde_json::json!([
+            {"label": " The log tool ", "means": " The log tool reads only CSV. "},
+            {"label": "Habit", "means": ""}
+        ]);
+        let (options, recommended) = question(two.clone(), Some(0)).unwrap();
+        assert_eq!(recommended, 0);
+        assert_eq!(options[0].label, "The log tool");
+        assert_eq!(options[0].means, "The log tool reads only CSV.");
+        let errors = [
+            question(serde_json::json!([{"label": "One", "means": ""}]), Some(0)),
+            question(
+                serde_json::json!([{"label": "1", "means": ""}, {"label": "2", "means": ""},
+                {"label": "3", "means": ""}, {"label": "4", "means": ""}, {"label": "5", "means": ""}]),
+                Some(0),
+            ),
+            question(two.clone(), None),
+            question(two.clone(), Some(2)),
+            question(
+                serde_json::json!([{"label": "Same", "means": ""}, {"label": "same", "means": ""}]),
+                Some(0),
+            ),
+            question(
+                serde_json::json!([{"label": " ", "means": "x"}, {"label": "B", "means": ""}]),
+                Some(0),
+            ),
+        ];
+        let words: Vec<String> = errors.into_iter().map(|e| e.unwrap_err()).collect();
+        assert!(
+            words[0].contains("2 to 4 answers in `options`, and it has 1"),
+            "{words:?}"
+        );
+        assert!(words[1].contains("and it has 5"), "{words:?}");
+        assert!(
+            words[2].contains("recommended answer in `recommended`"),
+            "{words:?}"
+        );
+        assert!(
+            words[3].contains("`recommended` is 2, but the question has the answers 0 to 1"),
+            "{words:?}"
+        );
+        assert!(words[4].contains("the same `label`"), "{words:?}");
+        assert!(words[5].contains("needs a `label`"), "{words:?}");
     }
 
     #[test]

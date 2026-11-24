@@ -792,6 +792,17 @@ fn the_proposals_of_the_memory_show_after_a_change_of_its_refs() {
                 removes: vec![],
                 target: None,
                 question: Some("Do internal users ever need XLSX?".into()),
+                options: vec![
+                    vision::memory::proposal::Choice {
+                        label: "No".into(),
+                        means: "Internal users read CSV in a sheet.".into(),
+                    },
+                    vision::memory::proposal::Choice {
+                        label: "Yes".into(),
+                        means: "Finance needs XLSX for its macros.".into(),
+                    },
+                ],
+                recommended: Some(0),
                 evidence: vec![],
                 reason: "No decision has a case for XLSX.".into(),
             }],

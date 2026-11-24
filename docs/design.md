@@ -701,7 +701,7 @@ vision memory teach AGENT "TEXT"   write a principle directly. It is active at o
 vision memory retire ID "WHY"      retire it. The file stays, and no turn loads it.
 vision memory lint                 test the format of each file
 vision memory import FILE          read past answers from a JSONL file as decisions
-vision memory review [--accept N|all [--answer TEXT] | --reject N|all [--why TEXT]]
+vision memory review [--accept N|all [--choice K | --answer TEXT] | --reject N|all [--why TEXT]]
                                    accept, edit, or reject each change of a proposal
 vision memory log                  the history
 vision memory revert COMMIT        make a commit that undoes one commit
@@ -709,7 +709,11 @@ vision memory revert COMMIT        make a commit that undoes one commit
 
 The person can also edit the files with any tool. The next tick reads the change.
 
-`--answer TEXT` goes with `--accept N` for a question of the Curator. The command refuses it for any other change, and for more than one question at a time. The next run of the Curator reads the answer. Some questions name exactly one decision as evidence, and the section `## Why` of that decision is empty. For such a question, the answer also becomes that section, as a commit of the person in the memory repo. The review says so before the person answers, and the interactive review does the same.
+A question of the Curator has 2 to 4 answers, and the Curator recommends one of them. The review lists the answers with their numbers, marks the recommended one, and adds the line `c. your own answer`. In the interactive review, a number picks an answer, Enter picks the recommended one, and `c` asks for an answer of the person's own. An empty line after `c` goes back to the answers. A question of an older proposal has no answers, and `a` asks only for an answer of the person's own.
+
+`--choice K` goes with `--accept N` and picks answer K of that question, from 1. The command refuses it for a change that is not a question with answers, for a K out of range, and for more than one change. `--accept N` of a question with answers and with neither `--choice` nor `--answer` takes the recommended answer, and so does `--accept all`. The answer of a pick is the full text of that answer. The row of `human` keeps the number of the pick and of the recommended answer in `choice` and `recommended`.
+
+`--answer TEXT` goes with `--accept N` for a question of the Curator: an answer of the person's own. The command refuses it for any other change, and for more than one question at a time. The next run of the Curator reads the answer. Some questions name exactly one decision as evidence, and the section `## Why` of that decision is empty. For such a question, the answer also becomes that section, as a commit of the person in the memory repo. The review says so before the person answers, and the interactive review does the same.
 
 ### 9.3 The life of a principle
 
@@ -740,7 +744,7 @@ Its output is a list of changes: a new candidate, an edit, a merge of two files,
 - `edit`: `path` names an existing file, and `content` is its full new text.
 - `merge`: `path` and `content` give the file that stays, and `removes` lists the paths that it replaces. The runner retires each replaced file. It deletes no file, because a later file can name it as a source.
 - `retire`: `target` is the id of the file. The runner sets its status to `retired`.
-- `question`: `question` is the text for the person.
+- `question`: `question` is the text for the person. `options` holds 2 to 4 answers, each with a short `label` and the full answer in `means`, and `recommended` is the index of the recommended answer, from 0. The runner drops a question with fewer or more answers, with two answers of the same label, or with no valid `recommended`.
 
 For a new principle, the runner sets `id`, `status` to `candidate`, and `by` to `curator`. A real session gives a looser text than the format asks for. The runner repairs three faults before it tests a change:
 

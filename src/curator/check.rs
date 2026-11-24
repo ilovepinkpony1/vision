@@ -464,6 +464,8 @@ mod tests {
             removes: vec![],
             target: None,
             question: None,
+            options: vec![],
+            recommended: None,
             evidence: vec![],
             reason: "A reason.".into(),
         }

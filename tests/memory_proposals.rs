@@ -82,6 +82,8 @@ fn change(op: Op, reason: &str) -> CuratorChange {
         removes: vec![],
         target: None,
         question: None,
+        options: vec![],
+        recommended: None,
         evidence: vec![],
         reason: reason.into(),
     }
@@ -119,6 +121,17 @@ fn changes() -> Vec<CuratorChange> {
         },
         CuratorChange {
             question: Some("Do internal users ever need XLSX?".into()),
+            options: vec![
+                vision::memory::proposal::Choice {
+                    label: "No".into(),
+                    means: "Internal users read CSV in a sheet.".into(),
+                },
+                vision::memory::proposal::Choice {
+                    label: "Yes".into(),
+                    means: "Finance needs XLSX for its macros.".into(),
+                },
+            ],
+            recommended: Some(0),
             ..change(Op::Question, "D-0001 has no case for XLSX.")
         },
         CuratorChange {
