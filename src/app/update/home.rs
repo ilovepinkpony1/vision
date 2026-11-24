@@ -1,7 +1,7 @@
 //! The keys of Home.
 //!
 //! `Tab` opens the next tab, and `1`, `2`, and `3` open the tabs "In progress", "To take", and
-//! "Ready to merge". The arrows and `k`/`j` move through the rows of the open tab; Enter opens
+//! "Ready to merge". Each visit of "To take" loads the queue of the tracker again. The arrows and `k`/`j` move through the rows of the open tab; Enter opens
 //! the live view of a ticket in progress,
 //! opens the start card of a ticket that can start, opens the start card of a ticket that is in
 //! progress outside Vision (the continue card with [`Outside`]), says why another ticket cannot
@@ -23,15 +23,20 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
         Key::Up | Key::Char('k') => step(app, -1),
         Key::Down | Key::Char('j') => step(app, 1),
         Key::Enter => open(app, fx),
-        Key::Tab => open_tab(app, app.home.tab.next()),
-        Key::Char(c @ '1'..='3') => open_tab(app, HomeTab::ALL[(c as u8 - b'1') as usize]),
+        Key::Tab => open_tab(app, app.home.tab.next(), fx),
+        Key::Char(c @ '1'..='3') => open_tab(app, HomeTab::ALL[(c as u8 - b'1') as usize], fx),
         _ => common(app, key, fx),
     }
 }
 
 /// Opens a tab of Home. The selection stays when its ticket is in that tab; else the first row
-/// of the tab is selected.
-pub fn open_tab(app: &mut App, tab: HomeTab) {
+/// of the tab is selected. Each visit of the tab "To take" loads the queue of the tracker
+/// again, so that it shows fresh tickets. A load that runs already is enough, so a quick
+/// second visit asks for no second load.
+pub fn open_tab(app: &mut App, tab: HomeTab, fx: &mut Vec<Effect>) {
+    if tab == HomeTab::Take && !app.queue.loading() {
+        data::load_queue(app, fx);
+    }
     app.home.tab = tab;
     app.home.chosen = true;
     let keys: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();

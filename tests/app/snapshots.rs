@@ -131,7 +131,7 @@ fn home_and_the_start_card_of_a_ticket_in_progress_outside_vision() {
         local(two_tickets(), Vec::new()),
         Some(queue_with_outside()),
     );
-    send(&mut app, 1.9, Msg::Key(Key::Char('2')));
+    open_take(&mut app, 1.9);
     check("home_outside", &app);
     app.home.selected = Some("DEMO-21".into());
     send(&mut app, 2.0, Msg::Key(Key::Enter));
@@ -243,7 +243,7 @@ fn home_at_other_sizes() {
 #[test]
 fn home_with_a_section_for_each_status() {
     let mut app = sectioned_home(SIZE);
-    send(&mut app, 1.9, Msg::Key(Key::Char('2')));
+    open_take(&mut app, 1.9);
     let keys: Vec<String> = app.items().iter().map(|i| i.key().to_string()).collect();
     assert_eq!(
         keys,
@@ -255,7 +255,7 @@ fn home_with_a_section_for_each_status() {
     check("home_sections", &app);
     // A queue longer than the box: it shows the part around the selection.
     let mut app = long_sectioned_home((100, 28));
-    send(&mut app, 1.9, Msg::Key(Key::Char('2')));
+    open_take(&mut app, 1.9);
     check("home_sections_100x28", &app);
     // Nineteen moves down from DEMO-33 select DEMO-57, the last ticket. The part then starts
     // at the title In Testing, so that title moves into the top line.
@@ -269,7 +269,7 @@ fn home_with_a_section_for_each_status() {
 /// Home with the start card of DEMO-15 open and its facts read.
 pub fn start_card() -> App {
     let mut app = home(SIZE);
-    send(&mut app, 2.0, Msg::Key(Key::Char('2')));
+    open_take(&mut app, 2.0);
     let fx = send(&mut app, 2.2, Msg::Key(Key::Enter));
     assert_eq!(fx, vec![Effect::LoadStartInfo("DEMO-15".into())]);
     send(
@@ -299,7 +299,7 @@ pub fn start_card() -> App {
 #[test]
 fn the_start_card_while_it_reads() {
     let mut app = home(SIZE);
-    send(&mut app, 2.0, Msg::Key(Key::Char('2')));
+    open_take(&mut app, 2.0);
     send(&mut app, 2.2, Msg::Key(Key::Enter));
     check("start_loading", &app);
 }

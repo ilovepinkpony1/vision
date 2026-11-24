@@ -1,5 +1,6 @@
 //! Home (`drawHome` of the design): the bar "needs you", a line of three tabs, the box of the
-//! open tab, the line THIS WEEK, and the keys. The tab "In progress" holds the tickets in
+//! open tab, the line THIS WEEK, and the keys. While a visit of "To take" loads the queue again,
+//! the rows of the last load stay, and the line of the tabs says that it asks the tracker. The tab "In progress" holds the tickets in
 //! progress with two lines each, the tab "To take" holds the queue of the tracker, and the tab
 //! "Ready to merge" holds the tickets in progress at a step of `app.merge_steps`. Each tab
 //! shows its count. `Tab` opens the next tab, `1`, `2`, and `3` open a tab, and a click on a
@@ -106,6 +107,14 @@ fn tabs(app: &App, c: &mut Canvas, y: i32, queue: &[&PickRow]) {
     }
     let held = app.held_of(open);
     let tail = match open {
+        // The rows of the last load stay while the tracker answers the load of this visit.
+        HomeTab::Take if app.queue.data.is_some() && app.queue.loading() => {
+            format!(
+                "{} asks the tracker again · {} open",
+                spinner(app),
+                queue.len()
+            )
+        }
         HomeTab::Take if app.queue.data.is_some() => {
             format!("from the tracker · {} open", queue.len())
         }

@@ -347,6 +347,13 @@ pub fn two_tickets() -> Vec<Held> {
     ]
 }
 
+/// Opens the tab "To take", and the tracker answers the load of the visit with the same queue.
+pub fn open_take(app: &mut App, at: f64) {
+    send(app, at, Msg::Key(vision::app::msg::Key::Char('2')));
+    let rows = app.queue.data.clone().unwrap_or_default();
+    send(app, at, Msg::Queue(Ok(rows)));
+}
+
 /// The page of the pull request of DEMO-7.
 pub const PR_URL: &str = "https://github.com/demo/calc/pull/7";
 

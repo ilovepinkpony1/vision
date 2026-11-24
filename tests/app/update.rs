@@ -97,6 +97,36 @@ fn the_arrows_and_j_k_move_in_the_open_tab_and_the_tab_keys_open_a_tab() {
 }
 
 #[test]
+fn each_visit_of_the_tab_to_take_loads_the_queue_again() {
+    let loads = |fx: &[Effect]| fx.iter().filter(|e| **e == Effect::LoadQueue).count();
+    let mut app = home(SIZE);
+    assert!(!app.queue.loading());
+    // A visit by its key, and by Tab, each start a load.
+    assert_eq!(loads(&key(&mut app, 2.0, Key::Char('2'))), 1);
+    assert!(app.queue.loading());
+    // The rows of the last load stay, and the line of the tabs says that the tracker reads.
+    let screen = text(&render(&app));
+    assert!(
+        screen.contains("asks the tracker again · 2 open"),
+        "{screen}"
+    );
+    assert!(screen.contains("DEMO-15"), "{screen}");
+    // A quick second visit while the load runs asks for no second load.
+    key(&mut app, 2.1, Key::Char('1'));
+    assert_eq!(loads(&key(&mut app, 2.2, Key::Char('2'))), 0);
+    assert!(!app.queue.again, "the running load is enough");
+    send(&mut app, 3.0, Msg::Queue(Ok(queue())));
+    assert!(!app.queue.loading());
+    key(&mut app, 3.1, Key::Char('1'));
+    assert_eq!(loads(&key(&mut app, 3.2, Key::Tab)), 1);
+    assert_eq!(app.home.tab, HomeTab::Take);
+    // The other tabs load nothing from the tracker.
+    send(&mut app, 4.0, Msg::Queue(Ok(queue())));
+    assert_eq!(loads(&key(&mut app, 4.1, Key::Char('3'))), 0);
+    assert_eq!(loads(&key(&mut app, 4.2, Key::Char('1'))), 0);
+}
+
+#[test]
 fn a_ticket_at_a_merge_step_shows_only_in_the_tab_ready_to_merge() {
     let mut tickets = two_tickets();
     tickets[1].view.step = Some("ready-to-merge".into());
