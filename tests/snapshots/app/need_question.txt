@@ -5,11 +5,11 @@
          │                                                                                          │
    In pro│   1 ◇ proposed    review                                                                 │
  ╭───────│                                                                                          │───────╮
- │ ▸   DE│  Must the export keep the order of the columns?                                          │   38m │
- │       │                                                                                          │       │
+ │ ▸ DEMO│  Must the export keep the order of the columns?                                          │   38m │
+ │      │                                                                                          │       │
  │       │  The Judge     proposes a Keep the order                                                 │       │
- │    DE│                D-0004 says that each export keeps the order of the screen.               │2h 10m │
- │       │  Its sources   D-0004                                                                    │       │
+ │   DEMO│                D-0004 says that each export keeps the order of the screen.               │2h 10m │
+ │     │  Its sources   D-0004                                                                    │       │
  ╰───────│                                                                                          │───────╯
          │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │
          │  Example       The table shows date, client, total. The file can keep that order or      │
@@ -23,7 +23,7 @@
          │  Evidence      src/export.py:42                                                          │
          │                                                                                          │
          │  a b answer    enter take the proposal    e your words    k needless    ←→ the pages     │
-         │  r review    esc later                                                                   │
+         │  r review    C discuss with Claude    esc later                                          │
          │                                                                                          │
   THIS WE╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

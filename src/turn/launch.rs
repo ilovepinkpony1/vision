@@ -196,7 +196,7 @@ pub struct Plan {
     /// A turn on Codex: the price of its tokens at the launch.
     #[serde(default)]
     pub price: Option<CodexPrice>,
-    /// A turn in a herdr pane (section 7.7): the session, the CLI, and the app.
+    /// A turn in a herdr pane (section 7.7): the space, the herdr-core CLI, and the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane: Option<super::pane::PanePlan>,
 }

@@ -660,8 +660,13 @@ fn a_bug_that_did_not_reproduce_goes_back_and_a_drop_stops_for_the_person() {
     assert_eq!(world.flags(), ["needs-you"]);
     assert_eq!(
         world.reason("needs-you"),
-        "the person chose to drop this ticket: run vision stop DEMO-12"
+        "the step reproduced found the stop line `Decision: drop` in plan.md, so the person decides: run `vision retry DEMO-12 --step STEP` or `vision stop DEMO-12`"
     );
+    // The app learns that a retry reads plan.md again, and that no turn starts.
+    let facts = vision::pipeline::facts::state_facts_of(&world.ctx(), &world.ledger(), KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(facts.check.as_deref(), Some("plan.md"));
     // The second entry of the team gives each member the answers of the person.
     let second = world
         .ledger()

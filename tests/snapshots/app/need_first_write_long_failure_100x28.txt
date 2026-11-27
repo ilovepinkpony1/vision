@@ -22,7 +22,7 @@
     │  The rest of the text is cut.                                                            │
     │  Now  Nothing was sent, and DEMO-12 still waits at the step refine.                      │
   TH│                                                                                          │
-    │  y a n choose    esc later                                                               │
+    │  y a n choose    C discuss with Claude    esc later                                      │
     │                                                                                          │
  ↑↓ ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

@@ -351,6 +351,9 @@ pub struct FlagItem {
     pub held: bool,
     /// The step is an act step: it runs no turn, so a retry runs only its writes again.
     pub act: bool,
+    /// The step is a check step: the document that it reads. A retry reads it again, and no
+    /// turn starts.
+    pub check: Option<String>,
     /// A retry runs only the writes of the step again: `held` or `act`
     /// ([`crate::pipeline::facts::StateFacts::writes_only`]).
     pub writes_only: bool,

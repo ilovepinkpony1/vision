@@ -11,7 +11,7 @@ use super::core::{
     whole, Config, Res,
 };
 use super::forge::{self, GitHub};
-use super::http::query;
+use super::http::{query, send};
 use super::jira::{self, Jira};
 
 const QUEUE_LIMIT: f64 = 100.0;
@@ -173,6 +173,12 @@ fn ticket(config: &Config, call: &Map<String, Value>) -> Res<Value> {
                 facts[k] = v;
             }
         }
+        if let Some(url) = &env.version_url {
+            let head = head.as_deref().filter(|_| holds);
+            for (k, v) in running_facts(&gh, url, head)? {
+                facts[k] = v;
+            }
+        }
         envs.insert(env.name.clone(), facts);
     }
     let status = issue["status"].clone();
@@ -236,5 +242,38 @@ fn deployed_facts(gh: &GitHub, environment: &str, head: Option<&str>) -> Res<Map
     out.insert("deployed".into(), json!(deployed));
     out.insert("deployment_sha".into(), json!(sha));
     out.insert("deployed_at".into(), json!(at));
+    Ok(out)
+}
+
+/// Seconds for one read of the version page of an env: a page that hangs must not hold the
+/// look of each ticket.
+const VERSION_TIMEOUT: f64 = 10.0;
+
+/// The commit that an env runs now, from its version page. `running_sha` is the first commit
+/// id on the page (40 hex digits), and `running` is true when that commit holds the head of the
+/// ticket (the same test as `deployed`). `head` is `None` while the branch of the env does not
+/// hold the head: no deploy can run it then, so the page is not read, `running` is false, and
+/// `running_sha` is null. A page that names no commit, does not answer with 200, or names a
+/// commit that GitHub does not know gives `running` null, so a watch reads none.
+fn running_facts(gh: &GitHub, url: &str, head: Option<&str>) -> Res<Map<String, Value>> {
+    let mut out = Map::new();
+    let Some(head) = head else {
+        out.insert("running".into(), json!(false));
+        out.insert("running_sha".into(), Value::Null);
+        return Ok(out);
+    };
+    let sha = match send("GET", url, &[], None, VERSION_TIMEOUT, Some(65536)) {
+        Ok(page) if page.status == 200 => String::from_utf8_lossy(&page.body)
+            .split(|c: char| !c.is_ascii_hexdigit())
+            .map(str::to_ascii_lowercase)
+            .find(|word| word.len() == 40 && is_commit(word)),
+        _ => None,
+    };
+    let running = match &sha {
+        Some(sha) => gh.commit_holds(sha, head)?,
+        None => None,
+    };
+    out.insert("running".into(), json!(running));
+    out.insert("running_sha".into(), json!(sha));
     Ok(out)
 }

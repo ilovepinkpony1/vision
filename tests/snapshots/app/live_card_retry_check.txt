@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION ▸ DEMO-12  Export the report of the mont…   engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ PATH                      │ NOW                                                    │ TICKET
+ ✓ refine          6m      │ ╭────────────────────────────────────────────────────╮ │ cost              $1.03
+ ○ plan                    │ │  needs you  a rule stopped the ticket      r retry │ │ time                38m
+ ○ plan-ready              │ │ the step fixed-void found the stop line `Fixed in… │ │ turns                 3
+ ○ build                   │ │ Fix the cause, then press r to start the step fix… │ │ commits    none to push
+ ○ review        ╭─ Retry DEMO-12 ──────────────────────────────────────────────────────────╮
+ ○ open-pr       │                                                                          │NS
+ ○ ci            │  Start the step fixed-void of DEMO-12 again?                             │               0
+ ○ fix-ci        │                                                                          │ry             1
+ ○ ready         │  A rule stopped it: the step fixed-void found the stop line `Fixed       │Judge          0
+ ○ comments      │  in: none` in ci-fix.md, so you decide how the ticket goes on.           │
+ ○ ci-review     │  Read ci-fix.md in the folder of the ticket. Then change the line and    │
+ ○ ready-to-merge│  press r, move the ticket with `vision retry DEMO-12 --step STEP`, or    │       3f2a1b4 ✓
+ ○ done          │  stop it with `vision stop DEMO-12`.                                     │               -
+                 │                                                                          │               -
+ TEAM            │  The step runs no turn, so no agent starts. Vision clears the flag       │               -
+ ✓ scout     fabl│  and reads ci-fix.md again, so the same flag comes back unless           │
+ ✓ builder   opus│  ci-fix.md changed.                                                      │
+ · reviewer  opus│                                                                          │━━━━━━ 31% of 60
+ · tester    opus│  enter retry    esc cancel                                               │ts at 18:00
+ · shepherd  opus│                                                                          │━━━━━━ 71% of 85
+ · judge     fabl╰──────────────────────────────────────────────────────────────────────────╯
+ · curator   fable-5-2 high│                                                        │ ENGINE
+                           │                                                        │ ● on   last pass 2s ago
+                           │                                                        │
+                           │                                                        │
+                           │                                                        │
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ r retry   t tell   o open session   x stop   esc home   l log and tool calls   f filter   ? keys
+

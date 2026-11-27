@@ -55,6 +55,10 @@ pub struct TicketView {
     /// first look, and for a forge that gives no page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
+    /// The web page of the ticket in the tracker, from the last look at it. `None` before the
+    /// first look, and for a tracker that gives no page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_url: Option<String>,
     pub branch: Option<String>,
     pub clone: Option<String>,
     pub updated: Option<String>,
@@ -323,6 +327,7 @@ fn row_view(
         cost_usd,
         pr: row.pr,
         pr_url: pr_url(&ticket, row.pr),
+        issue_url: issue_url(&ticket),
         branch: row.branch.clone(),
         clone: row.clone.clone(),
         updated: row.updated.clone(),
@@ -336,7 +341,18 @@ fn pr_url(ticket: &Ticket, pr: Option<i64>) -> Option<String> {
     if Some(seen.number) != pr {
         return None;
     }
-    let url = seen.url.as_deref()?.trim();
+    web_link(seen.url.as_deref()?)
+}
+
+/// The web page of the ticket in the tracker from the last look of the ticket: a link of the
+/// web.
+fn issue_url(ticket: &Ticket) -> Option<String> {
+    web_link(ticket.counts.seen.as_ref()?.issue_url.as_deref()?)
+}
+
+/// The text as a link of the web, or `None` for each other text, such as `javascript:`.
+fn web_link(text: &str) -> Option<String> {
+    let url = text.trim();
     (url.starts_with("https://") || url.starts_with("http://")).then(|| url.to_string())
 }
 
@@ -806,6 +822,26 @@ mod tests {
         assert_eq!(pr_url(&ticket(page), None), None);
         assert_eq!(pr_url(&ticket(""), Some(7)), None);
         assert_eq!(pr_url(&ticket("javascript:alert(1)"), Some(7)), None);
+    }
+
+    #[test]
+    fn the_page_of_the_ticket_comes_from_the_last_look_and_is_a_link_of_the_web() {
+        let ticket = |seen: serde_json::Value| {
+            let counts = serde_json::json!({ "seen": seen });
+            Ticket::of(TicketRow {
+                key: "DEMO-12".into(),
+                state: Some("ci".into()),
+                counts: Some(counts.to_string()),
+                ..TicketRow::default()
+            })
+            .unwrap()
+        };
+        let page = "https://jira.example/browse/DEMO-12";
+        let seen = |url: &str| serde_json::json!({"at": "2026-11-25T12:00:00Z", "issue_url": url});
+        assert_eq!(issue_url(&ticket(seen(page))).as_deref(), Some(page));
+        // A look with no page, and a text that is no link of the web.
+        assert_eq!(issue_url(&ticket(serde_json::json!({"at": "x"}))), None);
+        assert_eq!(issue_url(&ticket(seen("javascript:alert(1)"))), None);
     }
 
     fn known(outcome: Outcome) -> OpFact {

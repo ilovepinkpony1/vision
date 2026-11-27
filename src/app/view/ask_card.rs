@@ -16,7 +16,7 @@
 
 use super::canvas::{ink, Ink};
 use super::cards::Rows;
-use super::need_card::{Parts, TEXT};
+use super::need_card::{Parts, DISCUSS, TEXT};
 use super::theme::{agent_color, T};
 use crate::app::chain::{End, Owner};
 use crate::app::hits::{Act, AGAIN};
@@ -342,6 +342,7 @@ fn foot(
                 keys.push((numbers, "a question"));
             }
             keys.push((review, "review"));
+            keys.push(DISCUSS);
             keys.push(("esc", "later"));
             rows.keys(&keys);
         }
@@ -509,6 +510,7 @@ fn review(app: &App, card: &NeedsCard, set: &QuestionSet) -> Parts {
             ("enter", "open the question"),
             ("↑↓", "choose"),
             ("←→", "the pages"),
+            DISCUSS,
             ("esc", "later"),
         ],
         &[Key::Char('s')],

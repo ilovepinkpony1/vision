@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+         ╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮
+   In pro│                                                                                          │
+ ╭───────│  A rule stopped DEMO-12 at the step fixed-void.                                          │───────╮
+ │ ▸ DEMO│                                                                                          │   38m │
+ │      │  The step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so you decide    │       │
+ │       │  how the ticket goes on.                                                                 │       │
+ │   DEMO│  Read ci-fix.md in the folder of the ticket. Then change the line and press r, move the  │2h 10m │
+ │     │  ticket with `vision retry DEMO-12 --step STEP`, or stop it with `vision stop DEMO-12`.  │       │
+ ╰───────│                                                                                          │───────╯
+         │  Details: the step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so the  │
+         │  person decides: run `vision retry DEMO-12 --step STEP` or `vision stop DEMO-12`         │
+         │                                                                                          │
+         │  r reads ci-fix.md again. The step runs no turn, so no agent starts, and the same flag   │
+         │  comes back unless ci-fix.md changed.                                                    │
+         │  o opens the session of builder in this terminal. Vision pauses DEMO-12 while you work   │
+         │  in it, and asks afterwards whether it goes on.                                          │
+         │  x stops DEMO-12. Its branch stays in its clone.                                         │
+         │  C opens your own Claude Code session about DEMO-12 in a new tab of Herdr, with a brief  │
+         │  of what Vision knows. The ticket stays as it is.                                        │
+         │                                                                                          │
+         │  r try the step again    o open the session    x stop the ticket                         │
+         │  C discuss with Claude    esc later                                                      │
+         │                                                                                          │
+  THIS WE╰──────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
+

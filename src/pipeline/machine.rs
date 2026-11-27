@@ -12,14 +12,15 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Map, Value};
 
 use super::decide::{
-    check_end_facts, ci_result, decide, findings_branch, gate_blocks, wait_target, Branch, Check,
-    FactInputs, Facts, JobFact, KindFacts, LastTurn, List, Next, OpFact, Refused,
+    check_end_facts, ci_result, decide, findings_branch, gate_blocks, late_move, wait_target,
+    AtLimit, Branch, Check, FactInputs, Facts, JobFact, KindFacts, LastTurn, List, Next, OpFact,
+    Refused,
 };
 use super::docs::{self, result_documents};
 use super::gates;
 use super::refusals;
 use super::state::{
-    flags_of, flags_text, waits_on, Counts, FlagReason, Interrupt, Seen, NEEDS_YOU, STOPPED,
+    flags_of, flags_text, waits_on, Counts, FlagReason, Interrupt, Seen, LATE, NEEDS_YOU, STOPPED,
     WAITS_FOR_LIMIT,
 };
 use crate::adapter::when::Holds;
@@ -338,7 +339,8 @@ pub fn test_end_facts(pass: &mut Pass) -> Result<()> {
                 .flags
                 .iter()
                 .all(|f| f == super::state::NEEDS_YOU || f == WAITS_FOR_LIMIT);
-        if !ticket.flags.is_empty() && !keeps {
+        // A late wait keeps watching under its flag (see `Next::Late`).
+        if !ticket.flags.is_empty() && !keeps && !is_late(&ticket, &step) {
             continue;
         }
         // A ticket in the background is watched at a wait step. At each other step it needs a
@@ -1262,9 +1264,15 @@ fn observe_wait(
     // The interrupts of the step, from the same answer: one that fires moves the ticket before
     // the watched value counts.
     let interrupt = Interrupt::first(wait, &facts);
+    // `at_limit` comes from the same answer. Only a visit that passed its limit reads it.
+    let at_limit = wait
+        .at_limit
+        .as_deref()
+        .and_then(|path| facts.watch_text(path));
     if let Some(visit) = ticket.counts.visit.as_mut() {
         visit.observed = Some(at.clone());
         visit.watched = watched.clone();
+        visit.at_limit = at_limit;
         visit.interrupt = interrupt;
     }
     // The CI facts of each observe answer, whatever the step watches: a run that ended is one
@@ -1380,6 +1388,10 @@ fn select_one(
         }
         return Ok(Vec::new());
     };
+    // A late wait reads its last look under its flag, and nothing else happens.
+    if is_late(ticket, &step) {
+        return move_late(ctx, ledger, adapter, ticket, &step, now).map(|()| Vec::new());
+    }
     // A flag other than the limit stops each action, and `decide` gives nothing for it, so its
     // facts are not gathered: a stopped ticket may have lost its clone.
     if ticket.flags.iter().any(|f| f != WAITS_FOR_LIMIT) {
@@ -1438,6 +1450,14 @@ fn select_one(
                 continue;
             }
             Next::Flag { flag, reason } => return one(Some(flag_action(ticket, flag, &reason))),
+            Next::Late { reason } => {
+                return one(Some(Action::SetFlag(FlagSet {
+                    ticket: ticket.key.clone(),
+                    flag: NEEDS_YOU.to_string(),
+                    reason,
+                    by: Some(LATE.to_string()),
+                })))
+            }
             Next::Start { resume, message } => {
                 return enter_turn(ctx, ledger, ticket, &step, resume, message).and_then(one)
             }
@@ -1596,7 +1616,55 @@ pub(crate) fn flag_action(ticket: &Ticket, flag: &str, reason: &str) -> Action {
         ticket: ticket.key.clone(),
         flag: flag.to_string(),
         reason: reason.to_string(),
+        by: None,
     })
+}
+
+/// True when the ticket waits under a late flag (see `Next::Late`): it is at a wait step, its
+/// one flag is needs-you, and the limit of the step set that flag.
+pub(crate) fn is_late(ticket: &Ticket, step: &Step) -> bool {
+    matches!(step.kind, StepKind::Wait(_))
+        && ticket.flags.len() == 1
+        && ticket.flags[0] == NEEDS_YOU
+        && ticket
+            .counts
+            .reasons
+            .get(NEEDS_YOU)
+            .is_some_and(|r| r.by.as_deref() == Some(LATE))
+}
+
+/// A late wait: the flag needs-you stays while the step keeps watching. A look whose value of
+/// `watch` or of `at_limit` names a step of `on` clears the flag and moves the ticket there, in
+/// the one transaction of the move. Each other look leaves the flag as it is.
+fn move_late(
+    ctx: &Ctx,
+    ledger: &Ledger,
+    adapter: &Adapter,
+    ticket: &mut Ticket,
+    step: &Step,
+    now: OffsetDateTime,
+) -> Result<()> {
+    let facts = gather(ctx, ledger, adapter, ticket, step, now, false)?;
+    let Some((to, how)) = late_move(&facts) else {
+        return Ok(());
+    };
+    ticket.flags.retain(|f| f != NEEDS_YOU);
+    ticket.counts.reasons.remove(NEEDS_YOU);
+    move_to_with(
+        ctx,
+        ledger,
+        adapter,
+        ticket,
+        step,
+        &to,
+        &how,
+        Some(&json!({"cleared": NEEDS_YOU, "late": true})),
+    )?;
+    ctx.log(&format!(
+        "pipeline: {} saw {how} after the limit of the step {}, so its flag needs-you is cleared",
+        ticket.key, step.id
+    ));
+    Ok(())
 }
 
 pub(crate) fn start_action(
@@ -2047,6 +2115,11 @@ pub(crate) fn gather(
             target: wait_target(&step.on, visit.watched.as_deref()),
             waits: wait.wait.clone(),
             limit: wait.limit,
+            at_limit: wait.at_limit.clone().map(|path| AtLimit {
+                path,
+                value: visit.at_limit.clone(),
+                target: wait_target(&step.on, visit.at_limit.as_deref()),
+            }),
             waited: visit
                 .since
                 .as_deref()
@@ -2638,9 +2711,13 @@ pub fn set_flag(pass: &mut Pass, set: &FlagSet) -> Result<()> {
         FlagReason {
             reason: set.reason.clone(),
             at: now.clone(),
-            by: None,
+            by: set.by.clone(),
         },
     );
+    let mut detail = json!({"flag": set.flag, "reason": set.reason, "step": ticket.state()});
+    if let (Some(by), Value::Object(fields)) = (&set.by, &mut detail) {
+        fields.insert("by".into(), json!(by));
+    }
     save(
         &pass.ledger,
         &ticket,
@@ -2648,7 +2725,7 @@ pub fn set_flag(pass: &mut Pass, set: &FlagSet) -> Result<()> {
         Some(
             Event::now("tick", "flag")
                 .ticket(ticket.key.as_str())
-                .detail(json!({"flag": set.flag, "reason": set.reason, "step": ticket.state()})),
+                .detail(detail),
         ),
     )?;
     ctx.log(&format!(

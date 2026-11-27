@@ -17,6 +17,7 @@
 //! a child process of the same binary ([`worker`]).
 
 pub mod chain;
+pub mod discuss;
 pub mod drafts;
 pub mod feed;
 pub mod hits;

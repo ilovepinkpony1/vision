@@ -5,7 +5,7 @@
 
 use super::canvas::ink;
 use super::cards::Rows;
-use super::need_card::{Parts, TEXT};
+use super::need_card::{Parts, DISCUSS, TEXT};
 use super::theme::T;
 use crate::app::model::App;
 use crate::app::msg::Key;
@@ -59,6 +59,7 @@ pub(super) fn plan(app: &App, _card: &NeedsCard, item: &PlanItem) -> Parts {
             ("↑↓", "scroll"),
             ("a", "approve"),
             ("x", "stop the ticket"),
+            DISCUSS,
             ("esc", "later"),
         ],
         &[Key::Char('a')],
@@ -78,12 +79,15 @@ pub(super) fn plan(app: &App, _card: &NeedsCard, item: &PlanItem) -> Parts {
 
 pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     let (key, step) = (&item.ticket, &item.step);
+    // A late wait keeps watching under its flag, unless the ticket is also stopped.
+    let late = !item.stopped && crate::pipeline::decide::is_late(&item.reason);
     let mut body = Rows::default();
-    body.text(
-        3,
-        format!("A rule stopped {key} at the step {step}."),
-        ink(T.fg).bold(),
-    );
+    let first = if late {
+        format!("{key} waited at the step {step} longer than its limit.")
+    } else {
+        format!("A rule stopped {key} at the step {step}.")
+    };
+    body.text(3, first, ink(T.fg).bold());
     body.blank();
     // What happened and what to do first; the raw reason stays below as the details.
     let friendly = crate::friendly::explain(&item.reason);
@@ -97,6 +101,7 @@ pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     }
     body.blank();
     let mut foot = Rows::default();
+    let discuss = format!("C opens your own Claude Code session about {key} in a new tab of Herdr, with a brief of what Vision knows. The ticket stays as it is.");
     if item.stopped {
         body.para(
             3,
@@ -104,13 +109,18 @@ pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
             TEXT,
             ink(T.dim),
         );
-        foot.keys(&[("enter", "continue"), ("esc", "later")]);
+        body.para(3, &discuss, TEXT, ink(T.dim));
+        foot.keys(&[("enter", "continue"), DISCUSS, ("esc", "later")]);
     } else {
         let agent = item.agent.as_deref().unwrap_or("its agent");
-        let retry = if item.act {
+        let retry = if late {
+            format!("r starts the step {step} again with a new limit.")
+        } else if item.act {
             format!("r runs the writes of the step {step} again. The step runs no turn, so no agent starts.")
         } else if item.held {
             format!("r runs the writes of the step {step} again. The turn of the step already gave a result that held, so no new turn starts.")
+        } else if let Some(doc) = &item.check {
+            format!("r reads {doc} again. The step runs no turn, so no agent starts, and the same flag comes back unless {doc} changed.")
         } else {
             format!("r starts the step {step} again with a new turn of {agent}. Its message says why the step stopped.")
         };
@@ -131,13 +141,20 @@ pub(super) fn flag(app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
             TEXT,
             ink(T.dim),
         );
+        body.para(3, &discuss, TEXT, ink(T.dim));
         keys.push(("x", "stop the ticket"));
+        keys.push(DISCUSS);
         keys.push(("esc", "later"));
         // `r` starts the step again, so a click on it arms first. `o` and `x` only open a card.
         foot.keys_with(&keys, &[Key::Char('r')], app.armed_act());
     }
+    let title = if late {
+        "the wait passed its limit, and Vision keeps watching"
+    } else {
+        "a rule stopped the ticket"
+    };
     Parts {
-        title: "a rule stopped the ticket".into(),
+        title: title.into(),
         body,
         foot,
         ..Parts::default()
@@ -168,7 +185,7 @@ pub(super) fn paused(_app: &App, _card: &NeedsCard, item: &FlagItem) -> Parts {
     body.para(3, &what, TEXT, ink(T.dim));
     let mut foot = Rows::default();
     // Enter only opens the continue card, whose Enter acts, so a click here acts at once.
-    foot.keys(&[("enter", "continue"), ("esc", "later")]);
+    foot.keys(&[("enter", "continue"), DISCUSS, ("esc", "later")]);
     Parts {
         title: "you took over its session".into(),
         body,
@@ -276,7 +293,7 @@ pub(super) fn notice(app: &App, _card: &NeedsCard, item: &NoticeRow) -> Parts {
     );
     let mut foot = Rows::default();
     foot.keys_with(
-        &[("enter", "mark it read"), ("esc", "later")],
+        &[("enter", "mark it read"), DISCUSS, ("esc", "later")],
         &[Key::Enter],
         app.armed_act(),
     );

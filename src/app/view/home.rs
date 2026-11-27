@@ -253,11 +253,14 @@ fn needs_bar(app: &App, c: &mut Canvas, y: i32) {
 /// The GitHub mark of the Nerd Fonts (`nf-fa-github`). Its cell opens the pull request.
 pub const GITHUB: &str = "\u{f09b}";
 
-/// The column of the key of a ticket in progress: after the column of the GitHub mark.
-const HELD_KEY: i32 = 7;
+/// The Jira mark of the Nerd Fonts (`nf-dev-jira`). Its cell opens the ticket in the tracker.
+pub const JIRA: &str = "\u{e75c}";
 
-/// The column of the titles: after the longest key, and at least at the column of the design,
-/// which leaves room for a key of 7 characters after the GitHub mark.
+/// The column of the key of a ticket in progress, as in the queue. The marks of the links of
+/// the ticket show under the key: the GitHub mark, and the Jira mark right of it.
+const HELD_KEY: i32 = 5;
+
+/// The column of the titles: after the longest key, and at least at the column of the design.
 fn key_column(held: &[Held], queue: &[&PickRow]) -> i32 {
     let held = held.iter().map(|h| HELD_KEY + width(&h.view.key) as i32);
     let queue = queue.iter().map(|r| 5 + width(&r.key) as i32);
@@ -478,16 +481,22 @@ fn held_row(app: &App, c: &mut Canvas, ticket: &Held, y: i32, kx: i32, selected:
         c.put(3, y, "▸", ink(T.accent).bold());
     }
     let key_color = if selected { T.accent } else { T.fg };
-    if let Some(url) = &view.pr_url {
-        c.put(5, y, GITHUB, ink(T.fg));
-        c.click(5, y, 2, 1, Act::Link(url.clone()));
-    }
     c.put(
         HELD_KEY,
         y,
         &cut(&view.key, (kx - HELD_KEY - 1).max(1) as usize),
         ink(key_color).bold(),
     );
+    // The links under the key, each in its own column: the pull request, then the ticket in
+    // the tracker. A click on a mark opens its page.
+    let links = [(GITHUB, &view.pr_url), (JIRA, &view.issue_url)];
+    for (n, (mark, url)) in links.into_iter().enumerate() {
+        if let Some(url) = url {
+            let x = HELD_KEY + 2 * n as i32;
+            c.put(x, y + 1, mark, ink(T.fg));
+            c.click(x, y + 1, 2, 1, Act::Link(url.clone()));
+        }
+    }
     let right = format!(
         "{}  {:>6}",
         money(view.cost_usd),

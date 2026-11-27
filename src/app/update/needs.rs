@@ -9,6 +9,9 @@
 //! thing before it, and from its review page to the thing after it. On the review page, the up
 //! and down arrows choose a row.
 //!
+//! `C` opens the own Claude Code session of the person about the ticket of the item, in a new
+//! tab of Herdr.app (`vision discuss KEY --herdr`), and the card stays.
+//!
 //! The items load in a thread. Each load has a number, and only the result of the last load
 //! counts, so that a load that started before an action never brings back what the action
 //! ended. The card loads again when the needs of the local data change. The first load also
@@ -19,8 +22,9 @@
 use std::collections::BTreeMap;
 
 use super::super::model::{App, Card, Tone};
-use super::super::msg::{Effect, Key};
+use super::super::msg::{ChildResult, Effect, Key};
 use super::super::needs::{Gone, Input, NeedItem, NeedsCard, Target};
+use super::super::text::tidy;
 use super::super::view::need_card::body_size;
 use super::{act, ask, ask_quit, chain, notice};
 
@@ -388,8 +392,60 @@ pub fn on_key(app: &mut App, key: Key, fx: &mut Vec<Effect>) {
             app.card = None;
             ask_quit(app, fx);
         }
+        // A session of the person changes nothing, so it opens also while a chain runs.
+        Key::Char(DISCUSS) => discuss(app, fx),
         _ if runs => {}
         _ => item_key(app, key, fx),
+    }
+}
+
+/// The key that opens the own Claude Code session of the person about the ticket of the item.
+/// A capital letter, because a small letter chooses a choice of a question.
+pub const DISCUSS: char = 'C';
+
+/// `C`: `vision discuss KEY --herdr` for the ticket of the item, in a thread of its own. The
+/// card stays, and the notice says when the tab is open.
+fn discuss(app: &mut App, fx: &mut Vec<Effect>) {
+    let Some(key) = card(app)
+        .and_then(|c| c.item())
+        .and_then(NeedItem::ticket)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    if app.discussing.contains(&key) {
+        notice(
+            app,
+            format!("Your session about {key} opens already."),
+            Tone::Info,
+        );
+        return;
+    }
+    app.discussing.push(key.clone());
+    notice(
+        app,
+        format!("Vision writes a brief of {key} and opens your session about it in Herdr."),
+        Tone::Info,
+    );
+    fx.push(Effect::Discuss(key));
+}
+
+/// `vision discuss KEY --herdr` ended: the notice says where the session is, or why it did not
+/// open.
+pub fn discussed(app: &mut App, key: &str, result: &ChildResult) {
+    app.discussing.retain(|k| k != key);
+    if result.ok() {
+        notice(
+            app,
+            format!("Your session about {key} is open in its Herdr tab `{key} discuss`."),
+            Tone::Ok,
+        );
+    } else {
+        super::engine::show_error(
+            app,
+            &format!("Your session about {key}"),
+            &tidy(&result.failure()),
+        );
     }
 }
 

@@ -79,6 +79,7 @@ pub fn view(key: &str, title: &str, step: &str, now: &str) -> TicketView {
         cost_usd: 0.0,
         pr: None,
         pr_url: None,
+        issue_url: Some(format!("https://jira.example/browse/{key}")),
         branch: Some(format!("vision/{key}")),
         clone: Some("~/clones/demo-1".into()),
         updated: None,

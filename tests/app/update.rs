@@ -144,6 +144,36 @@ fn a_ticket_at_a_merge_step_shows_only_in_the_tab_ready_to_merge() {
 }
 
 #[test]
+fn the_tickets_whose_agent_works_show_first_and_the_selection_stays_on_its_ticket() {
+    let keys = |app: &vision::app::model::App| -> Vec<String> {
+        app.items().iter().map(|i| i.key().to_string()).collect()
+    };
+    let wait = |key: &str| {
+        waiting(
+            key,
+            "Show the totals",
+            "ci",
+            "waits: the watched value is none",
+        )
+    };
+    let work = |key: &str| working(key, "Export the report", "build", "builder", 6);
+    // The ledger gives the tickets in the order of their keys.
+    let first = vec![wait("DEMO-12"), wait("DEMO-3"), work("DEMO-7")];
+    let mut app = home_with(SIZE, local(first, Vec::new()), Some(queue()));
+    assert_eq!(keys(&app), ["DEMO-7", "DEMO-12", "DEMO-3"]);
+    key(&mut app, 2.0, Key::Down);
+    key(&mut app, 2.1, Key::Down);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-3"));
+    // The agent of DEMO-3 starts, and DEMO-7 waits again: the rows move, and the selection
+    // stays on DEMO-3.
+    let second = vec![wait("DEMO-12"), work("DEMO-3"), wait("DEMO-7")];
+    send(&mut app, 3.0, Msg::Local(Ok(local(second, Vec::new()))));
+    assert_eq!(keys(&app), ["DEMO-3", "DEMO-12", "DEMO-7"]);
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-3"));
+    assert_eq!(app.selected_index(), Some(0));
+}
+
+#[test]
 fn enter_opens_the_live_view_of_the_ticket_in_progress_and_esc_goes_back() {
     let mut app = home(SIZE);
     let fx = key(&mut app, 2.0, Key::Enter);
@@ -657,10 +687,10 @@ fn a_refresh_keeps_the_selection_on_the_same_ticket() {
     send(&mut app, 3.1, Msg::Queue(Ok(rows)));
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-7"));
     // The selected ticket leaves: the row at its place in the tab gets the selection, here
-    // the last row of the tab.
+    // the last row of the tab. The agent of DEMO-12 works, so DEMO-12 is the first row.
     tickets.retain(|t| t.view.key != "DEMO-7");
     send(&mut app, 4.0, Msg::Local(Ok(local(tickets, Vec::new()))));
-    assert_eq!(app.home.selected.as_deref(), Some("DEMO-12"));
+    assert_eq!(app.home.selected.as_deref(), Some("DEMO-1"));
 }
 
 #[test]
@@ -1140,7 +1170,7 @@ fn a_ticket_of_before_takes_its_title_from_the_queue() {
     });
     let app = home_with(SIZE, local(tickets, Vec::new()), Some(rows));
     assert_eq!(app.title_of(&app.held()[0]), "The title from the tracker");
-    assert!(screen(&app).contains("DEMO-12   The title from the tracker"));
+    assert!(screen(&app).contains("DEMO-12     The title from the tracker"));
     // The queue box does not list it, because Vision holds it.
     assert_eq!(app.queue_rows().len(), 2);
 }

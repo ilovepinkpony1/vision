@@ -259,13 +259,17 @@ pub(crate) fn select_check(
     let has = |wanted: &str| text.lines().any(|line| line.trim() == wanted);
     if let Some(stop) = &check.stop_line {
         if has(stop) {
-            // Vision never stops a ticket by itself.
+            // Vision never stops a ticket by itself. Each adapter gives its stop line a meaning
+            // of its own, such as a fix that no allowed place can hold, so the reason names only
+            // the line, the document, and the choices of the person.
             return Ok(vec![flag_action(
                 ticket,
                 NEEDS_YOU,
                 &format!(
-                    "the person chose to drop this ticket: run vision stop {}",
-                    ticket.key
+                    "the step {} found the stop line `{stop}` in {}, so the person decides: run `vision retry {key} --step STEP` or `vision stop {key}`",
+                    step.id,
+                    check.doc,
+                    key = ticket.key
                 ),
             )]);
         }

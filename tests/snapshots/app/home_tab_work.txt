@@ -3,8 +3,8 @@
 
    In progress 1    To take 2    Ready to merge 1       1 ticket · Vision moves it while this window is open
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
- │               ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
+ │ ▸ DEMO-12     Export the report of the month as a CSV file                                 $1.03     38m │
+ │              ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
  ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 

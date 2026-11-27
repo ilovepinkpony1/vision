@@ -235,6 +235,7 @@ fn flag_item(
         branch: view.branch.clone(),
         held: facts.held,
         act: facts.act,
+        check: facts.check.clone(),
         writes_only: facts.writes_only(),
         stopped: view.flags.iter().any(|f| f.flag == STOPPED),
     })

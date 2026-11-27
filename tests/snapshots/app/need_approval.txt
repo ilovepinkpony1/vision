@@ -5,11 +5,11 @@
          ╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮
    In pro│                                                                                          │
  ╭───────│  Replaces the description of the ticket in the tracker.                                  │───────╮
- │ ▸   DE│  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │   38m │
- │       │  The verb tracker.describe is in the mode ask, so it waits for your approval.            │       │
+ │ ▸ DEMO│  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │   38m │
+ │      │  The verb tracker.describe is in the mode ask, so it waits for your approval.            │       │
  │       │                                                                                          │       │
- │    DE│  What it sends                                                                           │2h 10m │
- │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
+ │   DEMO│  What it sends                                                                           │2h 10m │
+ │     │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
  ╰───────│  │ text  Export the report of the month as a CSV file.                                │  │───────╯
          │  │                                                                                    │  │
          │  │       The file keeps the order of the columns of the table.                        │  │
@@ -22,7 +22,7 @@
          │  In the mode auto: Vision never asks again for tracker.describe, except for a diff that  │
          │  touches a sensitive path that the approved plan does not name.                          │
          │                                                                                          │
-         │  y approve    a approve, then auto    esc later                                          │
+         │  y approve    a approve, then auto    C discuss with Claude    esc later                 │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you

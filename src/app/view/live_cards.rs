@@ -80,6 +80,10 @@ pub fn retry(app: &App, card: &RetryCard, c: &mut Canvas) {
         "The step runs no turn, so no agent starts. Vision clears the flag and runs the writes of the step again, the ones that are not done.".to_string()
     } else if card.held {
         "The turn of the step already gave a result that held, so no new turn starts. Vision runs the writes of the step again, the ones that waited.".to_string()
+    } else if let Some(doc) = &card.check {
+        format!(
+            "The step runs no turn, so no agent starts. Vision clears the flag and reads {doc} again, so the same flag comes back unless {doc} changed."
+        )
     } else {
         format!(
             "Vision clears the flag, and the step {} starts again with a new turn of {agent}. Its message says why the step stopped.",

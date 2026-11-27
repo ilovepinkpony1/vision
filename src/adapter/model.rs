@@ -445,6 +445,11 @@ pub struct WaitStep {
     /// `limit`: the seconds that one visit may watch. A visit that watches longer sets the flag
     /// needs-you. `None`: no limit.
     pub limit: Option<u64>,
+    /// `at_limit`: a second path of observe that a visit reads when it passed its `limit`,
+    /// before it sets the flag needs-you. A value of that path that `on` names moves the
+    /// ticket, as a value of `watch` does. An example is the commit on the version page of an
+    /// env, while the forge records no deployment. `None`: the flag comes at once.
+    pub at_limit: Option<String>,
     /// `from`: a local time of day. The visit does nothing before the first moment with that
     /// time after its entry: no start verb and no look. `None`: it starts at once.
     pub from: Option<LocalTime>,
@@ -1943,6 +1948,7 @@ fn allowed_keys(kind: &str) -> &'static [&'static str] {
             "every",
             "wait",
             "limit",
+            "at_limit",
             "cap",
             "from",
             "interrupt",
@@ -2867,6 +2873,24 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
         .remove("wait")
         .map(|value| strings(Some(value), &format!("{at} wait"), problems));
     let limit = seconds(table.remove("limit"), &format!("{at} limit"), problems);
+    let at_limit = string(
+        table.remove("at_limit"),
+        &format!("{at} at_limit"),
+        problems,
+    );
+    if let Some(path) = &at_limit {
+        if !valid_watch(path) || path == HEAD_STATE {
+            problems.add(
+                at,
+                format!("at_limit names `{path}`, which is not a path into the answer of observe, such as envs.staging.running"),
+            );
+        } else if limit.is_none() {
+            problems.add(
+                at,
+                "at_limit needs limit: a visit reads it only after it passed its limit",
+            );
+        }
+    }
     let from = match string(table.remove("from"), &format!("{at} from"), problems) {
         None => None,
         Some(text) => {
@@ -2891,6 +2915,7 @@ fn wait_step(table: &mut Table, at: &str, problems: &mut Problems) -> WaitStep {
         every,
         wait,
         limit,
+        at_limit,
         from,
         interrupt,
         conflict,
@@ -3466,6 +3491,7 @@ url = "http://localhost:3000"
                 every: 30,
                 wait: None,
                 limit: None,
+                at_limit: None,
                 from: None,
                 interrupt: BTreeMap::new(),
                 conflict: None,
@@ -3965,6 +3991,45 @@ url = "http://localhost:3000"
         ));
         assert!(
             err.contains("the key `limit` does not belong to a human step"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_wait_step_can_read_a_second_path_at_its_limit() {
+        let text = with(
+            "every = 30",
+            "every = 30\nlimit = 3600\nat_limit = \"envs.staging.running\"",
+        );
+        let adapter = parse(&text).unwrap();
+        let StepKind::Wait(ci) = &adapter.step("ci").unwrap().kind else {
+            panic!("ci is a wait step")
+        };
+        assert_eq!(ci.at_limit.as_deref(), Some("envs.staging.running"));
+        for (new, expected) in [
+            (
+                "at_limit = \"envs.staging.running\"",
+                "step `ci`: at_limit needs limit: a visit reads it only after it passed its limit",
+            ),
+            (
+                "limit = 60\nat_limit = \"envs..running\"",
+                "step `ci`: at_limit names `envs..running`, which is not a path into the answer of observe",
+            ),
+            (
+                "limit = 60\nat_limit = \"head.state\"",
+                "step `ci`: at_limit names `head.state`, which is not a path into the answer of observe",
+            ),
+            ("limit = 60\nat_limit = 3", "step `ci` at_limit"),
+        ] {
+            let err = error(&with("every = 30", &format!("every = 30\n{new}")));
+            assert!(err.contains(expected), "expected `{expected}` in:\n{err}");
+        }
+        let err = error(&with(
+            "action = \"approve-merge\"",
+            "action = \"approve-merge\"\nat_limit = \"ci.state\"",
+        ));
+        assert!(
+            err.contains("the key `at_limit` does not belong to a human step"),
             "{err}"
         );
     }

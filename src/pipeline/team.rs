@@ -119,7 +119,12 @@ pub(crate) fn select(
                 }
             }
             Next::ClearLimit => limit_cleared = true,
-            Next::Nothing(_) | Next::Request { .. } | Next::RunJob | Next::Finish => {}
+            // A member is a turn, and only a wait step gives a late flag.
+            Next::Nothing(_)
+            | Next::Request { .. }
+            | Next::RunJob
+            | Next::Finish
+            | Next::Late { .. } => {}
         }
     }
     if limit_cleared {

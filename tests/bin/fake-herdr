@@ -1,117 +1,194 @@
 #!/usr/bin/env python3
-"""A stand-in for the herdr CLI in the tests of Vision. Standard library only.
+"""A stand-in for the CLIs of Herdr in the tests of Vision: `herdr-app` (the program of
+Herdr.app) and `hc` (herdr-core). Standard library only.
 
-The session name is the folder of its state: `herdr --session <folder> <command>`. It knows the
-commands that Vision runs: workspace list, create, and focus; tab create, rename, close, and
-focus; pane run (the line runs in the background in the folder of the tab, and the file
-.fake-herdr-typed there names the file of the typed text of the pane); agent prompt (the text
-goes to that file); agent send-keys (down and enter answer a folder dialog in the file
-<pane>.screen); pane read (that file). Each call goes to calls.jsonl.
+The tests link it as `herdr-app` and as `hc` in the folder of its state: the name of the link
+picks the CLI. Each call goes to calls.jsonl, with the name of the CLI first.
+
+herdr-app knows: no arguments (it opens the window: it removes the file down, and the file
+no-window makes it fail); status and ls (they fail while the file down exists); and do with
+one JSON object for space.rename, tab.rename, space.select, and tab.select.
+
+hc knows: run (the argv runs in the background in the folder of --cwd, and the file
+.fake-herdr-typed there names the file of the typed text of the terminal); label; send (the
+text goes to that file); keys (down and enter answer a folder dialog in the file
+<terminal>.screen); read (that file); kill; rm. A terminal with the labels herdr.space and
+herdr.tab gets that tab in that space, and a new id makes a new space or tab with no name, as
+in Herdr.app.
 """
 import json
 import os
+import signal
 import subprocess
 import sys
 
 
 def main():
-    argv = sys.argv[1:]
-    if len(argv) < 2 or argv[0] != "--session":
-        print(json.dumps({"error": {"code": "usage", "message": "no session"}}))
-        return 1
-    state = argv[1]
-    args = argv[2:]
-    os.makedirs(state, exist_ok=True)
+    state = os.path.dirname(os.path.abspath(sys.argv[0]))
+    cli = os.path.basename(sys.argv[0])
+    args = sys.argv[1:]
     with open(os.path.join(state, "calls.jsonl"), "a") as f:
-        f.write(json.dumps(args) + "\n")
-    if os.path.exists(os.path.join(state, "down")):
-        print(json.dumps({"error": {"code": "server_not_running", "message": "no server"}}))
-        return 1
+        f.write(json.dumps([cli] + args) + "\n")
     db_path = os.path.join(state, "db.json")
-    db = json.load(open(db_path)) if os.path.exists(db_path) else {"workspaces": [], "n": 0}
+    db = json.load(open(db_path)) if os.path.exists(db_path) else {"spaces": [], "terminals": {}, "n": 0}
+    before = json.dumps(db, sort_keys=True)
+    if cli == "hc":
+        code = hc(state, db, args)
+    else:
+        code = app(state, db, args)
+    # Only a change is saved, in one rename, so that a call that runs at the same time never
+    # reads half a file or writes an old state back.
+    if json.dumps(db, sort_keys=True) != before:
+        new = "%s.%d" % (db_path, os.getpid())
+        with open(new, "w") as f:
+            json.dump(db, f)
+        os.replace(new, db_path)
+    return code
 
-    def opt(name):
-        return args[args.index(name) + 1] if name in args else None
 
-    def save():
-        json.dump(db, open(db_path, "w"))
+def answer(value, code=0):
+    print(json.dumps(value))
+    return code
 
-    def ok(result):
-        print(json.dumps({"id": "cli", "result": result}))
+
+def app(state, db, args):
+    down = os.path.join(state, "down")
+    if not args:
+        if os.path.exists(os.path.join(state, "no-window")):
+            return 1
+        if os.path.exists(down):
+            os.remove(down)
         return 0
+    if os.path.exists(down):
+        sys.stderr.write("herdr-app: no Herdr window at %s\n" % os.path.join(state, "herdr-app.sock"))
+        return 2
+    if args == ["status"]:
+        return answer({"errors": []})
+    if args == ["ls"]:
+        return answer({"spaces": [
+            {"id": s["id"], "name": s["name"], "tabs": [
+                {"id": t["id"], "name": t["name"], "terminals": [{"terminal": t["terminal"]}]}
+                for t in s["tabs"]]} for s in db["spaces"]]})
+    if len(args) != 3 or args[0] != "do":
+        return answer({"error": "usage: " + " ".join(args)}, 1)
+    command, opts = args[1], json.loads(args[2])
+    spaces = {s["id"]: s for s in db["spaces"]}
+    tabs = {t["id"]: t for s in db["spaces"] for t in s["tabs"]}
+    if command in ("space.rename", "space.select"):
+        if opts.get("id") not in spaces:
+            return answer({"error": "no space %r" % opts.get("id")}, 1)
+        if command == "space.rename":
+            spaces[opts["id"]]["name"] = opts.get("name")
+        return answer({"ok": True})
+    if command in ("tab.rename", "tab.select"):
+        if opts.get("id") not in tabs:
+            return answer({"error": "no tab %r" % opts.get("id")}, 1)
+        if command == "tab.rename":
+            tabs[opts["id"]]["name"] = opts.get("name")
+        return answer({"ok": True})
+    return answer({"error": "unknown command %r" % command}, 1)
 
-    cmd = args[:2]
-    if cmd == ["workspace", "list"]:
-        return ok({"type": "workspace_list", "workspaces": [
-            {"workspace_id": w["id"], "label": w["label"]} for w in db["workspaces"]]})
-    if cmd == ["workspace", "create"]:
+
+def fail(kind, message, code):
+    sys.stderr.write(json.dumps({"error": {"kind": kind, "message": message}}) + "\n")
+    return code
+
+
+def place(db, t):
+    """Shows the terminal in the tab and the space of its labels."""
+    labels = db["terminals"][t]["labels"]
+    if "herdr.space" not in labels or "herdr.tab" not in labels:
+        return
+    space = next((s for s in db["spaces"] if s["id"] == labels["herdr.space"]), None)
+    if space is None:
+        space = {"id": labels["herdr.space"], "name": None, "tabs": []}
+        db["spaces"].append(space)
+    if not any(tab["id"] == labels["herdr.tab"] for tab in space["tabs"]):
+        space["tabs"].append({"id": labels["herdr.tab"], "name": str(len(space["tabs"]) + 1), "terminal": t})
+
+
+def unplace(db, t):
+    for s in db["spaces"]:
+        s["tabs"] = [tab for tab in s["tabs"] if tab["terminal"] != t]
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def hc(state, db, args):
+    if not args:
+        return fail("usage", "no command", 2)
+    command, rest = args[0], args[1:]
+    if command == "run":
+        labels, cwd = {}, None
+        while rest and rest[0] != "--":
+            flag = rest.pop(0)
+            if flag == "--label":
+                key, _, value = rest.pop(0).partition("=")
+                labels[key] = value
+            elif flag == "--cwd":
+                cwd = rest.pop(0)
+        argv = rest[1:]
         db["n"] += 1
-        w = {"id": "w%d" % db["n"], "label": opt("--label"), "tabs": []}
-        db["workspaces"].append(w)
-        db["n"] += 1
-        tab = "%s:t%d" % (w["id"], db["n"])
-        w["tabs"].append({"id": tab, "label": "1", "pane": tab + ":p", "cwd": opt("--cwd")})
-        save()
-        return ok({"type": "workspace_created", "workspace": {"workspace_id": w["id"]},
-                   "tab": {"tab_id": tab}, "root_pane": {"pane_id": tab + ":p"}})
-    if cmd == ["tab", "create"]:
-        w = next(w for w in db["workspaces"] if w["id"] == opt("--workspace"))
-        db["n"] += 1
-        tab = "%s:t%d" % (w["id"], db["n"])
-        w["tabs"].append({"id": tab, "label": opt("--label"), "pane": tab + ":p", "cwd": opt("--cwd")})
-        save()
-        return ok({"type": "tab_created", "tab": {"tab_id": tab}, "root_pane": {"pane_id": tab + ":p"}})
-    if cmd == ["tab", "rename"]:
-        for w in db["workspaces"]:
-            for t in w["tabs"]:
-                if t["id"] == args[2]:
-                    t["label"] = args[3]
-        save()
-        return ok({"type": "ok"})
-    if cmd == ["tab", "close"]:
-        for w in db["workspaces"]:
-            w["tabs"] = [t for t in w["tabs"] if t["id"] != args[2]]
-        save()
-        return ok({"type": "ok"})
-    if cmd == ["tab", "focus"]:
-        return ok({"type": "ok"})
-    if cmd == ["workspace", "focus"]:
-        return ok({"type": "ok"})
-    if cmd == ["pane", "run"]:
-        pane, line = args[2], args[3]
-        cwd = next((t["cwd"] for w in db["workspaces"] for t in w["tabs"] if t["pane"] == pane), None)
-        typed = os.path.join(state, pane.replace(":", "_") + ".typed")
-        # The session clears its environment, so the pane tells it the file in its folder.
+        t = "t%d" % db["n"]
         if cwd:
             with open(os.path.join(cwd, ".fake-herdr-typed"), "w") as f:
-                f.write(typed)
-        log = open(os.path.join(state, pane.replace(":", "_") + ".log"), "a")
-        subprocess.Popen(["/bin/sh", "-c", line], cwd=cwd, stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=log, start_new_session=True)
-        return ok({"type": "ok"})
-    if cmd == ["agent", "prompt"]:
-        pane, text = args[2], args[3]
-        with open(os.path.join(state, pane.replace(":", "_") + ".typed"), "a") as f:
-            f.write(text + "\n")
-        return ok({"type": "ok"})
-    if cmd == ["agent", "send-keys"]:
+                f.write(os.path.join(state, t + ".typed"))
+        log = open(os.path.join(state, t + ".log"), "a")
+        child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                 start_new_session=True)
+        db["terminals"][t] = {"labels": labels, "pid": child.pid}
+        place(db, t)
+        return answer({"address": t, "state": "live"})
+    if not rest or rest[0] not in db["terminals"]:
+        return fail("not_found", "no terminal %r" % (rest[0] if rest else None), 3)
+    t, term = rest[0], db["terminals"][rest[0]]
+    if command == "label":
+        for pair in rest[1:]:
+            key, _, value = pair.partition("=")
+            term["labels"][key] = value
+        place(db, t)
+        return answer({"ok": True})
+    if command == "send":
+        with open(os.path.join(state, t + ".typed"), "a") as f:
+            f.write(rest[1] + "\n")
+        return answer({"started": None, "status": None, "turn": 0})
+    if command == "keys":
         # A folder dialog of the fake claude on the screen: down moves the selection, enter
         # answers with the selected option.
-        path = os.path.join(state, args[2].replace(":", "_") + ".screen")
-        for k in args[3:]:
+        path = os.path.join(state, t + ".screen")
+        for k in rest[1:]:
             screen = open(path).read() if os.path.exists(path) else ""
-            if k == "down" and "\u276f No, exit" in screen:
-                screen = screen.replace("\u276f No, exit\n   Yes", "  No, exit\n \u276f Yes")
+            if k == "down" and "❯ No, exit" in screen:
+                screen = screen.replace("❯ No, exit\n   Yes", "  No, exit\n ❯ Yes")
             elif k == "enter" and "Enter to confirm" in screen:
-                screen = "accepted" if "\u276f Yes" in screen else "refused"
+                screen = "accepted" if "❯ Yes" in screen else "refused"
             open(path, "w").write(screen)
-        return ok({"type": "ok"})
-    if cmd == ["pane", "read"]:
-        path = os.path.join(state, args[2].replace(":", "_") + ".screen")
+        return answer({"status": None, "turn": 0})
+    if command == "read":
+        path = os.path.join(state, t + ".screen")
         sys.stdout.write(open(path).read() if os.path.exists(path) else "")
         return 0
-    print(json.dumps({"error": {"code": "unknown", "message": " ".join(args)}}))
-    return 1
+    if command == "kill":
+        if not alive(term["pid"]):
+            return fail("finished", "the terminal finished", 11)
+        try:
+            os.killpg(term["pid"], signal.SIGKILL)
+        except OSError:
+            pass
+        return answer({"ok": True})
+    if command == "rm":
+        if alive(term["pid"]):
+            return fail("live", "the terminal runs", 10)
+        del db["terminals"][t]
+        unplace(db, t)
+        return answer({"ok": True})
+    return fail("unknown", " ".join(args), 2)
 
 
 if __name__ == "__main__":

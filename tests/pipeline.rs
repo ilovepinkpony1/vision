@@ -1505,6 +1505,129 @@ fn a_wait_step_above_its_limit_needs_you_and_retry_starts_a_new_limit() {
     });
 }
 
+/// The deploy of an env that records no deployment: past its limit, the step reads its
+/// at_limit path, and a value that `on` names moves the ticket instead of the flag. The demo
+/// ticket stays at the status `To Do`, which stands in for the version page of an env.
+#[test]
+fn a_wait_step_above_its_limit_moves_on_its_at_limit_path() {
+    let world = World::new();
+    world.write_adapter(|text| {
+        let scripts = text
+            .lines()
+            .find(|l| l.starts_with("scripts = "))
+            .unwrap()
+            .to_string();
+        format!(
+            "name = \"demo\"\nbase = \"origin/main\"\n{scripts}\n\n[[step]]\nid = \"look\"\nkind = \"wait\"\nwatch = \"pr.draft\"\non = {{ \"false\" = \"done\", \"To Do\" = \"done\" }}\nevery = 1\nwait = [\"none\"]\nlimit = 2\nat_limit = \"tracker_status\"\n\n[[step]]\nid = \"done\"\nkind = \"end\"\n"
+        )
+    });
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick();
+    assert_eq!(
+        world.step().as_deref(),
+        Some("look"),
+        "before the limit, the value of at_limit does not count"
+    );
+    assert_eq!(
+        world.counts()["visit"]["at_limit"],
+        "To Do",
+        "each look keeps the value of at_limit"
+    );
+    world.tick_until("the end step", LONG, |w| {
+        w.step().as_deref() == Some("done")
+    });
+    assert!(world.flags().is_empty(), "no flag: {:?}", world.flags());
+    let log = world.run(&["log", KEY]);
+    assert!(
+        log.stdout.contains("at_limit tracker_status = To Do"),
+        "the event names the way: {log:?}"
+    );
+}
+
+/// A wait step of the demo adapter that watches `pr.draft` (always none here) with a limit of
+/// 2 seconds, and the demo ticket status as the stand-in for the version page of an env. `on`
+/// names the status `In Progress`.
+fn late_adapter(world: &World, keys: &str) {
+    world.write_adapter(|text| {
+        let scripts = text
+            .lines()
+            .find(|l| l.starts_with("scripts = "))
+            .unwrap()
+            .to_string();
+        format!(
+            "name = \"demo\"\nbase = \"origin/main\"\n{scripts}\n\n[[step]]\nid = \"look\"\nkind = \"wait\"\n{keys}\non = {{ \"false\" = \"done\", \"In Progress\" = \"done\" }}\nevery = 1\nlimit = 2\n\n[[step]]\nid = \"done\"\nkind = \"end\"\n"
+        )
+    });
+}
+
+/// A late wait: a deploy that comes after the limit. The step with at_limit gets the flag
+/// needs-you at its limit and keeps watching under it, and the value that `on` names clears
+/// the flag and moves the ticket.
+#[test]
+fn a_late_wait_keeps_watching_under_its_flag_and_moves_on_by_itself() {
+    let world = World::new();
+    late_adapter(
+        &world,
+        "watch = \"pr.draft\"\nwait = [\"none\"]\nat_limit = \"tracker_status\"",
+    );
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the late flag", LONG, |w| has_flag(w, "needs-you"));
+    let reason = world.reason("needs-you");
+    assert!(
+        reason.contains(
+            "At the limit, tracker_status was To Do. The step keeps watching under the flag"
+        ),
+        "{reason}"
+    );
+    assert_eq!(world.counts()["reasons"]["needs-you"]["by"], "late");
+    // Under the flag, the step looks again each `every` seconds, and the flag stays while the
+    // value stays.
+    let looked = world.counts()["visit"]["observed"].clone();
+    world.tick_until("a look under the flag", LONG, |w| {
+        w.counts()["visit"]["observed"] != looked
+    });
+    assert_eq!(world.step().as_deref(), Some("look"));
+    assert!(has_flag(&world, "needs-you"));
+    // The env runs the head: a later look clears the flag and moves the ticket.
+    world.world_cmd(&["status", world.root(), KEY, "In Progress"]);
+    world.tick_until("the end step", LONG, |w| {
+        w.step().as_deref() == Some("done")
+    });
+    assert!(world.flags().is_empty(), "{:?}", world.flags());
+    assert!(world.counts()["reasons"].get("needs-you").is_none());
+    let log = world.run(&["log", KEY]);
+    assert!(
+        log.stdout
+            .contains("\"how\":\"at_limit tracker_status = In Progress\"")
+            && log.stdout.contains("\"cleared\":\"needs-you\""),
+        "the event of the move names the way and the cleared flag: {log:?}"
+    );
+}
+
+/// The usual flag of a limit, with no at_limit, stops the ticket: a value that `on` names
+/// later moves nothing until `vision retry`.
+#[test]
+fn a_wait_step_without_at_limit_stops_at_its_flag() {
+    let world = World::new();
+    late_adapter(&world, "watch = \"tracker_status\"\nwait = [\"To Do\"]");
+    world.run(&["take", KEY]).expect_code(0);
+    world.tick_until("the flag", LONG, |w| has_flag(w, "needs-you"));
+    assert!(world.counts()["reasons"]["needs-you"]["by"].is_null());
+    world.world_cmd(&["status", world.root(), KEY, "In Progress"]);
+    let looked = world.counts()["visit"]["observed"].clone();
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(600));
+        world.tick();
+    }
+    assert_eq!(world.step().as_deref(), Some("look"));
+    assert!(has_flag(&world, "needs-you"));
+    assert_eq!(
+        world.counts()["visit"]["observed"],
+        looked,
+        "no look under the flag"
+    );
+}
+
 #[test]
 fn a_turn_step_moves_on_the_kept_findings_of_its_turn() {
     let world = World::new();

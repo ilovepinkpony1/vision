@@ -21,7 +21,7 @@
     │  at a time. In the mode auto: Vision never asks again for tracker.describe, except for   │
     │  a diff that touches a sensitive path that the approved plan does not name.              │
     │                                                                                          │
-  TH│  y a n choose    esc later                                                               │
+  TH│  y a n choose    C discuss with Claude    esc later                                      │
     │                                                                                          │
     ╰──────────────────────────────────────────────────────────────────────────────────────────╯
  ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   q quit

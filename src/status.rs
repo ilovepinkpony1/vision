@@ -423,6 +423,7 @@ mod tests {
             cost_usd: 0.0,
             pr: None,
             pr_url: None,
+            issue_url: None,
             branch: None,
             clone: None,
             updated: None,

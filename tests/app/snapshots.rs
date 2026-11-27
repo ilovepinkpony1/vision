@@ -4,6 +4,7 @@
 use vision::app::model::{App, Card, SetupError};
 use vision::app::msg::{ChildResult, Effect, JobDone, JobKind, Key, Msg};
 use vision::app::needs::NeedItem;
+use vision::app::view::home::{GITHUB, JIRA};
 
 use super::support::*;
 
@@ -234,6 +235,41 @@ fn home_at_other_sizes() {
             Some(queue()),
         ),
     );
+}
+
+#[test]
+fn a_path_longer_than_its_room_shows_the_current_step_and_marks_each_cut() {
+    // 52 steps, as a large adapter has: at 110 columns, the room holds 23 places.
+    let mut long = setup();
+    long.steps = (1..=52).map(|n| format!("s{n}")).collect();
+    let early = waiting("DEMO-12", "Export the report", "s3", "waits for ci");
+    let late = waiting("DEMO-7", "Show the totals", "s48", "waits until 09:00");
+    let app = home_from(
+        SIZE,
+        long,
+        local(vec![early, late], Vec::new()),
+        Some(queue()),
+    );
+    let screen = screen(&app);
+    let lines: Vec<&str> = screen.lines().collect();
+    // The second line of the row of a ticket, without the marks of its links under the key.
+    let path = |key: &str| -> String {
+        let at = lines.iter().position(|l| l.contains(key)).unwrap();
+        let marks = [GITHUB, JIRA].concat();
+        lines[at + 1]
+            .trim_matches(|c: char| c == '│' || c.is_whitespace() || marks.contains(c))
+            .to_string()
+    };
+    // The step s3 shows, and a mark at the end stands for the steps after the room.
+    let early = path("DEMO-12");
+    assert!(early.starts_with("●━●━◉─○"), "{early}");
+    assert!(early.contains("○─…  s3"), "{early}");
+    // The step s48 shows with the steps after it, and a mark at the start stands for the done
+    // steps before the room.
+    let late = path("DEMO-7");
+    assert!(late.starts_with("…━●━●"), "{late}");
+    assert!(late.contains("●━◉─○─○─○─○  s48"), "{late}");
+    check("home_long_path", &app);
 }
 
 /// The tab "To take" has one section for each status: the statuses of `app.sections` first,

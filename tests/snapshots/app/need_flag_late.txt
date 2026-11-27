@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    needs you   DEMO-12 · builder asks: Must the export keep the order of the columns?              n needs
+         ╭─ DEMO-12 · the wait passed its limit, and Vision keeps watching ─────────────────────────╮
+   In pro│                                                                                          │
+ ╭───────│  DEMO-12 waited at the step deployed-bastion longer than its limit.                      │───────╮
+ │ ▸ DEMO│                                                                                          │   38m │
+ │      │  Bastion did not run the head of the ticket in 90 minutes, and its version page shows    │       │
+ │       │  an older commit. The step deployed-bastion keeps watching, and moves the ticket on by   │       │
+ │   DEMO│  itself when bastion runs it.                                                            │2h 10m │
+ │     │  Find out why bastion did not deploy, for example in its deploy job. You can also press  │       │
+ ╰───────│  r to wait again with a new limit.                                                       │───────╯
+         │                                                                                          │
+         │  Details: the step deployed-bastion watched envs.bastion.deployed for 5439 s, above its  │
+         │  limit of 5400 s. The last value: false. At the limit, envs.bastion.running was false.   │
+         │  The step keeps watching under the flag, and a value that on names moves the ticket on   │
+         │  by itself                                                                               │
+         │                                                                                          │
+         │  r starts the step deployed-bastion again with a new limit.                              │
+         │  x stops DEMO-12. Its branch stays in its clone.                                         │
+         │  C opens your own Claude Code session about DEMO-12 in a new tab of Herdr, with a brief  │
+         │  of what Vision knows. The ticket stays as it is.                                        │
+         │                                                                                          │
+         │  r try the step again    x stop the ticket    C discuss with Claude    esc later         │
+         │                                                                                          │
+         ╰──────────────────────────────────────────────────────────────────────────────────────────╯
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
+

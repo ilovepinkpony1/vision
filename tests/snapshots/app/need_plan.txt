@@ -5,11 +5,11 @@
          │                                                                                          │
    In pro│  ## Decisions                                                                            │
  ╭───────│                                                                                          │───────╮
- │ ▸   DE│  - The export keeps the order of the columns.                                            │   38m │
- │       │  - The file uses commas and a header row.                                                │       │
+ │ ▸ DEMO│  - The export keeps the order of the columns.                                            │   38m │
+ │      │  - The file uses commas and a header row.                                                │       │
  │       │                                                                                          │       │
- │    DE│  ## Proof                                                                                │2h 10m │
- │       │                                                                                          │       │
+ │   DEMO│  ## Proof                                                                                │2h 10m │
+ │     │                                                                                          │       │
  ╰───────│  test_export.py fails on the base and passes after the change.                           │───────╯
          │                                                                                          │
          │  - Step 1 of the build writes one part of the export.                                    │
@@ -26,7 +26,7 @@
          │                                                                     ▼ 4 more · ↑↓ scroll │
          │  To change the plan, edit ~/.vision/tickets/DEMO-12/plan.md, and approve the new plan    │
   THIS WE│  here. Vision has no way to send a plan back to its agent.                               │
-         │  ↑↓ scroll    a approve    x stop the ticket    esc later                                │
+         │  ↑↓ scroll    a approve    x stop the ticket    C discuss with Claude    esc later       │
          │                                                                                          │
  ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

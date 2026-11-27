@@ -985,6 +985,85 @@ fn ticket_the_deployment_of_an_env_tells_whether_the_env_runs_the_head() {
 }
 
 #[test]
+fn ticket_the_version_page_of_an_env_tells_whether_the_env_runs_the_head() {
+    let (t, _w) = ticket_test();
+    let s = &t.server;
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/git/ref/heads/staging"),
+        json!({"object": {"sha": HEAD}}),
+        200,
+    );
+    let holds = format!("{REPO_PATH}/compare/staging...{HEAD}");
+    s.json_route("GET", &holds, json!({"status": "identical"}), 200);
+    let page = "/health_checker";
+    let config = json!({"envs": [{"name": "staging", "branch": "staging",
+                                  "version_url": format!("{}{page}", s.url)}]});
+    let running = || {
+        let staging = observe_ticket(&t, json!(7), config.clone())["envs"]["staging"].clone();
+        (staging["running"].clone(), staging["running_sha"].clone())
+    };
+
+    // The page names an older commit: the env does not run the head yet.
+    s.route("GET", page, |_| {
+        Reply::text(200, &format!("CurrentVersion={OTHER}\n"))
+    });
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/compare/{OTHER}...{HEAD}"),
+        json!({"status": "ahead"}),
+        200,
+    );
+    assert_eq!(running(), (json!(false), json!(OTHER)));
+
+    // A newer commit that holds the head.
+    let newer = "c".repeat(40);
+    let text = format!("CurrentVersion={newer}");
+    s.route("GET", page, move |_| Reply::text(200, &text));
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/compare/{newer}...{HEAD}"),
+        json!({"status": "behind"}),
+        200,
+    );
+    assert_eq!(running(), (json!(true), json!(newer)));
+
+    // A page with no commit, or with another status than 200, gives none, and so does a commit
+    // that GitHub does not know.
+    s.route("GET", page, |_| Reply::text(200, "OK"));
+    assert_eq!(running(), (Value::Null, Value::Null));
+    s.route("GET", page, |_| {
+        Reply::text(503, &format!("CurrentVersion={HEAD}"))
+    });
+    assert_eq!(running(), (Value::Null, Value::Null));
+    let unknown = "d".repeat(40);
+    let text = format!("CurrentVersion={unknown}");
+    s.route("GET", page, move |_| Reply::text(200, &text));
+    s.json_route(
+        "GET",
+        &format!("{REPO_PATH}/compare/{unknown}...{HEAD}"),
+        json!({"message": "Not Found"}),
+        404,
+    );
+    assert_eq!(running(), (Value::Null, json!(unknown)));
+
+    // While the branch of the env does not hold the head, no deploy runs it: no read.
+    s.json_route("GET", &holds, json!({"status": "diverged"}), 200);
+    let reads = s.count("GET", page);
+    assert_eq!(running(), (json!(false), Value::Null));
+    assert_eq!(s.count("GET", page), reads, "the page is not read");
+
+    // A bad address is named.
+    let result = t.observe(json!({"what": "ticket", "key": KEY, "branch": BRANCH, "pr": 7,
+        "config": t.config(json!({"envs": [{"name": "staging", "branch": "staging", "version_url": "ftp://x"}]}))}));
+    assert_eq!(result.code, 1);
+    assert!(
+        result.stderr.contains("`version_url` of the env staging"),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn ticket_an_http_error_names_the_call_and_the_status_never_a_header() {
     let (t, _w) = ticket_test();
     t.server.json_route(

@@ -5,11 +5,11 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
- │               ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
+ │ ▸ DEMO-12     Export the report of the month as a CSV file                                 $1.03     38m │
+ │              ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
  │                                                                                                          │
- │    DE╭─ DEMO-12 · you took over its session ────────────────────────────────────────────────────╮2h 10m │
- │       │                                                                                          │       │
+ │   DEMO╭─ DEMO-12 · you took over its session ────────────────────────────────────────────────────╮2h 10m │
+ │     │                                                                                          │       │
  ╰───────│  You took over the session of DEMO-12.                                                   │───────╯
          │                                                                                          │
          │  No new turn starts while the ticket is paused.                                          │
@@ -17,7 +17,7 @@
          │  at a step that you pick. At its step, the next turn of builder resumes the session      │
          │  that you worked in.                                                                     │
          │                                                                                          │
-         │  enter continue    esc later                                                             │
+         │  enter continue    C discuss with Claude    esc later                                    │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

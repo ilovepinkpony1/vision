@@ -5,6 +5,7 @@
 //! - [`check_end_facts`]: the end facts of a turn result, the gates too. [`gate_blocks`] says
 //!   whether a failed gate found a blocking item, which a `fail` route of the step needs.
 //! - [`wait_target`] and [`ci_result`]: where a wait step moves, and the CI check it records.
+//! - [`late_move`]: where a late wait moves under its flag (see [`Next::Late`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -110,6 +111,8 @@ pub enum KindFacts {
         waits: Option<Vec<String>>,
         /// `limit` of the step in seconds.
         limit: Option<u64>,
+        /// `at_limit` of the step: what a visit that passed its limit reads before the flag.
+        at_limit: Option<AtLimit>,
         /// The seconds since the visit began to watch, or `None` before its first look.
         waited: Option<i64>,
         /// The local time (such as `09:00`) of `from` while it is still to come: the step
@@ -193,6 +196,10 @@ pub enum Next {
     ClearLimit,
     /// Set a flag with its reason.
     Flag { flag: &'static str, reason: String },
+    /// A wait step with `at_limit` passed its limit, and no value of `on` came: set the flag
+    /// needs-you with the reason, marked late ([`super::state::LATE`]). The step keeps watching
+    /// under the flag, and [`late_move`] reads each later look.
+    Late { reason: String },
     /// The entry of a turn step: the `before` jobs, `observe`, and the first turn of the visit.
     Start {
         resume: Option<String>,
@@ -225,6 +232,16 @@ fn flag(reason: impl Into<String>) -> Next {
         flag: NEEDS_YOU,
         reason: reason.into(),
     }
+}
+
+/// The last sentence of the reason of a late flag (see [`Next::Late`]). The texts for people
+/// read it, because they get only the reason.
+pub const LATE_SENTENCE: &str =
+    "The step keeps watching under the flag, and a value that on names moves the ticket on by itself";
+
+/// True when the reason of a flag is that of a late wait, which clears by itself.
+pub fn is_late(reason: &str) -> bool {
+    reason.contains(LATE_SENTENCE)
 }
 
 /// True when the visit is one entry above the cap of its step.
@@ -320,6 +337,7 @@ pub fn decide(facts: &Facts) -> Next {
             target,
             waits,
             limit,
+            at_limit,
             waited,
             until,
         } => {
@@ -359,11 +377,33 @@ pub fn decide(facts: &Facts) -> Next {
             }
             if let (Some(limit), Some(waited)) = (limit, waited) {
                 if *waited > i64::try_from(*limit).unwrap_or(i64::MAX) {
-                    return flag(format!(
+                    // A second path that `on` names moves the ticket before the flag, such as
+                    // an env that runs the head while its deployments stopped.
+                    if let Some(at) = at_limit {
+                        if let Some(to) = &at.target {
+                            return Next::Move {
+                                to: to.clone(),
+                                how: at.how(),
+                            };
+                        }
+                    }
+                    let mut reason = format!(
                         "the step {} watched {watch} for {waited} s, above its limit of {limit} s. The last value: {}",
                         facts.step,
                         watched.as_deref().unwrap_or("not observed yet")
-                    ));
+                    );
+                    // With a second path, the flag is late: the step keeps watching under it,
+                    // because the outside work can still come, such as a deploy after its
+                    // usual time.
+                    if let Some(at) = at_limit {
+                        reason.push_str(&format!(
+                            ". At the limit, {} was {}. {LATE_SENTENCE}",
+                            at.path,
+                            at.value.as_deref().unwrap_or("not observed yet")
+                        ));
+                        return Next::Late { reason };
+                    }
+                    return flag(reason);
                 }
             }
             Next::Nothing(format!(
@@ -779,6 +819,52 @@ pub fn check_end_facts(expects: &[Expect], inputs: &FactInputs) -> Check {
 /// The step of `on` for the watched value.
 pub fn wait_target(on: &BTreeMap<String, String>, watched: Option<&str>) -> Option<String> {
     watched.and_then(|value| on.get(value).cloned())
+}
+
+/// Where a late wait moves (see [`Next::Late`]): the step of `on` for the value of `watch` at
+/// the last look, else the step of `on` for the value of `at_limit`, each with the way of the
+/// move for its event. `None` while neither value has a step, and for each other step. No
+/// interrupt and no other flag counts under the flag: the person decides those.
+pub fn late_move(facts: &Facts) -> Option<(String, String)> {
+    let KindFacts::Wait {
+        watched,
+        target,
+        at_limit,
+        ..
+    } = &facts.kind
+    else {
+        return None;
+    };
+    if let Some(to) = target {
+        return Some((
+            to.clone(),
+            format!("on {}", watched.as_deref().unwrap_or("-")),
+        ));
+    }
+    let at = at_limit.as_ref()?;
+    at.target.clone().map(|to| (to, at.how()))
+}
+
+/// `at_limit` of a wait step at the last look: the path, its value, and the step of `on` for
+/// that value. A visit that passed its limit moves to that step instead of the flag.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AtLimit {
+    pub path: String,
+    /// The value at the last look, or `None` before the first look.
+    pub value: Option<String>,
+    pub target: Option<String>,
+}
+
+impl AtLimit {
+    /// The way of the move, for its event and its visit, such as
+    /// `at_limit envs.void.running = true`.
+    pub fn how(&self) -> String {
+        format!(
+            "at_limit {} = {}",
+            self.path,
+            self.value.as_deref().unwrap_or("-")
+        )
+    }
 }
 
 /// The result of the CI check that the `ci` facts of an observe answer give, or `None`.
@@ -1301,6 +1387,7 @@ kind = "end"
                 target: target.map(str::to_string),
                 waits: None,
                 limit: None,
+                at_limit: None,
                 waited: Some(10_000),
                 until: None,
             };
@@ -1341,6 +1428,7 @@ kind = "end"
                 target: None,
                 waits: Some(vec!["false".into(), "none".into()]),
                 limit: Some(60),
+                at_limit: None,
                 waited: None,
                 until: None,
             };
@@ -1376,6 +1464,7 @@ kind = "end"
                 target: target.map(str::to_string),
                 waits: Some(vec!["false".into()]),
                 limit: Some(60),
+                at_limit: None,
                 waited: Some(10_000),
                 until: None,
             };
@@ -1420,6 +1509,7 @@ kind = "end"
                 target: target.map(str::to_string),
                 waits: Some(vec!["none".into()]),
                 limit: Some(60),
+                at_limit: None,
                 waited: Some(10_000),
                 until: until.map(str::to_string),
             };
@@ -1457,6 +1547,7 @@ kind = "end"
                 target: None,
                 waits: waits.map(|w| w.iter().map(|v| v.to_string()).collect()),
                 limit,
+                at_limit: None,
                 waited,
                 until: None,
             };
@@ -1498,6 +1589,118 @@ kind = "end"
             matches!(wait(None, None, Some(60), None), Next::Nothing(_)),
             "the clock has not started"
         );
+    }
+
+    #[test]
+    fn a_wait_step_past_its_limit_reads_its_at_limit_path_before_the_flag() {
+        let wait = |at_limit: Option<AtLimit>, waited: i64| {
+            let mut facts = turn_facts(None, Vec::new());
+            facts.step = "deployed-staging".into();
+            facts.next = None;
+            facts.kind = KindFacts::Wait {
+                start: Vec::new(),
+                watch: "envs.staging.deployed".into(),
+                watched: Some("false".into()),
+                interrupt: None,
+                conflict: None,
+                target: None,
+                waits: Some(vec!["false".into()]),
+                limit: Some(60),
+                at_limit,
+                waited: Some(waited),
+                until: None,
+            };
+            decide(&facts)
+        };
+        let running = |value: Option<&str>, target: Option<&str>| {
+            Some(AtLimit {
+                path: "envs.staging.running".into(),
+                value: value.map(str::to_string),
+                target: target.map(str::to_string),
+            })
+        };
+        // Before the limit, the second path does not count, also when `on` names its value.
+        assert!(matches!(
+            wait(running(Some("true"), Some("qa-staging")), 60),
+            Next::Nothing(_)
+        ));
+        // Past the limit, a value that `on` names moves the ticket instead of the flag.
+        assert_eq!(
+            wait(running(Some("true"), Some("qa-staging")), 61),
+            Next::Move {
+                to: "qa-staging".into(),
+                how: "at_limit envs.staging.running = true".into()
+            }
+        );
+        // Another value sets the late flag, and the reason names it and says that the step
+        // keeps watching.
+        let late = |next: Next| match next {
+            Next::Late { reason } => reason,
+            other => panic!("a late flag: {other:?}"),
+        };
+        let reason = late(wait(running(Some("false"), None), 61));
+        assert_eq!(
+            reason,
+            format!("the step deployed-staging watched envs.staging.deployed for 61 s, above its limit of 60 s. The last value: false. At the limit, envs.staging.running was false. {LATE_SENTENCE}")
+        );
+        assert!(is_late(&reason));
+        assert!(late(wait(running(None, None), 61)).contains(
+            "At the limit, envs.staging.running was not observed yet. The step keeps watching"
+        ));
+        // With no at_limit, the flag is the usual one, and its reason stays as it was.
+        let Next::Flag { reason, .. } = wait(None, 61) else {
+            panic!("a flag")
+        };
+        assert!(reason.ends_with("The last value: false"), "{reason}");
+        assert!(!is_late(&reason));
+    }
+
+    #[test]
+    fn a_late_wait_moves_on_a_value_of_watch_or_of_at_limit_and_on_nothing_else() {
+        let late = |watched: &str, target: Option<&str>, running: &str, at: Option<&str>| {
+            let mut facts = turn_facts(None, Vec::new());
+            facts.step = "deployed-staging".into();
+            facts.flags = vec![NEEDS_YOU.into()];
+            facts.kind = KindFacts::Wait {
+                start: Vec::new(),
+                watch: "envs.staging.deployed".into(),
+                watched: Some(watched.into()),
+                interrupt: Some((
+                    "comments".into(),
+                    "interrupt review.state = comments".into(),
+                )),
+                conflict: None,
+                target: target.map(str::to_string),
+                waits: Some(vec!["false".into()]),
+                limit: Some(60),
+                at_limit: Some(AtLimit {
+                    path: "envs.staging.running".into(),
+                    value: Some(running.into()),
+                    target: at.map(str::to_string),
+                }),
+                waited: Some(7200),
+                until: None,
+            };
+            facts
+        };
+        // The flag still stops `decide`: only the tick of a late flag reads `late_move`.
+        let facts = late("true", Some("qa-staging"), "false", None);
+        assert!(matches!(decide(&facts), Next::Nothing(_)));
+        assert_eq!(
+            late_move(&facts),
+            Some(("qa-staging".into(), "on true".into()))
+        );
+        assert_eq!(
+            late_move(&late("false", None, "true", Some("qa-staging"))),
+            Some((
+                "qa-staging".into(),
+                "at_limit envs.staging.running = true".into()
+            ))
+        );
+        // The interrupt of the look and the long wait change nothing.
+        assert_eq!(late_move(&late("false", None, "false", None)), None);
+        // Another kind of step never moves this way.
+        assert_eq!(late_move(&turn_facts(None, Vec::new())), None);
     }
 
     #[test]

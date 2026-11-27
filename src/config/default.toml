@@ -14,11 +14,14 @@ plugins = []                      # folders of Claude Code plugins for each work
 bin = "codex"
 # price = { input = 1.25, output = 10.0 }   # dollars for one million tokens. Without it, a turn on Codex costs 0, and only its tokens count.
 
-[herdr]                           # the turns of the work agents as interactive sessions in herdr panes, as in a factory
-enabled = false                   # true: each Claude turn of a work agent runs in a tab of the session, and you type into it
-session = "vision"                # the named herdr session; Herdr.app shows it in a window of its own
-bin = "herdr"
-app = "/Applications/Herdr.app/Contents/MacOS/Herdr"
+[herdr]                           # the turns of the work agents as interactive sessions in tabs of Herdr.app, as in a factory
+enabled = false                   # true: each Claude turn of a work agent runs in a tab of Herdr.app, and you type into it
+session = "vision"                # the space of Herdr.app where each turn opens its tab "<ticket> <agent>"
+bin = "hc"                        # the herdr-core CLI
+app = "/Applications/Herdr.app/Contents/MacOS/Herdr"   # the program of Herdr.app (herdr-app)
+
+[discuss]                         # your own Claude Code session about a ticket: C on a card of the things that wait, or vision discuss KEY
+command = "claude"                # it runs in your shell, so an alias works, such as "yolo"
 
 [git]                         # the author and committer of each commit of a session
 name = ""                     # "" means: "<user> (vision)". A GitHub App bot: "<app>[bot]"

@@ -368,11 +368,11 @@ fn follow_until_done(shown: &mut [Shown], out: &mut impl Write) -> Result<()> {
     }
 }
 
-/// `vision open KEY`: a running turn in a herdr pane shows in its window of Herdr.app, and it
-/// goes on (section 7.7). With another running turn, print its events and send each typed line
+/// `vision open KEY`: a running turn in a herdr pane shows in its tab of Herdr.app, and it goes
+/// on (section 7.7). With another running turn, print its events and send each typed line
 /// into its inbox until it ends; Ctrl-C leaves, and the turn continues. With no running turn,
 /// pause the ticket and open `claude --resume <session id>` in the working folder of the last
-/// turn: in a tab of herdr with `[herdr] enabled`, else in this process. `herdr_only` fails
+/// turn: in a tab of Herdr.app with `[herdr] enabled`, else in this process. `herdr_only` fails
 /// when the turn is not in a pane.
 pub fn open(ctx: &Ctx, key: &TicketKey, herdr_only: bool) -> Result<()> {
     ctx.require_setup()?;
@@ -383,14 +383,16 @@ pub fn open(ctx: &Ctx, key: &TicketKey, herdr_only: bool) -> Result<()> {
         .and_then(|r| r.pane.as_ref().map(|p| (r, p)))
     {
         let id = running.turn_id()?;
-        let plan = LaunchFile::read(&ctx.paths.turn(key, &id).dir)?
+        let launch = LaunchFile::read(&ctx.paths.turn(key, &id).dir)?;
+        let plan = launch
             .plan
             .pane
-            .with_context(|| format!("the launch of the turn {id} names no herdr session"))?;
-        super::pane::show(&plan, pane, key.as_str())?;
+            .with_context(|| format!("the launch of the turn {id} names no Herdr space"))?;
+        let label = super::pane::tab_label(key.as_str(), &launch.plan.agent);
+        super::pane::show(&plan, pane, &label)?;
         println!(
-            "The turn {id} of {key} runs in the tab {} of the herdr session {}. Herdr.app shows it: type into the pane to talk to the agent.",
-            pane.tab, pane.session
+            "The turn {id} of {key} runs in the tab `{label}` of the Herdr space {}. Herdr.app shows it: type into the tab to talk to the agent.",
+            pane.session
         );
         return Ok(());
     }
@@ -485,8 +487,9 @@ fn take_over(ctx: &Ctx, ledger: &Ledger, key: &TicketKey) -> Result<()> {
         let plan = super::pane::PanePlan::of(&config.herdr);
         let pane = super::pane::take_over(&plan, key.as_str(), &workdir, &line)?;
         println!(
-            "{key} is paused, so no new turn starts for it. The session {session} opens in the tab {} of the herdr session {}.",
-            pane.tab, pane.session
+            "{key} is paused, so no new turn starts for it. The session {session} opens in the tab `{}` of the Herdr space {}.",
+            super::pane::tab_label(key.as_str(), "you"),
+            pane.session
         );
         return Ok(());
     }

@@ -99,6 +99,9 @@ pub struct FlagSet {
     pub flag: String,
     /// Why, for the person.
     pub reason: String,
+    /// The mark of what set the flag, when that changes how it clears, such as
+    /// [`crate::pipeline::state::LATE`].
+    pub by: Option<String>,
 }
 
 impl Action {

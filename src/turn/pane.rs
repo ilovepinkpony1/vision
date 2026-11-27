@@ -1,14 +1,18 @@
 //! The turns in herdr panes (section 7.7). With `[herdr] enabled`, a Claude turn of a work agent
-//! runs as an interactive Claude Code session in a tab of the named herdr session, with one
-//! workspace for each ticket. The person watches the session in Herdr.app and types into it.
+//! runs as an interactive Claude Code session in a terminal of herdr-core (`hc`), which Herdr.app
+//! shows as the tab `<ticket> <agent>` of the space `[herdr] session`. The person watches the
+//! session in Herdr.app and types into it. `herdr-app`, the program of Herdr.app, only finds the
+//! space, names the tab, and shows it.
 //!
 //! The supervisor still owns the turn:
 //!
-//! 1. It makes sure that the herdr session answers. If not, it opens a window of Herdr.app on
-//!    the session, which starts its server.
-//! 2. It opens a tab with the name of the agent in the workspace of the ticket, and then it
-//!    closes the tabs of the ended turns of the ticket. It runs `pane.sh` in the tab: the script writes
-//!    its pid, and replaces itself with `claude` and the environment of the allow list.
+//! 1. It makes sure that the window of Herdr.app answers. If not, `herdr-app` with no arguments
+//!    opens it, and starts the app when it does not run. A window that does not open is no
+//!    failure: the turn runs hidden in herdr-core, and `vision open KEY --herdr` shows it.
+//! 2. It writes `pane.sh` in the turn folder, and starts it in a new terminal of herdr-core with
+//!    the labels of its tab. The script writes its pid, and replaces itself with `claude` and
+//!    the environment of the allow list. At the end of the turn, the supervisor removes the
+//!    terminal, and its tab closes.
 //! 3. The hooks of the session run `vision turn-hook`, which adds each hook event to
 //!    `hooks.jsonl`. The status line writes the cost of the session to `status-line.json`.
 //! 4. The supervisor copies each message of the transcript to `stream.jsonl`, in the form of
@@ -16,7 +20,7 @@
 //! 5. At each `Stop`, it reads the last message of the agent. A result object that fits the
 //!    schema ends the turn. Else it reminds the agent, unless the person wrote in the pane in
 //!    the last 15 minutes.
-//! 6. Each message of the inbox goes to the session with `herdr agent prompt`.
+//! 6. Each message of the inbox goes to the session with `hc send`.
 //! 7. At the time limit, on a signal, or when the session does not start, it stops `claude`.
 //!    A pane that closes before the result ends the turn with the reason `killed`.
 
@@ -24,8 +28,9 @@ use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -76,20 +81,42 @@ const EXIT_GRACE: Duration = Duration::from_secs(10);
 const TERM_GRACE: Duration = Duration::from_secs(1);
 /// How often the supervisor reads the hooks, the transcript, and the inbox.
 const POLL: Duration = Duration::from_millis(200);
-/// The time limit of one call of the herdr CLI.
+/// The time limit of one call of `herdr-app` or `hc`.
 const HERDR_TIMEOUT: Duration = Duration::from_secs(20);
-/// How long the server of the session can take to start after Herdr.app opens a window.
-const SERVER_WAIT: Duration = Duration::from_secs(20);
+/// The time limit of `hc send`, which waits up to 60 seconds while the person types a draft.
+const SEND_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long the window of Herdr.app can take to answer after `herdr-app` opens it.
+const WINDOW_WAIT: Duration = Duration::from_secs(20);
+/// How long the window can take to show the tab of a new terminal, and herdr-core to end a
+/// terminal.
+const SETTLE_WAIT: Duration = Duration::from_secs(5);
+/// The variables of the environment of Herdr.app when Vision starts it: the ones that a start
+/// from the Dock has. A variable of Vision or of a terminal never reaches the app.
+const APP_ENV: [&str; 9] = [
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "PATH",
+    "LANG",
+    "TMPDIR",
+    "SSH_AUTH_SOCK",
+    "__CF_USER_TEXT_ENCODING",
+];
 /// The most keys for the folder dialogs of one start: two for each dialog.
 const DIALOG_ANSWERS: u32 = 60;
 /// How often the screen is read for a folder dialog before the session starts.
 const DIALOG_EVERY: Duration = Duration::from_millis(700);
 
-/// The herdr session, the CLI, and the app of a turn in a pane, resolved at launch.
+/// The space, the herdr-core CLI, and the program of Herdr.app of a turn in a pane, resolved at
+/// launch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanePlan {
+    /// The space of Herdr.app where each turn opens its tab: `[herdr] session`.
     pub session: String,
+    /// The herdr-core CLI, `hc`.
     pub bin: String,
+    /// The program of Herdr.app, `herdr-app`.
     pub app: String,
 }
 
@@ -103,13 +130,20 @@ impl PanePlan {
     }
 }
 
-/// Where a turn runs in herdr, in `turn.json`.
+/// Where a turn runs in Herdr.app, in `turn.json`. A turn of herdr 0.9.5 wrote `workspace` and
+/// `pane`, which read as `space` and `terminal`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneRef {
+    /// The name of the space: `[herdr] session`.
     pub session: String,
-    pub workspace: String,
+    /// The id of the space.
+    #[serde(alias = "workspace")]
+    pub space: String,
+    /// The id of the tab.
     pub tab: String,
-    pub pane: String,
+    /// The address of the terminal of the tab in herdr-core, such as `t7`.
+    #[serde(alias = "pane")]
+    pub terminal: String,
 }
 
 // The hook command ------------------------------------------------------------------------------
@@ -285,9 +319,13 @@ fn plain_name(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-// The herdr CLI ---------------------------------------------------------------------------------
+// The Herdr CLIs --------------------------------------------------------------------------------
 
-/// The herdr CLI on the named session of the turns. Contract: herdr 0.9.5.
+/// herdr-core and the window of Herdr.app, for the turns in the space `[herdr] session`. `hc`
+/// starts the terminal of a turn, types into it, reads it, and ends it, with or without the
+/// window. A terminal with the labels `herdr.space` and `herdr.tab` shows in that tab of that
+/// space, and the tab closes when its program ends. `herdr-app` finds the space, names the
+/// tabs, and shows them. Contract: herdr-core 0.1.22 (`hc`) and Herdr.app 0.1.18 (`herdr-app`).
 pub struct Herdr {
     pub plan: PanePlan,
 }
@@ -297,238 +335,351 @@ impl Herdr {
         Herdr { plan }
     }
 
-    /// Runs one command on the session and gives `result` of its JSON answer.
-    pub fn call(&self, args: &[&str]) -> Result<Value> {
-        let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
+    /// Runs one command of the window, `herdr-app do <command> <one JSON object>`, and gives
+    /// its JSON answer.
+    pub fn app_do(&self, command: &str, args: &Value) -> Result<Value> {
         let output = run_with_timeout(
-            Command::new(&self.plan.bin)
-                .arg("--session")
-                .arg(&self.plan.session)
-                .args(args),
+            Command::new(&self.plan.app)
+                .arg("do")
+                .arg(command)
+                .arg(args.to_string()),
             HERDR_TIMEOUT,
         )
-        .with_context(|| format!("could not run `{} {what}`", self.plan.bin))?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let value: Option<Value> = serde_json::from_str(text.trim()).ok();
+        .with_context(|| format!("could not run `{} do {command}`", self.plan.app))?;
+        let value: Option<Value> = serde_json::from_slice(&output.stdout).ok();
         if let Some(error) = value.as_ref().and_then(|v| v.get("error")) {
-            let code = error.get("code").and_then(Value::as_str).unwrap_or("error");
-            let message = error.get("message").and_then(Value::as_str).unwrap_or("");
-            bail!("herdr {what} failed ({code}): {message}");
+            let message = error
+                .as_str()
+                .map_or_else(|| error.to_string(), str::to_string);
+            bail!("Herdr.app refused {command}: {message}");
         }
         if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
             bail!(
-                "herdr {what} failed with {}: {}",
+                "`herdr-app do {command}` failed with {}: {}",
                 output.status,
-                err.trim().chars().take(300).collect::<String>()
+                first_line(&output.stderr)
             );
         }
-        Ok(value
-            .and_then(|v| v.get("result").cloned())
-            .unwrap_or(Value::Null))
+        Ok(value.unwrap_or(Value::Null))
     }
 
-    /// True when the server of the session answers.
-    pub fn answers(&self) -> bool {
-        self.call(&["workspace", "list"]).is_ok()
-    }
-
-    /// Makes sure that the server of the session runs. A window of Herdr.app on the session
-    /// starts it.
-    pub fn ensure_running(&self) -> Result<()> {
-        if self.answers() {
-            return Ok(());
-        }
-        self.open_window()?;
-        let until = Instant::now() + SERVER_WAIT;
-        while Instant::now() < until {
-            if self.answers() {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(500));
-        }
-        bail!(
-            "the herdr session `{}` did not start. Open it in Herdr.app, or set [herdr] enabled = false in config.toml",
-            self.plan.session
-        )
-    }
-
-    /// Opens a window of Herdr.app on the session.
-    pub fn open_window(&self) -> Result<()> {
-        let output = run_with_timeout(
-            Command::new(&self.plan.app).args([
-                "window",
-                "new",
-                "--session",
-                &self.plan.session,
-                "--json",
-            ]),
-            HERDR_TIMEOUT,
-        )
-        .with_context(|| format!("could not run {}", self.plan.app))?;
+    /// Runs `hc` with these arguments and this time limit, and gives its standard output.
+    fn hc(&self, args: &[&str], limit: Duration) -> Result<String> {
+        let what = args.first().copied().unwrap_or_default();
+        let output = run_with_timeout(Command::new(&self.plan.bin).args(args), limit)
+            .with_context(|| format!("could not run `{} {what}`", self.plan.bin))?;
         if !output.status.success() {
-            bail!(
-                "Herdr.app did not open a window on the session `{}`: {}",
-                self.plan.session,
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
+            // hc writes {"error": {"kind", "message", "hint"}} to the standard error.
+            let message = serde_json::from_slice::<Value>(&output.stderr)
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| first_line(&output.stderr));
+            bail!("hc {what} failed with {}: {message}", output.status);
         }
-        Ok(())
-    }
-
-    /// The workspace of a ticket, by its label.
-    pub fn workspace_of(&self, label: &str) -> Result<Option<String>> {
-        let list = self.call(&["workspace", "list"])?;
-        Ok(list
-            .get("workspaces")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .find(|w| w.get("label").and_then(Value::as_str) == Some(label))
-            .and_then(|w| w.get("workspace_id").and_then(Value::as_str))
-            .map(str::to_string))
-    }
-
-    /// Opens a tab with `label` in the workspace of the ticket, and makes the workspace when
-    /// it does not exist. Gives the workspace, the tab, and the pane.
-    pub fn open_tab(
-        &self,
-        ticket: &str,
-        label: &str,
-        cwd: &Path,
-    ) -> Result<(String, String, String)> {
-        let cwd = cwd.display().to_string();
-        if let Some(workspace) = self.workspace_of(ticket)? {
-            let made = self.call(&[
-                "tab",
-                "create",
-                "--workspace",
-                &workspace,
-                "--cwd",
-                &cwd,
-                "--label",
-                label,
-                "--no-focus",
-            ])?;
-            let tab = id_at(&made, &["tab", "tab_id"])?;
-            let pane = id_at(&made, &["root_pane", "pane_id"])?;
-            return Ok((workspace, tab, pane));
-        }
-        let made = self.call(&[
-            "workspace",
-            "create",
-            "--cwd",
-            &cwd,
-            "--label",
-            ticket,
-            "--no-focus",
-        ])?;
-        let workspace = id_at(&made, &["workspace", "workspace_id"])?;
-        let tab = id_at(&made, &["tab", "tab_id"])?;
-        let pane = id_at(&made, &["root_pane", "pane_id"])?;
-        // The first tab of a new workspace has the label "1".
-        let _ = self.call(&["tab", "rename", &tab, label]);
-        Ok((workspace, tab, pane))
-    }
-
-    pub fn run(&self, pane: &str, line: &str) -> Result<()> {
-        self.call(&["pane", "run", pane, line]).map(|_| ())
-    }
-
-    /// Types a prompt into the session of the pane. herdr refuses it while Claude shows a
-    /// dialog.
-    pub fn prompt(&self, pane: &str, text: &str) -> Result<()> {
-        self.call(&["agent", "prompt", pane, text]).map(|_| ())
-    }
-
-    pub fn send_keys(&self, pane: &str, keys: &[&str]) -> Result<()> {
-        let mut args = vec!["agent", "send-keys", pane];
-        args.extend_from_slice(keys);
-        self.call(&args).map(|_| ())
-    }
-
-    /// The text on the screen of the pane.
-    pub fn read(&self, pane: &str) -> Result<String> {
-        let output = run_with_timeout(
-            Command::new(&self.plan.bin)
-                .arg("--session")
-                .arg(&self.plan.session)
-                .args(["pane", "read", pane]),
-            HERDR_TIMEOUT,
-        )?;
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
-    pub fn close_tab(&self, tab: &str) -> Result<()> {
-        self.call(&["tab", "close", tab]).map(|_| ())
+    /// True when the window of Herdr.app answers.
+    pub fn answers(&self) -> bool {
+        run_with_timeout(Command::new(&self.plan.app).arg("status"), HERDR_TIMEOUT)
+            .is_ok_and(|o| o.status.success())
     }
 
-    /// Shows the tab of a turn: its workspace and its tab get the focus in the session.
-    pub fn focus(&self, workspace: &str, tab: &str) -> Result<()> {
-        self.call(&["workspace", "focus", workspace])?;
-        self.call(&["tab", "focus", tab]).map(|_| ())
+    /// Makes sure that the window of Herdr.app answers. `herdr-app` with no arguments opens the
+    /// window, and it starts the app when the app does not run.
+    pub fn ensure_window(&self) -> Result<()> {
+        if self.answers() {
+            return Ok(());
+        }
+        let mut opener = self.open_window()?;
+        let until = Instant::now() + WINDOW_WAIT;
+        let mut opened = false;
+        let mut failed = None;
+        while Instant::now() < until {
+            if self.answers() {
+                opened = true;
+                break;
+            }
+            // While the app runs, `herdr-app` ends at once. A failure ends the wait.
+            if let Ok(Some(status)) = opener.try_wait() {
+                if !status.success() {
+                    failed = Some(status);
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+        reap(opener);
+        if opened {
+            return Ok(());
+        }
+        let why = match failed {
+            Some(status) => format!("`{}` ended with {status}", self.plan.app),
+            None => format!(
+                "the window did not answer in {} seconds",
+                WINDOW_WAIT.as_secs()
+            ),
+        };
+        bail!("Herdr.app did not open its window: {why}")
     }
 
-    /// Gives the focus to the window of Herdr.app that shows the workspace of the ticket: its
-    /// title ends with the label of that workspace. With no such window, Herdr.app opens one
-    /// on the session.
-    pub fn show_window(&self, ticket: &str) -> Result<()> {
-        let listed = run_with_timeout(
-            Command::new(&self.plan.app).args(["window", "list", "--json"]),
-            HERDR_TIMEOUT,
-        );
-        let windows: Vec<Value> = listed
-            .ok()
-            .and_then(|o| serde_json::from_slice(&o.stdout).ok())
-            .unwrap_or_default();
-        let suffix = format!(": {ticket}");
-        let found = windows
-            .iter()
-            .find(|w| {
-                w.get("title")
-                    .and_then(Value::as_str)
-                    .is_some_and(|t| t.ends_with(&suffix))
-            })
-            .and_then(|w| w.get("id").and_then(Value::as_u64));
-        match found {
-            Some(id) => {
-                let output = run_with_timeout(
-                    Command::new(&self.plan.app).args(["window", "focus", &id.to_string()]),
-                    HERDR_TIMEOUT,
-                )?;
-                if !output.status.success() {
-                    bail!("Herdr.app did not focus its window {id}");
+    /// Starts `herdr-app` with no arguments, which opens the window of Herdr.app or brings it
+    /// to the front. When the app does not run, this program is the app itself, so it runs in
+    /// a process session of its own, with the environment of a start from the Dock.
+    fn open_window(&self) -> Result<Child> {
+        let mut command = Command::new(&self.plan.app);
+        command
+            .env_clear()
+            .envs(
+                APP_ENV
+                    .iter()
+                    .filter_map(|n| std::env::var_os(n).map(|v| (n, v))),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: setsid is async-signal-safe, and the closure touches no other state.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
-            }
-            None => self.open_window(),
+            });
         }
+        command
+            .spawn()
+            .with_context(|| format!("could not start {}", self.plan.app))
+    }
+
+    /// The id of the space of the turns, and true when the space is new. It is the space with
+    /// the name `[herdr] session`. With no such space, the id is that name: the window makes a
+    /// new space for the first terminal that names it.
+    fn space_id(&self) -> Result<(String, bool)> {
+        let output = run_with_timeout(Command::new(&self.plan.app).arg("ls"), HERDR_TIMEOUT)
+            .with_context(|| format!("could not run `{} ls`", self.plan.app))?;
+        if !output.status.success() {
+            bail!(
+                "`herdr-app ls` failed with {}: {}",
+                output.status,
+                first_line(&output.stderr)
+            );
+        }
+        let list: Value = serde_json::from_slice(&output.stdout)
+            .context("the answer of `herdr-app ls` is not JSON")?;
+        let found = list
+            .get("spaces")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|s| s.get("name").and_then(Value::as_str) == Some(self.plan.session.as_str()))
+            .and_then(|s| s.get("id").and_then(Value::as_str))
+            .map(str::to_string);
+        Ok(match found {
+            Some(id) => (id, false),
+            None => (self.plan.session.clone(), true),
+        })
+    }
+
+    /// Starts `argv` in a new terminal of herdr-core, in the folder `cwd`, with no parent, so
+    /// that the terminal of Vision or of the person never owns it. With `place`, a space and a
+    /// tab, the window shows the terminal in that tab. Gives the address of the terminal.
+    pub fn start(
+        &self,
+        cwd: &Path,
+        place: Option<(&str, &str)>,
+        argv: &[String],
+    ) -> Result<String> {
+        let mut args = vec![
+            "run".to_string(),
+            "--bg".into(),
+            "--json".into(),
+            "--no-parent".into(),
+            "--cwd".into(),
+            cwd.display().to_string(),
+        ];
+        if let Some((space, tab)) = place {
+            args.extend([
+                "--label".into(),
+                format!("herdr.space={space}"),
+                "--label".into(),
+                format!("herdr.tab={tab}"),
+            ]);
+        }
+        args.push("--".into());
+        args.extend(argv.iter().cloned());
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let started: Value = serde_json::from_str(self.hc(&args, HERDR_TIMEOUT)?.trim())
+            .context("the answer of `hc run` is not JSON")?;
+        id_at(&started, &["address"])
+    }
+
+    /// Shows a running terminal in a tab of a space: the labels that the window reads.
+    fn place(&self, terminal: &str, space: &str, tab: &str) -> Result<()> {
+        let labels = [format!("herdr.space={space}"), format!("herdr.tab={tab}")];
+        self.hc(&["label", terminal, &labels[0], &labels[1]], HERDR_TIMEOUT)
+            .map(|_| ())
+    }
+
+    /// Names the tab of a new terminal, and the space when it is new.
+    fn name(&self, space: &str, new_space: bool, tab: &str, label: &str) -> Result<()> {
+        if new_space {
+            self.rename("space.rename", space, &self.plan.session)?;
+        }
+        self.rename("tab.rename", tab, label)
+    }
+
+    /// Renames a space or a tab. The window makes them a moment after a terminal gets its
+    /// labels, so the call goes again until the settle time passes.
+    fn rename(&self, command: &str, id: &str, name: &str) -> Result<()> {
+        let until = Instant::now() + SETTLE_WAIT;
+        loop {
+            match self.app_do(command, &json!({"id": id, "name": name})) {
+                Ok(_) => return Ok(()),
+                Err(e) if Instant::now() >= until => return Err(e),
+                Err(_) => thread::sleep(Duration::from_millis(200)),
+            }
+        }
+    }
+
+    /// Types a prompt into the session of the terminal. hc refuses it while Claude shows a
+    /// dialog, and it waits while the person types a draft there.
+    pub fn prompt(&self, terminal: &str, text: &str) -> Result<()> {
+        self.hc(&["send", terminal, text], SEND_TIMEOUT).map(|_| ())
+    }
+
+    pub fn send_keys(&self, terminal: &str, keys: &[&str]) -> Result<()> {
+        let mut args = vec!["keys", terminal];
+        args.extend_from_slice(keys);
+        self.hc(&args, HERDR_TIMEOUT).map(|_| ())
+    }
+
+    /// The text on the screen of the terminal.
+    pub fn read(&self, terminal: &str) -> Result<String> {
+        self.hc(&["read", terminal], HERDR_TIMEOUT)
+    }
+
+    /// Ends a terminal and removes it from herdr-core. Its tab closes with it.
+    pub fn remove(&self, terminal: &str) {
+        let _ = self.hc(&["kill", terminal], HERDR_TIMEOUT);
+        // `hc rm` refuses a terminal until its program ended.
+        let until = Instant::now() + SETTLE_WAIT;
+        while self.hc(&["rm", terminal], HERDR_TIMEOUT).is_err() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// Shows the tab of a turn: its space and its tab get the focus in the window.
+    pub fn focus(&self, space: &str, tab: &str) -> Result<()> {
+        self.app_do("space.select", &json!({"id": space}))?;
+        self.app_do("tab.select", &json!({"id": tab})).map(|_| ())
+    }
+
+    /// Brings the window of Herdr.app to the front. While the app runs, `herdr-app` ends at
+    /// once. A program that runs on is the app itself, and it is never stopped.
+    pub fn show_window(&self) -> Result<()> {
+        let mut opener = self.open_window()?;
+        let until = Instant::now() + HERDR_TIMEOUT;
+        while Instant::now() < until {
+            if let Some(status) = opener.try_wait()? {
+                if !status.success() {
+                    bail!(
+                        "Herdr.app did not show its window: `{}` ended with {status}",
+                        self.plan.app
+                    );
+                }
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        reap(opener);
+        Ok(())
     }
 }
 
-/// Shows the tab of a running turn in its window of Herdr.app.
-pub fn show(plan: &PanePlan, pane: &PaneRef, ticket: &str) -> Result<()> {
-    let herdr = Herdr::new(plan.clone());
-    herdr.ensure_running()?;
-    herdr.focus(&pane.workspace, &pane.tab)?;
-    herdr.show_window(ticket)
+/// The name of the tab of a turn or of a take-over in the space of the turns.
+pub fn tab_label(ticket: &str, agent: &str) -> String {
+    format!("{ticket} {agent}")
 }
 
-/// Opens a tab "you" in the workspace of the ticket, runs `line` there, and shows it: the
+/// Shows the tab of a running turn in the window of Herdr.app. A turn that started while the
+/// window did not answer runs hidden in herdr-core: its terminal gets its tab first, with the
+/// name `label`.
+pub fn show(plan: &PanePlan, pane: &PaneRef, label: &str) -> Result<()> {
+    let herdr = Herdr::new(plan.clone());
+    herdr.ensure_window().map_err(|e| {
+        anyhow::anyhow!(
+            "{e:#}. Run `hc attach {}` in a terminal to see the turn",
+            pane.terminal
+        )
+    })?;
+    let space = if pane.space.is_empty() {
+        let (space, new_space) = herdr.space_id()?;
+        herdr.place(&pane.terminal, &space, &pane.tab)?;
+        herdr.name(&space, new_space, &pane.tab, label)?;
+        space
+    } else {
+        pane.space.clone()
+    };
+    herdr.focus(&space, &pane.tab)?;
+    herdr.show_window()
+}
+
+/// Opens the tab `<ticket> you` in the space of the turns, runs `line` there, and shows it: the
 /// session of a paused ticket that the person takes over.
 pub fn take_over(plan: &PanePlan, ticket: &str, workdir: &Path, line: &str) -> Result<PaneRef> {
+    let argv = ["/bin/sh".to_string(), "-c".to_string(), line.to_string()];
+    open_tab(plan, ticket, "you", workdir, &argv)
+}
+
+/// Opens a new tab `<ticket> <who>` in the space of the turns, runs `argv` there in the folder
+/// `workdir`, and shows it: its space and its tab get the focus, and the window comes to the
+/// front. A session of the person runs there, such as a take-over or `vision discuss`.
+pub fn open_tab(
+    plan: &PanePlan,
+    ticket: &str,
+    who: &str,
+    workdir: &Path,
+    argv: &[String],
+) -> Result<PaneRef> {
     let herdr = Herdr::new(plan.clone());
-    herdr.ensure_running()?;
-    let (workspace, tab, pane) = herdr.open_tab(ticket, "you", workdir)?;
-    herdr.run(&pane, line)?;
-    herdr.focus(&workspace, &tab)?;
-    herdr.show_window(ticket)?;
+    herdr.ensure_window()?;
+    let (space, new_space) = herdr.space_id()?;
+    let tab = format!("vision-{ticket}-{who}-{}", time::compact(time::now()));
+    let terminal = herdr.start(workdir, Some((&space, &tab)), argv)?;
+    herdr.name(&space, new_space, &tab, &tab_label(ticket, who))?;
+    herdr.focus(&space, &tab)?;
+    herdr.show_window()?;
     Ok(PaneRef {
         session: plan.session.clone(),
-        workspace,
+        space,
         tab,
-        pane,
+        terminal,
     })
+}
+
+/// Reaps a program when it ends while this process lives, so that it never stays a zombie.
+/// When this process ends first, the system adopts it.
+fn reap(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
+/// The first line of an output that is not empty, at most 300 characters.
+fn first_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default()
+        .chars()
+        .take(300)
+        .collect()
 }
 
 /// The id at a path of a JSON answer.
@@ -832,30 +983,7 @@ pub fn supervise(
     let end = |status: TurnState, reason: Reason, detail: String| {
         super::supervisor::finish(ctx, turn, status.ended(reason, Some(detail)), None)
     };
-    if let Err(e) = herdr.ensure_running() {
-        return end(status, Reason::Error, format!("{e:#}"));
-    }
-    let (workspace, tab, pane) = match herdr.open_tab(&plan.ticket, &plan.agent, &plan.workdir) {
-        Ok(ids) => ids,
-        Err(e) => {
-            return end(
-                status,
-                Reason::Error,
-                format!(
-                    "could not open a tab for the turn in the herdr session `{}`: {e:#}",
-                    pane_plan.session
-                ),
-            )
-        }
-    };
-    status.pane = Some(PaneRef {
-        session: pane_plan.session.clone(),
-        workspace,
-        tab,
-        pane: pane.clone(),
-    });
-    // After the new tab: herdr closes a workspace with its last tab.
-    close_ended_tabs(ctx, ledger, &herdr, &plan.ticket, &plan.turn);
+    // The script first: the terminal runs it at once.
     let pid_file = turn.dir.join(PID_FILE);
     let script = turn.dir.join(SCRIPT_FILE);
     let env = settings::session_env_of_process(&plan.env_pass);
@@ -866,31 +994,63 @@ pub fn supervise(
     let mut perms = std::fs::metadata(&script)?.permissions();
     std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o700);
     std::fs::set_permissions(&script, perms)?;
-    if let Err(e) = herdr.run(&pane, &shell_quote(&script.display().to_string())) {
-        return end(
-            status,
-            Reason::Error,
-            format!("could not start the session in its pane: {e:#}"),
-        );
+    let argv = ["/bin/sh".to_string(), script.display().to_string()];
+    let tab = format!("vision-{}", plan.turn);
+    let label = tab_label(&plan.ticket, &plan.agent);
+    // The window shows the turn when it answers. Else the turn runs hidden in herdr-core.
+    let place = match herdr.ensure_window().and_then(|()| herdr.space_id()) {
+        Ok(place) => Some(place),
+        Err(e) => {
+            ctx.log(&format!(
+                "turn {}: runs hidden in herdr-core: {e:#}. `vision open {} --herdr` shows it",
+                plan.turn, plan.ticket
+            ));
+            None
+        }
+    };
+    let spot = place
+        .as_ref()
+        .map(|(space, _)| (space.as_str(), tab.as_str()));
+    let terminal = match herdr.start(&plan.workdir, spot, &argv) {
+        Ok(terminal) => terminal,
+        Err(e) => {
+            return end(
+                status,
+                Reason::Error,
+                format!("could not start the terminal of the turn in herdr-core: {e:#}"),
+            )
+        }
+    };
+    if let Some((space, new_space)) = &place {
+        if let Err(e) = herdr.name(space, *new_space, &tab, &label) {
+            ctx.log(&format!("turn {}: the tab has no name: {e:#}", plan.turn));
+        }
     }
+    status.pane = Some(PaneRef {
+        session: pane_plan.session.clone(),
+        space: place.map(|(space, _)| space).unwrap_or_default(),
+        tab,
+        terminal: terminal.clone(),
+    });
     status.state = Phase::Running;
     status.at = time::now_rfc3339();
     status.write(&turn.status)?;
     ctx.log(&format!(
-        "turn {}: runs in the pane {pane} of the herdr session {}",
+        "turn {}: runs in the terminal {terminal} of herdr-core, the tab `{label}` of the Herdr space {}",
         plan.turn, pane_plan.session
     ));
 
     let schema = roles::schema(&ctx.paths, &plan.agent)?;
     let mut watch = Watch::new(plan, turn);
     watch.sent.insert(plan.first_message.trim().to_string());
-    let outcome = watch.run(ctx, ledger, &herdr, &pane, &schema, &mut status);
+    let outcome = watch.run(ctx, ledger, &herdr, &terminal, &schema, &mut status);
     let pid = watch.pid;
     if let Some(pid) = pid {
         // Stop what is left of the session, such as a command in the background.
         state::signal_group(pid, libc::SIGKILL);
         let _ = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     }
+    herdr.remove(&terminal);
     for line in watch.transcript.poll() {
         watch.write(&line);
     }
@@ -929,39 +1089,6 @@ fn read_cost(path: &Path) -> Option<f64> {
         .get("cost")
         .and_then(|c| c.get("total_cost_usd"))
         .and_then(Value::as_f64)
-}
-
-/// Closes the tab of each ended turn of the ticket, so that the workspace shows the new turn
-/// and the turns that run. A tab that is gone already counts as closed.
-fn close_ended_tabs(ctx: &Ctx, ledger: &Ledger, herdr: &Herdr, ticket: &str, current: &str) {
-    let Ok(key) = crate::paths::TicketKey::parse(ticket) else {
-        return;
-    };
-    let Ok(turns) = ledger.turns_of_ticket(ticket) else {
-        return;
-    };
-    for row in turns {
-        if row.id == current {
-            continue;
-        }
-        let Ok(id) = crate::paths::TurnId::parse(&row.id) else {
-            continue;
-        };
-        let paths = ctx.paths.turn(&key, &id);
-        let Ok(Some(state)) = TurnState::read(&paths.status) else {
-            continue;
-        };
-        let Some(pane) = state.pane.as_ref() else {
-            continue;
-        };
-        if state.is_ended()
-            && pane.session == herdr.plan.session
-            && !paths.dir.join(".tab-closed").exists()
-        {
-            let _ = herdr.close_tab(&pane.tab);
-            let _ = std::fs::write(paths.dir.join(".tab-closed"), "");
-        }
-    }
 }
 
 enum Outcome {
@@ -1275,12 +1402,15 @@ impl Watch {
                 }
                 if !session_started {
                     if started.elapsed() >= START_LIMIT {
+                        // The tab closes with the session, so the detail keeps its last lines.
+                        let screen = herdr.read(pane).unwrap_or_default();
                         self.stop();
                         return force(
                             Reason::Error,
                             format!(
-                                "the session did not start in its pane in {} seconds. Look at the pane in Herdr.app",
-                                START_LIMIT.as_secs()
+                                "the session did not start in its pane in {} seconds. Its screen ended with: {}",
+                                START_LIMIT.as_secs(),
+                                screen_tail(&screen)
                             ),
                         );
                     }

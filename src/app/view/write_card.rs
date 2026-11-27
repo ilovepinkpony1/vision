@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::canvas::ink;
 use super::cards::Rows;
-use super::need_card::{Parts, TEXT};
+use super::need_card::{Parts, DISCUSS, TEXT};
 use super::theme::T;
 use crate::app::chain::commit_text;
 use crate::app::hits::{keys_of, Act, AGAIN};
@@ -99,6 +99,7 @@ pub(super) fn approval(app: &App, _card: &NeedsCard, item: &WriteItem) -> Parts 
     if auto {
         keys.push(("a", "approve, then auto"));
     }
+    keys.push(DISCUSS);
     keys.push(("esc", "later"));
     foot.keys_with(&keys, &DECIDE, app.armed_act());
     Parts {
@@ -161,7 +162,7 @@ pub(super) fn first_write(app: &App, _card: &NeedsCard, item: &WriteItem) -> Par
     let mut foot = Rows::default();
     let keys: &str = if can_ask(item) { "y a n" } else { "a n" };
     foot.keys_with(
-        &[(keys, "choose"), ("esc", "later")],
+        &[(keys, "choose"), DISCUSS, ("esc", "later")],
         &DECIDE,
         app.armed_act(),
     );

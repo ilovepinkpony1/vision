@@ -134,6 +134,12 @@ pub fn explain(raw: &str) -> Friendly {
     if let Some(friendly) = wait_limit(text, raw) {
         return friendly;
     }
+    if let Some(friendly) = stop_line(text, raw) {
+        return friendly;
+    }
+    if let Some(friendly) = discuss_off(text, raw) {
+        return friendly;
+    }
     if let Some((verb, rest)) = text.split_once(" was refused by the size gate: ") {
         let (lines, limit) = numbers_of(rest);
         let headline = match (lines, limit) {
@@ -419,16 +425,25 @@ fn unrouted(text: &str, raw: &str) -> Option<Friendly> {
     ))
 }
 
-/// `the step S watched W for N s, above its limit of L s. The last value: V`. A wait for a
-/// deploy names the environment, because the cause is then outside Vision.
+/// `the step S watched W for N s, above its limit of L s. The last value: V`, and for a step
+/// with `at_limit`, `. At the limit, P was X.` and the sentence of a late wait: such a step
+/// keeps watching under its flag. A wait for a deploy names the environment, because the cause
+/// is then outside Vision.
 fn wait_limit(text: &str, raw: &str) -> Option<Friendly> {
+    let late = crate::pipeline::decide::is_late(text);
+    let text = text.replace(&format!(". {}", crate::pipeline::decide::LATE_SENTENCE), "");
     let rest = text.strip_prefix("the step ")?;
     let (step, rest) = rest.split_once(" watched ")?;
     let (watch, rest) = rest.split_once(" for ")?;
     let (_, rest) = rest.split_once(" s, above its limit of ")?;
     let (limit, rest) = rest.split_once(" s.")?;
     let (_, value) = rest.split_once("The last value: ")?;
+    let (value, at_limit) = match value.split_once(". At the limit, ") {
+        Some((value, second)) => (value, second.split_once(" was ")),
+        None => (value, None),
+    };
     let value = value.trim().trim_end_matches('.');
+    let at_limit = at_limit.map(|(path, v)| (path.trim(), v.trim().trim_end_matches('.')));
     let limit = limit
         .trim()
         .parse::<u64>()
@@ -437,23 +452,88 @@ fn wait_limit(text: &str, raw: &str) -> Option<Friendly> {
         .strip_prefix("envs.")
         .and_then(|w| w.strip_suffix(".deployed"))
     {
+        // The version page of the env is the second look of such a step.
+        let page = format!("envs.{env}.running");
+        let also = match at_limit {
+            Some((path, "false")) if path == page => {
+                ", and its version page shows an older commit".to_string()
+            }
+            Some((path, _)) if path == page => {
+                ", and Vision could not read a commit on its version page".to_string()
+            }
+            Some((path, v)) => format!(", and {path} was `{v}` at the limit"),
+            None => String::new(),
+        };
+        if late {
+            return Some(Friendly::new(
+                format!("{env} did not run the head of the ticket in {limit}{also}. The step {step} keeps watching, and moves the ticket on by itself when {env} runs it"),
+                Some(format!(
+                    "Find out why {env} did not deploy, for example in its deploy job. You can also press r to wait again with a new limit"
+                )),
+                raw,
+            ));
+        }
         return Some(Friendly::new(
-            format!("{env} did not run the head of the ticket in {limit}, so the step {step} stopped waiting"),
+            format!("{env} did not run the head of the ticket in {limit}{also}, so the step {step} stopped waiting"),
             Some(format!(
                 "Find out why {env} did not deploy, for example in its deploy job. Then press r to wait again"
             )),
             raw,
         ));
     }
-    let seen = if value == "not observed yet" {
+    let mut seen = if value == "not observed yet" {
         "Vision never observed its value".to_string()
     } else {
         format!("its value stayed `{value}`")
     };
+    if let Some((path, v)) = at_limit {
+        seen.push_str(&format!(", and {path} was `{v}` at the limit"));
+        if late {
+            return Some(Friendly::new(
+                format!("The step {step} waited {limit} for {watch}, and {seen}. It keeps watching, and moves the ticket on by itself when {watch} or {path} gets a value of on"),
+                Some(format!(
+                    "Find out why {watch} does not change. You can also press r to wait again, or raise the limit of the step {step} in adapter.toml"
+                )),
+                raw,
+            ));
+        }
+    }
     Some(Friendly::new(
         format!("The step {step} waited {limit} for {watch}, and {seen}"),
         Some(format!(
             "Find out why {watch} does not change. Then press r to wait again, or raise the limit of the step {step} in adapter.toml"
+        )),
+        raw,
+    ))
+}
+
+/// `the step S found the stop line `L` in D, so the person decides: run `vision retry K --step
+/// STEP` or `vision stop K``. A check step leaves the decision to the person, and a retry reads
+/// the document again, so the action names each way on.
+fn stop_line(text: &str, raw: &str) -> Option<Friendly> {
+    let rest = text.strip_prefix("the step ")?;
+    let (step, rest) = rest.split_once(" found the stop line `")?;
+    let (line, rest) = rest.split_once("` in ")?;
+    let (doc, rest) = rest.split_once(", so the person decides")?;
+    let key = rest.split_once("`vision stop ")?.1.split('`').next()?;
+    Some(Friendly::new(
+        format!("The step {step} found the stop line `{line}` in {doc}, so you decide how the ticket goes on"),
+        Some(format!(
+            "Read {doc} in the folder of the ticket. Then change the line and press r, move the ticket with `vision retry {key} --step STEP`, or stop it with `vision stop {key}`"
+        )),
+        raw,
+    ))
+}
+
+/// `the session about KEY opens only in a tab of Herdr.app, and [herdr] enabled is false in
+/// config.toml`: `C` of a card, or `vision discuss KEY --herdr`, with Herdr off.
+fn discuss_off(text: &str, raw: &str) -> Option<Friendly> {
+    let rest = text.strip_prefix("the session about ")?;
+    let (key, _) = rest.split_once(" opens only in a tab of Herdr.app")?;
+    Some(Friendly::new(
+        format!("Your session about {key} opens only in a tab of Herdr.app, and Herdr is off in config.toml"),
+        Some(format!(
+            "Set enabled = true under [herdr] in config.toml, or run `vision discuss {key}` in a terminal"
         )),
         raw,
     ))
@@ -777,6 +857,98 @@ mod tests {
         assert_eq!(
             none.headline,
             "The step look waited 60 seconds for pr.draft, and Vision never observed its value."
+        );
+    }
+
+    #[test]
+    fn a_wait_past_its_limit_names_its_second_look() {
+        let deployed = "the step deployed-void watched envs.void.deployed for 5406 s, above its limit of 5400 s. The last value: false";
+        let older = explain(&format!(
+            "{deployed}. At the limit, envs.void.running was false"
+        ));
+        assert_eq!(
+            older.headline,
+            "Void did not run the head of the ticket in 90 minutes, and its version page shows an older commit, so the step deployed-void stopped waiting."
+        );
+        assert_eq!(
+            older.action.as_deref(),
+            Some("Find out why void did not deploy, for example in its deploy job. Then press r to wait again.")
+        );
+        let unread = explain(&format!(
+            "{deployed}. At the limit, envs.void.running was none"
+        ));
+        assert_eq!(
+            unread.headline,
+            "Void did not run the head of the ticket in 90 minutes, and Vision could not read a commit on its version page, so the step deployed-void stopped waiting."
+        );
+        let other = explain("the step ci-review watched ci.state for 7260 s, above its limit of 7200 s. The last value: running. At the limit, ci.attempt was 3");
+        assert_eq!(
+            other.headline,
+            "The step ci-review waited 2 hours for ci.state, and its value stayed `running`, and ci.attempt was `3` at the limit."
+        );
+    }
+
+    #[test]
+    fn a_late_wait_says_that_it_keeps_watching_and_moves_on_by_itself() {
+        let late = crate::pipeline::decide::LATE_SENTENCE;
+        let deploy = explain(&format!("the step deployed-bastion watched envs.bastion.deployed for 5439 s, above its limit of 5400 s. The last value: false. At the limit, envs.bastion.running was false. {late}"));
+        assert_eq!(
+            deploy.headline,
+            "Bastion did not run the head of the ticket in 90 minutes, and its version page shows an older commit. The step deployed-bastion keeps watching, and moves the ticket on by itself when bastion runs it."
+        );
+        assert_eq!(
+            deploy.action.as_deref(),
+            Some("Find out why bastion did not deploy, for example in its deploy job. You can also press r to wait again with a new limit.")
+        );
+        assert!(
+            deploy.details.as_deref().is_some_and(|d| d.ends_with(late)),
+            "the details keep the raw reason: {deploy:?}"
+        );
+        let other = explain(&format!("the step ci-review watched ci.state for 7260 s, above its limit of 7200 s. The last value: running. At the limit, ci.attempt was 3. {late}"));
+        assert_eq!(
+            other.headline,
+            "The step ci-review waited 2 hours for ci.state, and its value stayed `running`, and ci.attempt was `3` at the limit. It keeps watching, and moves the ticket on by itself when ci.state or ci.attempt gets a value of on."
+        );
+        assert_eq!(
+            other.action.as_deref(),
+            Some("Find out why ci.state does not change. You can also press r to wait again, or raise the limit of the step ci-review in adapter.toml.")
+        );
+    }
+
+    #[test]
+    fn a_session_about_a_ticket_with_herdr_off_says_how_to_open_it() {
+        let raw = "error: the session about DEMO-12 opens only in a tab of Herdr.app, and [herdr] enabled is false in config.toml";
+        let f = explain(raw);
+        assert_eq!(
+            f.headline,
+            "Your session about DEMO-12 opens only in a tab of Herdr.app, and Herdr is off in config.toml."
+        );
+        assert_eq!(
+            f.action.as_deref(),
+            Some("Set enabled = true under [herdr] in config.toml, or run `vision discuss DEMO-12` in a terminal.")
+        );
+    }
+
+    #[test]
+    fn a_stop_line_names_the_document_and_each_way_on() {
+        let raw = "needs-you at the step fixed-void: the step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so the person decides: run `vision retry DEMO-12 --step STEP` or `vision stop DEMO-12`";
+        let f = explain(raw);
+        assert_eq!(
+            f.headline,
+            "The step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so you decide how the ticket goes on."
+        );
+        assert_eq!(
+            f.action.as_deref(),
+            Some("Read ci-fix.md in the folder of the ticket. Then change the line and press r, move the ticket with `vision retry DEMO-12 --step STEP`, or stop it with `vision stop DEMO-12`.")
+        );
+        assert_eq!(f.details.as_deref(), Some(raw));
+        assert_eq!(
+            f.inline(),
+            "the step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so you decide how the ticket goes on"
+        );
+        assert_eq!(
+            f.action_for_command_line("DEMO-12").as_deref(),
+            Some("Read ci-fix.md in the folder of the ticket. Then change the line and run `vision retry DEMO-12`, move the ticket with `vision retry DEMO-12 --step STEP`, or stop it with `vision stop DEMO-12`.")
         );
     }
 

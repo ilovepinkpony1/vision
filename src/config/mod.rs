@@ -36,8 +36,10 @@ pub struct Config {
     pub claude: Claude,
     /// The Codex CLI of the agents whose runner is `codex` (section 7.3).
     pub codex: Codex,
-    /// The turns in panes of a herdr session (section 7.7).
+    /// The turns in tabs of Herdr.app (section 7.7).
     pub herdr: Herdr,
+    /// The session of the person about a ticket, `vision discuss` (section 15.3).
+    pub discuss: Discuss,
     pub budget: Budget,
     pub time: TimeLimits,
     pub limits: Limits,
@@ -78,6 +80,7 @@ impl Default for Config {
             claude: Claude::default(),
             codex: Codex::default(),
             herdr: Herdr::default(),
+            discuss: Discuss::default(),
             budget: Budget::default(),
             time: TimeLimits::default(),
             limits: Limits::default(),
@@ -295,19 +298,19 @@ impl Default for Codex {
     }
 }
 
-/// The turns in panes of a herdr session (section 7.7): each Claude turn of a work agent runs
-/// as an interactive session in a tab of the session, with one workspace for each ticket, and
-/// the person types into it in Herdr.app.
+/// The turns in tabs of Herdr.app (section 7.7): each Claude turn of a work agent runs as an
+/// interactive session in a terminal of herdr-core, which Herdr.app shows as a tab of one space,
+/// and the person types into it there.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Herdr {
     /// False: each turn runs headless, with no pane.
     pub enabled: bool,
-    /// The named herdr session of the turns. Herdr.app shows it in a window of its own.
+    /// The space of Herdr.app where each turn opens its tab `<ticket> <agent>`.
     pub session: String,
-    /// The herdr CLI.
+    /// The herdr-core CLI, which starts, reads, and types into the terminals.
     pub bin: String,
-    /// The program of Herdr.app, which opens and focuses its windows.
+    /// The program of Herdr.app (`herdr-app`), which names and shows the tabs.
     pub app: String,
 }
 
@@ -316,8 +319,27 @@ impl Default for Herdr {
         Herdr {
             enabled: false,
             session: "vision".into(),
-            bin: "herdr".into(),
+            bin: "hc".into(),
             app: "/Applications/Herdr.app/Contents/MacOS/Herdr".into(),
+        }
+    }
+}
+
+/// The Claude Code session of the person about a ticket, which `vision discuss` starts (section
+/// 15.3). It is the session of the person, not a turn: it gets no flag of section 7.3, no
+/// environment of `[claude]`, and no result schema.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Discuss {
+    /// The command that starts the session. It runs in the shell of the person (`$SHELL -lic`),
+    /// so an alias or a function of the shell works, and the first message goes after `--`.
+    pub command: String,
+}
+
+impl Default for Discuss {
+    fn default() -> Discuss {
+        Discuss {
+            command: "claude".into(),
         }
     }
 }

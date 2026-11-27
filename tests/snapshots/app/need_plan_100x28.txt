@@ -22,7 +22,7 @@
     │                                                                     ▼ 5 more · ↑↓ scroll │
     │  To change the plan, edit ~/.vision/tickets/DEMO-12/plan.md, and approve the new plan    │
   TH│  here. Vision has no way to send a plan back to its agent.                               │
-    │  ↑↓ scroll    a approve    x stop the ticket    esc later                                │
+    │  ↑↓ scroll    a approve    x stop the ticket    C discuss with Claude    esc later       │
     │                                                                                          │
  ↑↓ ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

@@ -3,8 +3,8 @@
              │                                                                                  │
    In progres│  Rename the setting of the weekly email                                          │dow is open
  ╭───────────│                                                                                  │───────────╮
- │ ▸   DEMO-3│  DEMO-3 is stopped at the step review.                                           │50   5h 0m │
- │           │  Vision thinks it is at comments: the pull request #7 is open and ready, and 2   │           │
+ │ ▸ DEMO-3  │  DEMO-3 is stopped at the step review.                                           │50   5h 0m │
+ │          │  Vision thinks it is at comments: the pull request #7 is open and ready, and 2   │           │
  ╰───────────│  review comments wait.                                                           │───────────╯
              │  Vision read:                                                                    │
              │  · the tracker status is In Review                                               │

@@ -67,6 +67,18 @@
 #                          ci_workflow at the tip of that branch: envs.<name>.ci (green, red,
 #                          running, or none), ci_run, and ci_url. An env whose branch does not
 #                          hold the head has none of the three, so a watch reads none there.
+#                          An env can also name `version_url`, an http or https page of the env
+#                          that names the commit that it runs, such as a health page that
+#                          prints CurrentVersion=<commit>. While the branch holds the head,
+#                          observe reads that page (at most 10 seconds) and gives
+#                          envs.<name>.running_sha (the first commit id of 40 hex digits on the
+#                          page) and running (true when that commit holds the head). A page with
+#                          no commit, another status than 200, or a commit that GitHub does not
+#                          know gives running = null. While the branch does not hold the head,
+#                          the page is not read and running is false. A deploy step can read
+#                          running with `at_limit`, so that the page decides before the flag of
+#                          its limit when the project stops to record its deployments. That
+#                          flag is late: the step keeps watching, and a later deploy clears it.
 #   test_command           The command of the proof. It runs with one test file as its last
 #                          argument: `sh -c '<test_command> "$@"' sh <file>`, in a plain
 #                          environment with no secret, such as "python3 -m pytest -q".

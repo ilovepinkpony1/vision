@@ -122,6 +122,9 @@ pub struct Visit {
     /// A wait step: when `observe` last ran, and the watched value then.
     pub observed: Option<String>,
     pub watched: Option<String>,
+    /// A wait step with `at_limit`: the value of that path at the last look.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_limit: Option<String>,
     /// A wait step: when the visit began to watch, after its `start` verbs. The `limit` of the
     /// step counts from here.
     pub since: Option<String>,
@@ -198,8 +201,9 @@ impl Interrupt {
 pub struct FlagReason {
     pub reason: String,
     pub at: String,
-    /// What set the flag, when it is not a rule of the tick: [`RESUME`] for the test of the
-    /// head of a continue. The next continue clears such a flag.
+    /// What set the flag, when that changes how the flag clears: [`RESUME`] for the test of
+    /// the head of a continue, which the next continue clears, and [`LATE`] for the limit of a
+    /// wait step with `at_limit`, which the tick clears when the step moves.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
 }
@@ -207,12 +211,20 @@ pub struct FlagReason {
 /// The mark of a flag that the test of the head of a continue set (see [`FlagReason::by`]).
 pub const RESUME: &str = "resume";
 
+/// The mark of the flag needs-you that the limit of a wait step with `at_limit` set (see
+/// [`FlagReason::by`]). The step keeps watching under the flag: a look whose value `on` names
+/// clears the flag and moves the ticket.
+pub const LATE: &str = "late";
+
 /// The last facts of `observe`, as the status view shows them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Seen {
     pub at: String,
     pub tracker_status: Option<String>,
+    /// The web page of the ticket in the tracker: `url` of the issue, when the adapter gives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_url: Option<String>,
     pub pr: Option<PrFacts>,
     pub ci: Option<CiFacts>,
     pub envs: Map<String, Value>,
@@ -223,6 +235,11 @@ impl Seen {
         Seen {
             at: at.to_string(),
             tracker_status: facts.tracker_status.clone(),
+            issue_url: facts
+                .issue
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             pr: facts.pr.clone(),
             ci: facts.ci.clone(),
             envs: facts.envs.clone(),
@@ -374,6 +391,7 @@ mod tests {
             every: 60,
             wait: None,
             limit: None,
+            at_limit: None,
             from: None,
             interrupt: interrupt
                 .iter()
@@ -419,5 +437,21 @@ mod tests {
         assert_eq!(Interrupt::first(&step, &calm), None);
         assert_eq!(Interrupt::first(&step, &facts(json!({}))), None);
         assert_eq!(Interrupt::first(&wait(&[]), &late), None);
+    }
+
+    #[test]
+    fn a_look_keeps_the_page_of_the_issue() {
+        let page = "https://jira.example/browse/DEMO-12";
+        let mut look = facts(json!({}));
+        look.issue = json!({"key": "DEMO-12", "url": page});
+        assert_eq!(
+            Seen::of(&look, "2026-11-25T12:00:00Z").issue_url.as_deref(),
+            Some(page)
+        );
+        // An issue with no page keeps none.
+        assert_eq!(
+            Seen::of(&facts(json!({})), "2026-11-25T12:00:00Z").issue_url,
+            None
+        );
     }
 }

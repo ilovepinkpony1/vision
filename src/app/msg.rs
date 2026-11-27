@@ -122,6 +122,11 @@ pub enum Msg {
         key: String,
         result: ChildResult,
     },
+    /// `vision discuss KEY --herdr` ended.
+    Discussed {
+        key: String,
+        result: ChildResult,
+    },
     /// The review of a proposal of the Curator ended, and the app has the terminal again.
     ReviewEnded {
         proposal: String,
@@ -186,6 +191,10 @@ pub enum Effect {
     OpenReview(String),
     /// Open a link of the web in the browser of the system, and keep the terminal.
     OpenLink(String),
+    /// Run `vision discuss KEY --herdr` in a thread of its own: the own session of the person
+    /// about the ticket opens in a new tab of Herdr.app. It changes no state, so it never waits
+    /// for a pass.
+    Discuss(String),
     /// Read the things that wait for the person. The number names the load.
     LoadNeeds(u64),
     /// Read the facts of the check of a chain.

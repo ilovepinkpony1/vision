@@ -80,6 +80,7 @@ fn dispatch(ctx: &Ctx, command: Command) -> Result<()> {
         Command::Doctor { json } => doctor::run(ctx, json),
         Command::Pipeline(command) => pipeline::run(ctx, command),
         Command::Turn(command) => turn::run(ctx, command),
+        Command::Discuss { key, herdr } => app::discuss::command(ctx, &key, herdr),
         Command::Questions(command) => questions::run(ctx, command),
         Command::Memory(args) => memory::run(ctx, args),
         Command::Curate => curator::run(ctx),

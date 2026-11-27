@@ -5,11 +5,11 @@
 
    In pro╭─ DEMO-12 · builder asks at the step build · your 1 answer ───────────────────────────────╮
  ╭───────│                                                                                          │───────╮
- │ ▸   DE│  1 ✓ draft    review                                                                     │   38m │
- │       │                                                                                          │       │
+ │ ▸ DEMO│  1 ✓ draft    review                                                                     │   38m │
+ │      │                                                                                          │       │
  │       │  This answer goes to builder when you send it. Nothing went to Vision yet.               │       │
- │    DE│                                                                                          │2h 10m │
- │       │▸ 1  Must the export keep the order of the columns?                                       │       │
+ │   DEMO│                                                                                          │2h 10m │
+ │     │▸ 1  Must the export keep the order of the columns?                                       │       │
  ╰───────│     a  Keep the order                                                                    │───────╯
          │     refused: Q-0002 already has an answer                                                │
          │                                                                                          │
@@ -21,10 +21,10 @@
          │  Now  Nothing was recorded, and your draft stays.                                        │
          │                                                                                          │
          │  The question has a draft. s sends it.                                                   │
-         │  s send the answer    enter open the question    ↑↓ choose    ←→ the pages    esc later  │
+         │  s send the answer    enter open the question    ↑↓ choose    ←→ the pages               │
+         │  C discuss with Claude    esc later                                                      │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
 
 

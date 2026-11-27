@@ -5,24 +5,24 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
- │       ╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮       │
- │       │                                                                                          │       │
- │    DE│  A rule stopped DEMO-12 at the step build.                                               │2h 10m │
- │       │                                                                                          │       │
- ╰───────│  The proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change.            │───────╯
-         │                                                                                          │
+ │ ▸ DEMO╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮   38m │
+ │      │                                                                                          │       │
+ │       │  A rule stopped DEMO-12 at the step build.                                               │       │
+ │   DEMO│                                                                                          │2h 10m │
+ │     │  The proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change.            │       │
+ ╰───────│                                                                                          │───────╯
          │  r starts the step build again with a new turn of builder. Its message says why the      │
          │  step stopped.                                                                           │
          │  o opens the session of builder in this terminal. Vision pauses DEMO-12 while you work   │
          │  in it, and asks afterwards whether it goes on.                                          │
          │  x stops DEMO-12. Its branch stays in its clone.                                         │
+         │  C opens your own Claude Code session about DEMO-12 in a new tab of Herdr, with a brief  │
+         │  of what Vision knows. The ticket stays as it is.                                        │
          │                                                                                          │
-         │  r try the step again    o open the session    x stop the ticket    esc later            │
+         │  r try the step again    o open the session    x stop the ticket                         │
+         │  C discuss with Claude    esc later                                                      │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-
-
 
 
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you

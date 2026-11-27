@@ -413,12 +413,21 @@ fn needs(input: &Input, step: &str) -> Option<Now> {
         )
     } else {
         let reason = flag.map(|f| f.reason.clone()).unwrap_or_default();
-        (
-            "a rule stopped the ticket".to_string(),
-            vec![
-                cut_words(&reason, 160),
+        // A late wait clears its flag by itself when the value comes.
+        let (title, todo) = if crate::pipeline::decide::is_late(&reason) {
+            (
+                "the wait passed its limit, and Vision keeps watching",
+                format!("The ticket moves on by itself when the value comes, or press r to start the step {step} again."),
+            )
+        } else {
+            (
+                "a rule stopped the ticket",
                 format!("Fix the cause, then press r to start the step {step} again."),
-            ],
+            )
+        };
+        (
+            title.to_string(),
+            vec![cut_words(&reason, 160), todo],
             ("r", "retry"),
         )
     };
@@ -439,10 +448,12 @@ pub fn need_line(need: &Need) -> String {
         NeedKind::Flag if need.id == PAUSED => "paused: you took over its session".into(),
         NeedKind::Flag => {
             let reason = need.text.split_once(": ").map_or("", |(_, r)| r);
-            format!(
-                "a rule stopped it: {}",
-                crate::friendly::explain(reason).inline()
-            )
+            let what = if crate::pipeline::decide::is_late(reason) {
+                "it waits past its limit"
+            } else {
+                "a rule stopped it"
+            };
+            format!("{what}: {}", crate::friendly::explain(reason).inline())
         }
         NeedKind::Proposal => "a change of the memory waits for your review".into(),
         NeedKind::Notice => format!("a notice to read: {}", need.text),

@@ -3,8 +3,8 @@
 
    In progress 1    To take 2    Ready to merge 0       1 ticket · Vision moves it while this window is open
  ╭───────────╭─ Continue DEMO-3 ────────────────────────────────────────────────────────────────╮───────────╮
- │ ▸   DEMO-3│                                                                                  │50   5h 0m │
- │           │  Rename the setting of the weekly email                                          │           │
+ │ ▸ DEMO-3  │                                                                                  │50   5h 0m │
+ │          │  Rename the setting of the weekly email                                          │           │
  ╰───────────│                                                                                  │───────────╯
              │  DEMO-3 is stopped at the step review.                                           │
              │  Vision could not check the tracker and the pull request, so it suggests         │

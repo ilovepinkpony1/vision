@@ -5,22 +5,22 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
- │               ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
- │                                                                                                          │
- │    DE╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮2h 10m │
- │       │                                                                                          │       │
- ╰───────│  A rule stopped DEMO-12 at the step build.                                               │───────╯
-         │                                                                                          │
+ │ ▸ DEMO-12     Export the report of the month as a CSV file                                 $1.03     38m │
+ │              ●━●━●━◉─○─○─○─○─○─○─○─○─○  build · builder works · 6 min                                   │
+ │       ╭─ DEMO-12 · a rule stopped the ticket ────────────────────────────────────────────────────╮       │
+ │   DEMO│                                                                                          │2h 10m │
+ │     │  A rule stopped DEMO-12 at the step build.                                               │       │
+ ╰───────│                                                                                          │───────╯
          │  The proof did not pass at 1a2b3c4d5e6f: test_export.py failed on the change.            │
          │                                                                                          │
          │  DEMO-12 is also stopped. Enter opens the card that continues it at the step build, or   │
          │  at a step that you pick.                                                                │
+         │  C opens your own Claude Code session about DEMO-12 in a new tab of Herdr, with a brief  │
+         │  of what Vision knows. The ticket stays as it is.                                        │
          │                                                                                          │
-         │  enter continue    esc later                                                             │
+         │  enter continue    C discuss with Claude    esc later                                    │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
-
 
 
 

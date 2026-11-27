@@ -473,6 +473,19 @@ fn the_cards_of_the_live_view() {
     key(&mut app, 3.0, Key::Char('r'));
     check("live_card_retry", &app);
 
+    // A check step runs no turn: the retry reads its document again.
+    let mut checked = resting("fixed-void");
+    checked.view.kind = Some("check".into());
+    checked.facts.agent = None;
+    checked.facts.check = Some("ci-fix.md".into());
+    checked.view.flags.push(flag(
+        "needs-you",
+        "the step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so the person decides: run `vision retry DEMO-12 --step STEP` or `vision stop DEMO-12`",
+    ));
+    let mut app = live(SIZE, vec![checked], Vec::new(), Vec::new());
+    key(&mut app, 3.0, Key::Char('r'));
+    check("live_card_retry_check", &app);
+
     let mut app = live(SIZE, vec![resting("build")], Vec::new(), events());
     key(&mut app, 3.0, Key::Char('o'));
     check("live_card_open", &app);

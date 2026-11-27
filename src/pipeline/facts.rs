@@ -43,6 +43,9 @@ pub struct StateFacts {
     pub held: bool,
     /// An act step: it runs no turn, so a retry runs only its writes again.
     pub act: bool,
+    /// A check step: the document that it reads. It runs no turn, so a retry reads the
+    /// document again.
+    pub check: Option<String>,
     /// The first `before` or `after` entry of the step that is not done, or the first entry of
     /// `run` of an act step.
     pub entry: Option<EntryFact>,
@@ -387,6 +390,13 @@ fn facts_of(
                 }) if kept_back(text) => Some(label.clone()),
                 _ => None,
             };
+        }
+    }
+    if visit.kind == "check" {
+        if let Some(StepKind::Check(check)) =
+            adapter.and_then(|a| a.step(&visit.step)).map(|s| &s.kind)
+        {
+            facts.check = Some(check.doc.clone());
         }
     }
     if visit.kind == "wait" {

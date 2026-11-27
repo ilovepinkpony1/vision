@@ -134,6 +134,9 @@ pub struct RetryCard {
     pub held: bool,
     /// The step is an act step: it runs no turn, so the retry runs its writes again.
     pub act: bool,
+    /// The step is a check step: the document that it reads. The retry reads it again, and no
+    /// turn starts.
+    pub check: Option<String>,
     /// Why a rule stopped the ticket.
     pub reason: Option<String>,
     pub run: Run,
@@ -613,6 +616,9 @@ pub struct App {
     pub stats: StatsState,
     /// The chain that runs, or that ended and still shows on its card.
     pub chain: Option<Chain>,
+    /// The tickets whose own session of the person opens now (`vision discuss`), so that a
+    /// second `C` opens no second tab.
+    pub discussing: Vec<String>,
     /// The picture of the loader: `None` while it loads, `Some(None)` for the android.
     pub picture: Option<Option<Picture>>,
     /// The picture of the loader fit to the room that the window leaves for it. The update
@@ -656,6 +662,7 @@ impl App {
             models: ModelsState::default(),
             stats: StatsState::default(),
             chain: None,
+            discussing: Vec::new(),
             picture: None,
             picture_fit: None,
             seq: 0,
@@ -754,13 +761,19 @@ impl App {
     }
 
     /// The tickets in progress of a tab: the tab "In progress" and the tab "Ready to merge"
-    /// split them. The tab "To take" has none.
+    /// split them. The tab "To take" has none. The tickets whose agent works come first, and
+    /// each part keeps the order of the keys. The selection keeps its ticket when rows move.
     pub fn held_of(&self, tab: HomeTab) -> Vec<&Held> {
-        match tab {
+        let held: Vec<&Held> = match tab {
             HomeTab::Work => self.held().iter().filter(|h| !self.at_merge(h)).collect(),
             HomeTab::Merge => self.held().iter().filter(|h| self.at_merge(h)).collect(),
             HomeTab::Take => Vec::new(),
-        }
+        };
+        let (mut works, rest): (Vec<&Held>, Vec<&Held>) = held
+            .into_iter()
+            .partition(|h| matches!(self.now_of(&h.view, &h.facts).kind, now::Kind::Agent));
+        works.extend(rest);
+        works
     }
 
     /// The rows of a tab of Home, in order.

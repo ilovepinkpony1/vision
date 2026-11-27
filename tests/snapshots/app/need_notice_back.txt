@@ -5,11 +5,11 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DEMO-12   Export the report of the month as a CSV file                                 $1.03     38m │
- │       ╭─ DEMO-12 · a notice · N-2 ───────────────────────────────────────────────────────────────╮       │
+ │ ▸ DEMO-12     Export the report of the month as a CSV file                                 $1.03     38m │
+ │      ╭─ DEMO-12 · a notice · N-2 ───────────────────────────────────────────────────────────────╮       │
  │       │                                                                                          │       │
- │    DE│  1 finding of the report cr.md of the step review keeps coming back after the fix,       │2h 10m │
- │       │  round after round:                                                                      │       │
+ │   DEMO│  1 finding of the report cr.md of the step review keeps coming back after the fix,       │2h 10m │
+ │     │  round after round:                                                                      │       │
  ╰───────│                                                                                          │───────╯
          │  F1  major  1. [MAJOR][BLOCKING] app/models/report_export.rb:42: A retry sends the       │
          │             report twice                                                                 │
@@ -19,7 +19,7 @@
          │  A notice never stops a ticket. It stays until you mark it read. The turn was            │
          │  20261116T150000Z-DEMO-12-review-5.                                                      │
          │                                                                                          │
-         │  enter mark it read    esc later                                                         │
+         │  enter mark it read    C discuss with Claude    esc later                                │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

@@ -5,11 +5,11 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DE╭─ DEMO-12 · builder asks at the step build · your 3 answers ──────────────────────────────╮   38m │
- │       │                                                                                          │       │
+ │ ▸ DEMO╭─ DEMO-12 · builder asks at the step build · your 3 answers ──────────────────────────────╮   38m │
+ │      │                                                                                          │       │
  │       │  1 ✓ draft   2 · open   3 ✓ draft    review                                              │       │
- │    DE│                                                                                          │2h 10m │
- │       │  These answers go to builder when you send them. Nothing went to Vision yet.             │       │
+ │   DEMO│                                                                                          │2h 10m │
+ │     │  These answers go to builder when you send them. Nothing went to Vision yet.             │       │
  ╰───────│                                                                                          │───────╯
          │  1  Must the export keep the order of the columns?                                       │
          │     b  Sort by name · People compare the file with the table                             │
@@ -20,7 +20,7 @@
          │                                                                                          │
          │  1 question has no draft yet: 2. The send needs a draft for each question.               │
          │  s send the 3 answers    enter open the question    ↑↓ choose    ←→ the pages            │
-         │  esc later                                                                               │
+         │  C discuss with Claude    esc later                                                      │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

@@ -5,11 +5,11 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
- │ ▸   DE╭─ DEMO-12 · a notice · N-1 ───────────────────────────────────────────────────────────────╮   38m │
- │       │                                                                                          │       │
+ │ ▸ DEMO╭─ DEMO-12 · a notice · N-1 ───────────────────────────────────────────────────────────────╮   38m │
+ │      │                                                                                          │       │
  │       │  The gate qa of the step qa passed, so the ticket went on. Its report qa.md has 2        │       │
- │    DE│  issues that do not block:                                                               │2h 10m │
- │       │                                                                                          │       │
+ │   DEMO│  issues that do not block:                                                               │2h 10m │
+ │     │                                                                                          │       │
  ╰───────│  ISSUE-001  low  The export button has a typo                                            │───────╯
          │  ISSUE-002  low  The hover color of the export button differs from the color of each     │
          │                  other button on the page of a report                                    │
@@ -20,7 +20,7 @@
          │  A notice never stops a ticket. It stays until you mark it read. The turn was            │
          │  20261116T143000Z-DEMO-12-qa-1.                                                          │
          │                                                                                          │
-         │  enter mark it read    esc later                                                         │
+         │  enter mark it read    C discuss with Claude    esc later                                │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

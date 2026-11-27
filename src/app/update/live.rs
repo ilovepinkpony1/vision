@@ -423,6 +423,7 @@ fn retry_card(app: &mut App) {
         paused,
         held: data.facts.held,
         act: data.facts.act,
+        check: data.facts.check.clone(),
         reason,
         run: Run::Idle,
     };

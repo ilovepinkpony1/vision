@@ -21,7 +21,7 @@
     │  Evidence      src/export.py:42                                                          │
     │                                                                                          │
     │  a b answer    enter take the proposal    e your words    k needless    ←→ the pages     │
-  TH│  r review    esc later                                                                   │
+  TH│  r review    C discuss with Claude    esc later                                          │
     │                                                                                          │
     ╰──────────────────────────────────────────────────────────────────────────────────────────╯
  ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   q quit

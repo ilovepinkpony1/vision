@@ -472,6 +472,9 @@ pub struct Env {
     pub branch: String,
     /// The GitHub environment whose deployments tell which commit the env runs.
     pub deployment: Option<String>,
+    /// The address of a page of the env that names the commit that it runs, such as a health
+    /// page that prints `CurrentVersion=<commit>`.
+    pub version_url: Option<String>,
 }
 
 impl Config {
@@ -619,9 +622,9 @@ impl Config {
         self.number("http_timeout", DEFAULT_HTTP_TIMEOUT)
     }
 
-    /// The staging envs: a list of tables with `name` and `branch`, and the optional
-    /// `deployment`: the name of a GitHub environment whose deployments tell which commit the
-    /// env runs.
+    /// The staging envs: a list of tables with `name` and `branch`, the optional `deployment`:
+    /// the name of a GitHub environment whose deployments tell which commit the env runs, and
+    /// the optional `version_url`: an http or https page of the env that names that commit.
     pub fn envs(&self) -> Res<Vec<Env>> {
         let items: Vec<Value> =
             match self.get("envs") {
@@ -662,10 +665,26 @@ impl Config {
                     ))
                 }
             };
+            let version_url = match item.get("version_url") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(url))
+                    if matches!(super::http::split(url.trim()).scheme.as_str(), "http" | "https")
+                        && !super::http::split(url.trim()).host.is_empty() =>
+                {
+                    Some(url.trim().to_string())
+                }
+                Some(_) => {
+                    return fail(format!(
+                        "`version_url` of the env {} must be an http or https address, such as \"https://staging.example.com/version\"",
+                        clean(name, 40)
+                    ))
+                }
+            };
             out.push(Env {
                 name: name.to_string(),
                 branch: branch.to_string(),
                 deployment,
+                version_url,
             });
         }
         Ok(out)
@@ -790,7 +809,8 @@ mod tests {
             [Env {
                 name: "staging".into(),
                 branch: "st".into(),
-                deployment: None
+                deployment: None,
+                version_url: None
             }]
         );
     }

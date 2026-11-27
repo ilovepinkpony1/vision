@@ -5,7 +5,7 @@
 
 use vision::app::chain::{Check, CheckFacts, End, Owner};
 use vision::app::model::{App, Card, Screen};
-use vision::app::msg::{Action, Effect, Given, Key, Msg};
+use vision::app::msg::{Action, ChildResult, Effect, Given, Key, Msg};
 use vision::app::needs::{Draft, Input, NeedItem, Reply};
 
 use super::need_support::*;
@@ -983,4 +983,103 @@ fn the_chain_of_a_card_that_closed_goes_on_and_its_end_is_a_notice() {
     assert_eq!(done.actions.len(), 1);
     assert!(notice(&app).starts_with("Approved the plan 3f2a1b4c5d6e."));
     assert_eq!(app.screen, Screen::Home);
+}
+
+/// The effects `Effect::Discuss` among `fx`.
+fn discussions(fx: &[Effect]) -> Vec<String> {
+    fx.iter()
+        .filter_map(|e| match e {
+            Effect::Discuss(key) => Some(key.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn c_on_each_card_of_a_ticket_opens_the_session_of_the_person_and_the_card_stays() {
+    let items = [
+        flag(false),
+        flag(true),
+        paused(false),
+        plan_item(false),
+        approval("ask", &[]),
+        first_write("shadow"),
+        notice_item(false),
+        one(false),
+    ];
+    for item in items {
+        let mut app = open_with(SIZE, vec![item.clone()]);
+        let fx = key(&mut app, 3.0, Key::Char('C'));
+        assert_eq!(discussions(&fx), ["DEMO-12"], "{item:?}");
+        // It runs in a thread of its own: no job of the worker, so no wait for a pass.
+        assert!(jobs(&fx).is_empty(), "{fx:?}");
+        assert!(matches!(app.card, Some(Card::Need(_))), "{item:?}");
+        assert_eq!(
+            notice(&app),
+            "Vision writes a brief of DEMO-12 and opens your session about it in Herdr."
+        );
+        // On a question, C chooses nothing.
+        assert_eq!(input(&app), Input::None, "{item:?}");
+        assert!(need_card(&app).drafts.is_empty(), "{item:?}");
+    }
+    // A proposal of the Curator has no ticket.
+    let mut app = open_with(SIZE, vec![proposal(false)]);
+    assert!(discussions(&key(&mut app, 3.0, Key::Char('C'))).is_empty());
+}
+
+#[test]
+fn a_second_c_while_the_session_opens_opens_no_second_tab() {
+    let mut app = open_with(SIZE, vec![flag(false)]);
+    key(&mut app, 3.0, Key::Char('C'));
+    let fx = key(&mut app, 3.1, Key::Char('C'));
+    assert!(discussions(&fx).is_empty(), "{fx:?}");
+    assert_eq!(notice(&app), "Your session about DEMO-12 opens already.");
+    send(
+        &mut app,
+        3.2,
+        Msg::Discussed {
+            key: "DEMO-12".into(),
+            result: ChildResult {
+                code: Some(0),
+                ..ChildResult::default()
+            },
+        },
+    );
+    assert_eq!(
+        notice(&app),
+        "Your session about DEMO-12 is open in its Herdr tab `DEMO-12 discuss`."
+    );
+    assert!(matches!(app.card, Some(Card::Need(_))));
+    // After the end, C opens one more session.
+    assert_eq!(
+        discussions(&key(&mut app, 3.3, Key::Char('C'))),
+        ["DEMO-12"]
+    );
+}
+
+#[test]
+fn a_session_that_does_not_open_says_why_and_c_works_again() {
+    let mut app = open_with(SIZE, vec![flag(false)]);
+    key(&mut app, 3.0, Key::Char('C'));
+    send(
+        &mut app,
+        3.1,
+        Msg::Discussed {
+            key: "DEMO-12".into(),
+            result: ChildResult {
+                code: Some(1),
+                stderr: "error: Your session about DEMO-12 opens only in a tab of Herdr.app, and Herdr is off in config.toml.\n       Set enabled = true under [herdr] in config.toml, or run `vision discuss DEMO-12` in a terminal.\n".into(),
+                ..ChildResult::default()
+            },
+        },
+    );
+    let Some(Card::Error { title, text }) = &app.card else {
+        panic!("no error card: {:?}", app.card)
+    };
+    assert_eq!(title, "Your session about DEMO-12");
+    assert!(
+        text.contains("run `vision discuss DEMO-12` in a terminal"),
+        "{text}"
+    );
+    assert!(app.discussing.is_empty());
 }

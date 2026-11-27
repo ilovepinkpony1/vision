@@ -5,11 +5,11 @@
 
    In progress 2    To take 2    Ready to merge 0
  ╭───────╭─ DEMO-12 · the write tracker.describe waits for your approval ───────────────────────────╮───────╮
- │ ▸   DE│                                                                                          │   38m │
- │       │  Replaces the description of the ticket in the tracker.                                  │       │
+ │ ▸ DEMO│                                                                                          │   38m │
+ │      │  Replaces the description of the ticket in the tracker.                                  │       │
  │       │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │       │
- │    DE│  The diff touches db/migrate/0042_orders.sql, which the approved plan does not name, so  │2h 10m │
- │       │  it waits for your approval.                                                             │       │
+ │   DEMO│  The diff touches db/migrate/0042_orders.sql, which the approved plan does not name, so  │2h 10m │
+ │     │  it waits for your approval.                                                             │       │
  ╰───────│                                                                                          │───────╯
          │  What it sends                                                                           │
          │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │
@@ -20,7 +20,7 @@
          │                                                                                          │
          │    y  Approve it. Vision sends it now.                                                   │
          │                                                                                          │
-         │  y approve    esc later                                                                  │
+         │  y approve    C discuss with Claude    esc later                                         │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

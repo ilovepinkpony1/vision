@@ -200,6 +200,7 @@ pub fn flag_item(stopped: bool) -> FlagItem {
         branch: Some("vision/DEMO-12".into()),
         held: false,
         act: false,
+        check: None,
         writes_only: false,
         stopped,
     }

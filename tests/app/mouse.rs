@@ -698,11 +698,12 @@ fn a_click_selects_a_ticket_of_home_and_a_second_click_opens_it() {
     let fx = click(&mut app, 1.5, queue);
     assert!(matches!(&app.card, Some(Card::Start(card)) if card.key == "DEMO-15"));
     assert!(fx.contains(&Effect::LoadStartInfo("DEMO-15".into())));
-    // A ticket in progress has two lines: a click on the second line selects it too.
+    // A ticket in progress has two lines: a click on the second line selects it too, away from
+    // the marks of its links under the key.
     let mut app = home(SIZE);
     let buf = draw(&mut app);
     let (x, y) = find(&buf, "DEMO-7");
-    click(&mut app, 1.5, (x, y + 1));
+    click(&mut app, 1.5, (x + 5, y + 1));
     assert_eq!(app.home.selected.as_deref(), Some("DEMO-7"));
     draw(&mut app);
     let fx = click(&mut app, 1.5, (x, y));
@@ -1523,40 +1524,57 @@ fn while_the_line_of_t_is_open_the_header_and_the_links_of_the_view_are_no_parts
 }
 
 #[test]
-fn a_click_on_the_github_mark_opens_the_pull_request_and_a_ticket_without_one_has_no_mark() {
-    use vision::app::view::home::GITHUB;
+fn a_click_on_a_mark_under_the_key_opens_its_page_and_a_ticket_without_a_pull_request_has_no_github_mark(
+) {
+    use vision::app::view::home::{GITHUB, JIRA};
+    let jira_page = "https://jira.example/browse/DEMO-7";
     let mut app = home(SIZE);
     let buf = draw(&mut app);
-    // DEMO-7 has a pull request with a page: its mark is two cells left of its key.
+    // DEMO-7 has a pull request with a page: its GitHub mark is under its key, and the Jira
+    // mark of the ticket is right of it.
     let key = find(&buf, "DEMO-7");
-    let mark = (key.0 - 2, key.1);
-    assert_eq!(buf[mark].symbol(), GITHUB);
+    let github = (key.0, key.1 + 1);
+    let jira = (key.0 + 2, key.1 + 1);
+    assert_eq!(buf[github].symbol(), GITHUB);
+    assert_eq!(buf[jira].symbol(), JIRA);
     let selected = app.home.selected.clone();
-    let fx = click(&mut app, 1.5, mark);
+    let fx = click(&mut app, 1.5, github);
     let links: Vec<&Effect> = fx
         .iter()
         .filter(|e| matches!(e, Effect::OpenLink(_)))
         .collect();
     assert_eq!(links, [&Effect::OpenLink(PR_URL.into())], "{fx:?}");
+    let fx = click(&mut app, 1.6, jira);
+    let links: Vec<&Effect> = fx
+        .iter()
+        .filter(|e| matches!(e, Effect::OpenLink(_)))
+        .collect();
+    assert_eq!(links, [&Effect::OpenLink(jira_page.into())], "{fx:?}");
     assert_eq!(
         app.home.selected, selected,
-        "the mark does not select the row"
+        "a mark does not select the row"
     );
-    // The cell after the mark opens it too, and the key selects the row as before.
+    // The cell after each mark opens it too, and the key selects the row as before.
     assert_eq!(
-        app.hits.click_at(mark.0 + 1, mark.1),
+        app.hits.click_at(github.0 + 1, github.1),
         Some(&Act::Link(PR_URL.into()))
+    );
+    assert_eq!(
+        app.hits.click_at(jira.0 + 1, jira.1),
+        Some(&Act::Link(jira_page.into()))
     );
     assert_eq!(
         app.hits.click_at(key.0, key.1),
         Some(&Act::Ticket("DEMO-7".into()))
     );
-    // DEMO-12 has no pull request: no mark, the same column of the key, and the row there.
+    // DEMO-12 has no pull request: no GitHub mark, and the row there. Its key and its Jira
+    // mark are in the same columns as the ones of DEMO-7.
     let other = find(&buf, "DEMO-12");
     assert_eq!(other.0, key.0);
-    assert_eq!(buf[(other.0 - 2, other.1)].symbol(), " ");
+    assert_eq!(buf[(other.0, other.1 + 1)].symbol(), " ");
     assert_eq!(
-        app.hits.click_at(other.0 - 2, other.1),
+        app.hits.click_at(other.0, other.1 + 1),
         Some(&Act::Ticket("DEMO-12".into()))
     );
+    assert_eq!(buf[(other.0 + 2, other.1 + 1)].symbol(), JIRA);
 }

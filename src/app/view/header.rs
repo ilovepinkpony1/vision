@@ -226,7 +226,9 @@ pub fn keys_width(list: &[(&str, &str)]) -> i32 {
 }
 
 /// The strip of dots of the path: the passed steps, the current one, and the coming ones. Gives
-/// the column after it. A strip wider than `max` cells ends early.
+/// the column after it. Each step takes two cells. When the steps need more than `max` cells,
+/// the strip shows a window that holds the current step and up to [`AFTER`] steps after it, and
+/// `…` stands for the steps that the window cuts off at each end.
 pub fn dots(
     c: &mut Canvas,
     x: i32,
@@ -236,25 +238,40 @@ pub fn dots(
     tone: Rgb,
     max: i32,
 ) -> i32 {
+    let room = usize::try_from((max + 1) / 2).unwrap_or(0);
+    let (from, to) = shown(steps, at, room);
+    // A place is a step, or `None` for the mark of a cut.
+    let mut places: Vec<Option<usize>> = Vec::new();
+    if from > 0 {
+        places.push(None);
+    }
+    places.extend((from..to).map(Some));
+    if to < steps {
+        places.push(None);
+    }
+    let done = |i: usize| at.is_some_and(|a| i < a);
     let mut end = x;
-    for i in 0..steps {
-        let cx = x + i as i32 * 2;
+    for (n, place) in places.iter().enumerate() {
+        let cx = x + n as i32 * 2;
         if cx + 1 > x + max {
             break;
         }
-        let done = at.is_some_and(|a| i < a);
-        let current = at == Some(i);
-        let (symbol, color) = if current {
-            ("◉", tone)
-        } else if done {
-            ("●", T.ok)
-        } else {
-            ("○", T.faint)
+        // A mark stands for the last cut step at the start, or the first cut step at the end.
+        let step = match place {
+            Some(i) => *i,
+            None if n == 0 => from - 1,
+            None => to,
+        };
+        let (symbol, color) = match place {
+            None => ("…", if done(step) { T.ok } else { T.faint }),
+            Some(i) if at == Some(*i) => ("◉", tone),
+            Some(i) if done(*i) => ("●", T.ok),
+            Some(_) => ("○", T.faint),
         };
         c.put(cx, y, symbol, ink(color));
         end = cx + 1;
-        if i + 1 < steps && cx + 2 <= x + max {
-            let (line, color) = if done {
+        if n + 1 < places.len() && cx + 2 <= x + max {
+            let (line, color) = if done(step) {
                 ("━", T.ok)
             } else {
                 ("─", T.faint)
@@ -264,6 +281,30 @@ pub fn dots(
         }
     }
     end
+}
+
+/// The steps after the current one that a cut strip keeps, so that the next steps show.
+const AFTER: usize = 3;
+
+/// The window of steps that a strip of `room` places shows: the first step and the step after
+/// the last. All the steps fit, or the window holds the current step, up to [`AFTER`] steps
+/// after it, and as many steps before it as fit. Each cut end takes one place for its mark.
+fn shown(steps: usize, at: Option<usize>, room: usize) -> (usize, usize) {
+    if steps <= room || room < 3 {
+        return (0, steps);
+    }
+    let at = at.map_or(0, |a| a.min(steps - 1));
+    let last = (at + AFTER.min(room - 3)).min(steps - 1);
+    if last + 2 <= room {
+        // A mark at the end only.
+        (0, room - 1)
+    } else if steps - at < room {
+        // A mark at the start only.
+        (steps + 1 - room, steps)
+    } else {
+        // A mark at each end.
+        (last + 3 - room, last + 1)
+    }
 }
 
 /// The notice: one line at the bottom while it lasts.
@@ -282,4 +323,35 @@ pub fn notice(app: &App, c: &mut Canvas) {
     let text = format!(" {} ", cut(&notice.text, (c.w - 4).max(1) as usize));
     let x = (c.w - width(&text) as i32) / 2;
     c.put(x, c.h - 1, &text, ink(T.bg).on(bg).bold());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shown;
+
+    #[test]
+    fn a_path_that_fits_shows_each_step() {
+        assert_eq!(shown(13, Some(12), 23), (0, 13));
+    }
+
+    #[test]
+    fn a_long_path_keeps_the_current_step_and_the_next_steps_in_its_window() {
+        // Early: a mark at the end only.
+        assert_eq!(shown(52, Some(2), 23), (0, 22));
+        // Late: a mark at the start only, and the window reaches the last step.
+        assert_eq!(shown(52, Some(47), 23), (30, 52));
+        // In the middle: a mark at each end, and three steps after the current one.
+        let (from, to) = shown(52, Some(25), 23);
+        assert_eq!((from, to), (8, 29));
+        assert_eq!(to - from, 21, "21 steps and two marks fill the 23 places");
+        // No current step: the start of the path.
+        assert_eq!(shown(52, None, 23), (0, 22));
+        // Each window holds its current step.
+        for at in 0..52 {
+            let (from, to) = shown(52, Some(at), 23);
+            assert!(from <= at && at < to, "{at}: {from}..{to}");
+            let places = (to - from) + usize::from(from > 0) + usize::from(to < 52);
+            assert!(places <= 23, "{at}: {places} places");
+        }
+    }
 }

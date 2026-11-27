@@ -247,6 +247,22 @@ fn cases() -> Vec<Case> {
         ..case("a rule stopped it", v, f)
     });
 
+    // The limit of a deploy wait with a second look: the flag clears by itself.
+    let (mut v, f) = base("wait", "deployed-bastion");
+    let late = format!("the step deployed-bastion watched envs.bastion.deployed for 5439 s, above its limit of 5400 s. The last value: false. At the limit, envs.bastion.running was false. {}", vision::pipeline::decide::LATE_SENTENCE);
+    v.flags.push(flag("needs-you", &late));
+    out.push(Case {
+        kind: Kind::Needs,
+        tone: Tone::Need,
+        short: "needs you: the step deployed-bastion watched envs.bastion.deployed for...",
+        title: "the wait passed its limit, and Vision keeps watching",
+        lines: &[
+            "the step deployed-bastion watched envs.bastion.deployed for 5439 s, above its limit of 5400 s. The last value: false. At the limit, envs.bastion.running was...",
+            "The ticket moves on by itself when the value comes, or press r to start the step deployed-bastion again.",
+        ],
+        ..case("a late wait keeps watching", v, f)
+    });
+
     let (mut v, mut f) = base("turn", "describe");
     v.flags.push(flag(
         "needs-you",
@@ -804,6 +820,14 @@ fn the_bar_needs_you_uses_the_same_words() {
             "needs-you at the step build: the proof did not pass"
         )),
         "a rule stopped it: the proof did not pass"
+    );
+    assert_eq!(
+        need_line(&need(
+            NeedKind::Flag,
+            "needs-you",
+            &format!("needs-you at the step deployed-bastion: the step deployed-bastion watched envs.bastion.deployed for 5439 s, above its limit of 5400 s. The last value: false. At the limit, envs.bastion.running was false. {}", vision::pipeline::decide::LATE_SENTENCE)
+        )),
+        "it waits past its limit: bastion did not run the head of the ticket in 90 minutes, and its version page shows an older commit. The step deployed-bastion keeps watching, and moves the ticket on by itself when bastion runs it"
     );
     assert_eq!(
         need_line(&need(

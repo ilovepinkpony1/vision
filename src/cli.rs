@@ -83,6 +83,17 @@ pub enum Command {
     #[command(flatten)]
     Turn(TurnCommand),
 
+    /// Open your own Claude Code session about a ticket, with a brief of what waits for you. It
+    /// opens in a tab of Herdr.app with [herdr] enabled
+    #[command(display_order = 18)]
+    Discuss {
+        /// The ticket key, such as DEMO-12
+        key: TicketKey,
+        /// Only open it in a tab of Herdr.app, and fail when [herdr] is not enabled
+        #[arg(long)]
+        herdr: bool,
+    },
+
     #[command(flatten)]
     Questions(QuestionsCommand),
 

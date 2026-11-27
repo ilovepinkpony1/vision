@@ -395,6 +395,32 @@ fn the_cards_of_a_flag_and_of_a_pause() {
 }
 
 #[test]
+fn the_card_of_a_flag_at_a_check_step_says_that_r_reads_the_document_again() {
+    let mut item = flag_item(false);
+    item.step = "fixed-void".into();
+    item.reason = "the step fixed-void found the stop line `Fixed in: none` in ci-fix.md, so the person decides: run `vision retry DEMO-12 --step STEP` or `vision stop DEMO-12`".into();
+    item.agent = None;
+    item.check = Some("ci-fix.md".into());
+    check(
+        "need_flag_check",
+        &open_with(SIZE, vec![NeedItem::Flag(item)]),
+    );
+}
+
+#[test]
+fn the_card_of_a_late_wait_says_that_vision_keeps_watching() {
+    let mut item = flag_item(false);
+    item.step = "deployed-bastion".into();
+    item.reason = format!("the step deployed-bastion watched envs.bastion.deployed for 5439 s, above its limit of 5400 s. The last value: false. At the limit, envs.bastion.running was false. {}", vision::pipeline::decide::LATE_SENTENCE);
+    item.agent = None;
+    item.last = None;
+    check(
+        "need_flag_late",
+        &open_with(SIZE, vec![NeedItem::Flag(item)]),
+    );
+}
+
+#[test]
 fn the_card_of_a_proposal() {
     check("need_proposal", &open_with(SIZE, vec![proposal(true)]));
 }

@@ -18,7 +18,7 @@
     │                                                                                          │
     │  3 questions have no draft yet: 1, 2, 3. The send needs a draft for each question.       │
     │  s send the 3 answers    enter open the question    ↑↓ choose    ←→ the pages            │
-    │  esc later                                                                               │
+    │  C discuss with Claude    esc later                                                      │
     │                                                                                          │
     ╰──────────────────────────────────────────────────────────────────────────────────────────╯
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you

@@ -1,0 +1,32 @@
+ ‹  ›  ◆ VISION                                             engine ● on   5h ━━━━━━ 31%  7d ━━━━━━ 71%  14:30
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+   In progress 2    To take 2    Ready to merge 0
+ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ ▸ DEMO-12     Export the report                                                            $6.12  2h 10m │
+ │              ●━●━◉─○─○─○─○─○─○─○─○─○─○─○─○─○─○─○─○─○─○─…  s3 · waits for CI · no result yet             │
+ │                                                                                                          │
+ │   DEMO-7      Show the totals                                                              $6.12  2h 10m │
+ │              …━●━●━●━●━●━●━●━●━●━●━●━●━●━●━●━●━◉─○─○─○─○  s48 · waits for CI · no result yet            │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you
+
+
+ ↑↓ move   enter open or start   tab tabs   n needs   m models   s stats   p pause   ? keys   q quit
+

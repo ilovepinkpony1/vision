@@ -1,5 +1,5 @@
-//! The turns in herdr panes (section 7.7), with `tests/bin/fake-herdr` as the herdr CLI and the
-//! interactive mode of the fake `claude` (`tests/bin/fake-claude-pane`).
+//! The turns in herdr panes (section 7.7), with `tests/bin/fake-herdr` as `herdr-app` and `hc`,
+//! and the interactive mode of the fake `claude` (`tests/bin/fake-claude-pane`).
 
 mod turn_support;
 
@@ -14,22 +14,24 @@ fn fake_herdr() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/bin/fake-herdr")
 }
 
-/// A home whose turns run in panes of the fake herdr. The session name is the folder of the
-/// state of the fake.
+/// A home whose turns run in the fake Herdr: `herdr-app` and `hc` are links to the fake in the
+/// folder of its state.
 fn pane_home() -> (TestHome, PathBuf) {
     let home = TestHome::new();
     let state = home.scenarios.join("herdr");
     std::fs::create_dir_all(&state).unwrap();
+    for name in ["herdr-app", "hc"] {
+        std::os::unix::fs::symlink(fake_herdr(), state.join(name)).unwrap();
+    }
     home.edit_config(|doc| {
         doc["herdr"]["enabled"] = toml_edit::value(true);
-        doc["herdr"]["bin"] = toml_edit::value(fake_herdr().display().to_string());
-        doc["herdr"]["session"] = toml_edit::value(state.display().to_string());
-        doc["herdr"]["app"] = toml_edit::value("/usr/bin/false");
+        doc["herdr"]["bin"] = toml_edit::value(state.join("hc").display().to_string());
+        doc["herdr"]["app"] = toml_edit::value(state.join("herdr-app").display().to_string());
     });
     (home, state)
 }
 
-/// The calls of the fake herdr.
+/// The calls of the fake, each with the name of its CLI first.
 fn calls(state: &Path) -> Vec<Vec<String>> {
     std::fs::read_to_string(state.join("calls.jsonl"))
         .unwrap_or_default()
@@ -38,12 +40,35 @@ fn calls(state: &Path) -> Vec<Vec<String>> {
         .collect()
 }
 
-fn prompts(state: &Path) -> Vec<String> {
+/// The arguments of the calls `hc <command>`, after the command.
+fn hc_calls(state: &Path, command: &str) -> Vec<Vec<String>> {
     calls(state)
         .into_iter()
-        .filter(|c| c.len() >= 4 && c[0] == "agent" && c[1] == "prompt")
-        .map(|c| c[3].clone())
+        .filter(|c| c.len() >= 2 && c[0] == "hc" && c[1] == command)
+        .map(|c| c[2..].to_vec())
         .collect()
+}
+
+/// The JSON objects of the calls `herdr-app do <command>`.
+fn app_do(state: &Path, command: &str) -> Vec<Value> {
+    calls(state)
+        .into_iter()
+        .filter(|c| c.len() == 4 && c[0] == "herdr-app" && c[1] == "do" && c[2] == command)
+        .map(|c| serde_json::from_str(&c[3]).unwrap())
+        .collect()
+}
+
+fn prompts(state: &Path) -> Vec<String> {
+    hc_calls(state, "send")
+        .into_iter()
+        .map(|c| c[1].clone())
+        .collect()
+}
+
+/// The value of a label of a call `hc run`.
+fn label<'a>(run: &'a [String], key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    run.iter().find_map(|a| a.strip_prefix(prefix.as_str()))
 }
 
 fn launch(home: &TestHome, replies: Value) -> vision::turn::Launched {
@@ -53,8 +78,17 @@ fn launch(home: &TestHome, replies: Value) -> vision::turn::Launched {
     home.launch(&request)
 }
 
+fn wait_first_prompt(launched: &vision::turn::Launched) {
+    let hooks = launched.dir.join("hooks.jsonl");
+    wait_for(Duration::from_secs(20), "the first prompt", || {
+        std::fs::read_to_string(&hooks)
+            .ok()
+            .filter(|t| t.contains("UserPromptSubmit"))
+    });
+}
+
 #[test]
-fn a_turn_in_a_pane_runs_in_a_tab_of_the_ticket_and_ends_with_its_result_object() {
+fn a_turn_in_a_pane_runs_in_a_terminal_of_herdr_core_in_its_tab_and_ends_with_its_result() {
     let (home, state) = pane_home();
     let result = result_object("Refined in the pane.");
     let launched = launch(
@@ -64,22 +98,35 @@ fn a_turn_in_a_pane_runs_in_a_tab_of_the_ticket_and_ends_with_its_result_object(
     let ended = home.wait_ended(&launched);
     assert_eq!(ended.reason, Some(Reason::Result), "{ended:?}");
     let pane = ended.pane.clone().expect("the turn names its pane");
-    assert_eq!(pane.session, state.display().to_string());
-    // The ticket gets its workspace, and the tab of the turn has the name of the agent.
-    let all = calls(&state);
-    assert!(
-        all.iter()
-            .any(|c| c[..2] == ["workspace", "create"] && c.contains(&"DEMO-12".to_string())),
-        "{all:?}"
+    // The terminal has no parent, runs pane.sh, and has the labels of its tab. No space has the
+    // name of the configuration, so the id of the new space is that name.
+    let runs = hc_calls(&state, "run");
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let run = &runs[0];
+    assert!(run.contains(&"--no-parent".to_string()), "{run:?}");
+    assert!(run.last().unwrap().ends_with("/pane.sh"), "{run:?}");
+    let tab = format!("vision-{}", launched.id);
+    assert_eq!(label(run, "herdr.space"), Some("vision"));
+    assert_eq!(label(run, "herdr.tab"), Some(tab.as_str()));
+    assert_eq!(
+        (
+            pane.session.as_str(),
+            pane.space.as_str(),
+            pane.tab.as_str()
+        ),
+        ("vision", "vision", tab.as_str())
     );
-    assert!(all
-        .iter()
-        .any(|c| c[..2] == ["tab", "rename"] && c[2] == pane.tab && c[3] == "scout"));
-    assert!(all
-        .iter()
-        .any(|c| c[..2] == ["pane", "run"] && c[2] == pane.pane && c[3].ends_with("pane.sh'")));
+    // The new space gets the name of the configuration, and the tab the ticket and the agent.
+    assert_eq!(
+        app_do(&state, "space.rename"),
+        [json!({"id": "vision", "name": "vision"})]
+    );
+    assert_eq!(
+        app_do(&state, "tab.rename"),
+        [json!({"id": tab, "name": "DEMO-12 scout"})]
+    );
     // The first answer was no result object, so Vision reminded the agent once, then ended
-    // the session after the result.
+    // the session after the result. Each prompt went to the terminal of the turn.
     let typed = prompts(&state);
     assert_eq!(typed.len(), 2, "{typed:?}");
     assert!(
@@ -87,6 +134,11 @@ fn a_turn_in_a_pane_runs_in_a_tab_of_the_ticket_and_ends_with_its_result_object(
         "{typed:?}"
     );
     assert_eq!(typed[1], "/exit");
+    assert!(hc_calls(&state, "send")
+        .iter()
+        .all(|c| c[0] == pane.terminal));
+    // At the end, the terminal is gone from herdr-core, and its tab with it.
+    assert!(hc_calls(&state, "rm").iter().any(|c| c[0] == pane.terminal));
     // The result object, the stream in the form of the headless stream, and the cost.
     let stored: Value = serde_json::from_str(&home.turn_file(&launched, "result.json")).unwrap();
     assert_eq!(stored, result);
@@ -133,19 +185,14 @@ fn a_message_of_the_person_in_the_pane_holds_the_reminder() {
         ]),
     );
     // The person types while the agent works on the first prompt.
-    let hooks = launched.dir.join("hooks.jsonl");
-    wait_for(Duration::from_secs(20), "the first prompt", || {
-        std::fs::read_to_string(&hooks)
-            .ok()
-            .filter(|t| t.contains("UserPromptSubmit"))
-    });
+    wait_first_prompt(&launched);
     let typed = std::fs::read_dir(&state)
         .unwrap()
         .flatten()
         .map(|e| e.path())
         .find(|p| p.extension().is_some_and(|x| x == "log"))
         .map(|p| p.with_extension("typed"))
-        .expect("the pane of the turn");
+        .expect("the terminal of the turn");
     std::fs::write(&typed, "Please also rename the method.\n").unwrap();
     let ended = home.wait_ended(&launched);
     assert_eq!(ended.reason, Some(Reason::Result), "{ended:?}");
@@ -175,17 +222,71 @@ fn a_usage_limit_in_the_pane_ends_the_turn_with_its_message() {
 }
 
 #[test]
-fn a_herdr_session_that_does_not_start_ends_the_turn_with_what_to_do() {
+fn herdr_app_opens_its_window_when_it_does_not_answer() {
     let (home, state) = pane_home();
     std::fs::write(state.join("down"), "").unwrap();
-    let launched = launch(&home, json!([]));
-    let ended = home.wait_ended(&launched);
-    assert_eq!(ended.reason, Some(Reason::Error), "{ended:?}");
-    let detail = ended.detail.unwrap_or_default();
-    assert!(
-        detail.contains("Herdr.app did not open a window on the session"),
-        "{detail}"
+    let launched = launch(
+        &home,
+        json!([{"message": result_object("Done.").to_string()}]),
     );
+    let ended = home.wait_ended(&launched);
+    assert_eq!(ended.reason, Some(Reason::Result), "{ended:?}");
+    let all = calls(&state);
+    let opened = all
+        .iter()
+        .position(|c| *c == ["herdr-app"])
+        .expect("herdr-app opens the window");
+    let started = all
+        .iter()
+        .position(|c| c.len() > 1 && c[0] == "hc" && c[1] == "run")
+        .unwrap();
+    assert!(opened < started, "{all:?}");
+    assert_eq!(
+        label(&hc_calls(&state, "run")[0], "herdr.space"),
+        Some("vision")
+    );
+}
+
+#[test]
+fn a_turn_runs_hidden_when_the_window_does_not_open_and_open_gives_it_its_tab() {
+    let (home, state) = pane_home();
+    std::fs::write(state.join("down"), "").unwrap();
+    std::fs::write(state.join("no-window"), "").unwrap();
+    // No reply: the session waits for its next prompt, so the turn runs on.
+    let launched = launch(&home, json!([]));
+    wait_first_prompt(&launched);
+    let run = hc_calls(&state, "run").remove(0);
+    assert_eq!(label(&run, "herdr.space"), None, "{run:?}");
+    let log = std::fs::read_to_string(home.vision.join("log/vision.log")).unwrap_or_default();
+    assert!(
+        log.contains("runs hidden in herdr-core: Herdr.app did not open its window"),
+        "{log}"
+    );
+    let pane = home
+        .state("DEMO-12", &launched.id.to_string())
+        .unwrap()
+        .pane
+        .unwrap();
+    assert_eq!(pane.space, "", "{pane:?}");
+    // Now the window opens: `open` gives the terminal its tab, names the tab, and shows it.
+    std::fs::remove_file(state.join("no-window")).unwrap();
+    home.run(&["open", "DEMO-12", "--herdr"]).expect_code(0);
+    assert_eq!(
+        hc_calls(&state, "label"),
+        [vec![
+            pane.terminal.clone(),
+            "herdr.space=vision".to_string(),
+            format!("herdr.tab={}", pane.tab)
+        ]]
+    );
+    assert_eq!(
+        app_do(&state, "tab.rename"),
+        [json!({"id": pane.tab, "name": "DEMO-12 scout"})]
+    );
+    assert_eq!(app_do(&state, "tab.select"), [json!({"id": pane.tab})]);
+    let ctx = home.ctx();
+    assert!(vision::turn::kill_turn(&ctx, &launched.ticket, &launched.id).unwrap());
+    home.wait_ended(&launched);
 }
 
 #[test]
@@ -203,54 +304,41 @@ fn the_judge_stays_headless() {
     assert!(calls(&state).is_empty(), "the Judge opens no tab");
 }
 
-/// A stand-in for the program of Herdr.app: it logs its arguments and lists no window.
-fn fake_app(state: &Path) -> PathBuf {
-    let path = state.join("fake-app");
-    std::fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\n[ \"$2\" = list ] && echo '[]'\nexit 0\n",
-            state.join("app.log").display()
-        ),
-    )
-    .unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
-    path
-}
-
 #[test]
 fn open_shows_the_running_pane_in_herdr_and_tell_types_into_it() {
     let (home, state) = pane_home();
-    let app = fake_app(&state);
-    home.edit_config(|doc| doc["herdr"]["app"] = toml_edit::value(app.display().to_string()));
     // No reply: the session waits for its next prompt, so the turn runs on.
     let launched = launch(&home, json!([]));
-    let hooks = launched.dir.join("hooks.jsonl");
-    wait_for(Duration::from_secs(20), "the first prompt", || {
-        std::fs::read_to_string(&hooks)
-            .ok()
-            .filter(|t| t.contains("UserPromptSubmit"))
-    });
+    wait_first_prompt(&launched);
     let open = home.run(&["open", "DEMO-12", "--herdr"]);
     open.expect_code(0);
     assert!(
-        open.stdout.contains("Herdr.app shows it"),
+        open.stdout.contains(
+            "runs in the tab `DEMO-12 scout` of the Herdr space vision. Herdr.app shows it"
+        ),
         "{}",
         open.stdout
     );
-    let all = calls(&state);
+    let pane = home
+        .state("DEMO-12", &launched.id.to_string())
+        .unwrap()
+        .pane
+        .unwrap();
+    assert_eq!(app_do(&state, "space.select"), [json!({"id": pane.space})]);
+    assert_eq!(app_do(&state, "tab.select"), [json!({"id": pane.tab})]);
     assert!(
-        all.iter().any(|c| c[..2] == ["workspace", "focus"]),
-        "{all:?}"
+        hc_calls(&state, "label").is_empty(),
+        "the tab exists already"
     );
-    assert!(all.iter().any(|c| c[..2] == ["tab", "focus"]), "{all:?}");
-    let log = std::fs::read_to_string(state.join("app.log")).unwrap();
-    assert!(log.contains("window list --json"), "{log}");
+    // Then the window comes to the front: herdr-app with no arguments.
+    let all = calls(&state);
+    let selected = all
+        .iter()
+        .rposition(|c| c.len() > 2 && c[2] == "tab.select")
+        .unwrap();
     assert!(
-        log.contains(&format!("window new --session {} --json", state.display())),
-        "with no window of the ticket, Herdr.app opens one: {log}"
+        all[selected..].iter().any(|c| *c == ["herdr-app"]),
+        "{all:?}"
     );
     // A message of the person goes into the pane, and the transcript shows it in the stream.
     home.run(&["tell", "DEMO-12", "Keep the old name too."])
@@ -284,6 +372,41 @@ fn open_with_herdr_refuses_a_ticket_with_no_turn_in_a_pane() {
 }
 
 #[test]
+fn open_with_no_running_turn_takes_over_the_session_in_the_tab_you() {
+    let (home, state) = pane_home();
+    let first = launch(
+        &home,
+        json!([{"message": result_object("One.").to_string()}]),
+    );
+    home.wait_ended(&first);
+    home.collect();
+    let open = home.run(&["open", "DEMO-12"]);
+    open.expect_code(0);
+    assert!(
+        open.stdout
+            .contains("DEMO-12 is paused, so no new turn starts for it. The session")
+            && open
+                .stdout
+                .contains("opens in the tab `DEMO-12 you` of the Herdr space vision."),
+        "{}",
+        open.stdout
+    );
+    let runs = hc_calls(&state, "run");
+    let run = runs.last().unwrap();
+    let tab = label(run, "herdr.tab").unwrap().to_string();
+    assert!(tab.starts_with("vision-DEMO-12-you-"), "{run:?}");
+    let argv = &run[run.iter().position(|a| a == "--").unwrap() + 1..];
+    assert_eq!(argv[..2], ["/bin/sh", "-c"], "{run:?}");
+    assert!(
+        argv[2].contains(&format!("--resume '{}'", first.session)),
+        "{run:?}"
+    );
+    assert!(app_do(&state, "tab.rename").contains(&json!({"id": tab, "name": "DEMO-12 you"})));
+    assert_eq!(app_do(&state, "tab.select"), [json!({"id": tab})]);
+    assert_eq!(home.ledger().ticket_flags("DEMO-12").unwrap(), ["paused"]);
+}
+
+#[test]
 fn each_folder_dialog_gets_down_and_then_enter_only_with_yes_selected() {
     let (home, state) = pane_home();
     let scenario = home.scenario("unused", json!([[]]));
@@ -294,10 +417,9 @@ fn each_folder_dialog_gets_down_and_then_enter_only_with_yes_selected() {
     let launched = home.launch(&request);
     let ended = home.wait_ended(&launched);
     assert_eq!(ended.reason, Some(Reason::Result), "{ended:?}");
-    let keys: Vec<String> = calls(&state)
+    let keys: Vec<String> = hc_calls(&state, "keys")
         .into_iter()
-        .filter(|c| c[..2] == ["agent", "send-keys"])
-        .map(|c| c[3..].join(" "))
+        .map(|c| c[1..].join(" "))
         .collect();
     assert_eq!(
         keys,
@@ -313,7 +435,7 @@ fn each_folder_dialog_gets_down_and_then_enter_only_with_yes_selected() {
 }
 
 #[test]
-fn the_next_turn_opens_its_tab_first_and_then_closes_the_tab_of_the_ended_turn() {
+fn each_turn_removes_its_terminal_and_the_next_turn_finds_the_space_by_its_name() {
     let (home, state) = pane_home();
     let first = launch(
         &home,
@@ -325,18 +447,21 @@ fn the_next_turn_opens_its_tab_first_and_then_closes_the_tab_of_the_ended_turn()
         json!([{"message": result_object("Two.").to_string()}]),
     );
     let two = home.wait_ended(&second).pane.unwrap();
-    assert_eq!(
-        two.workspace, one.workspace,
-        "the ticket keeps its workspace"
-    );
+    assert_eq!(two.space, one.space, "the turns share the space");
+    assert_ne!(two.tab, one.tab);
     let all = calls(&state);
-    let opened = all
+    let removed = all
         .iter()
-        .position(|c| c[..2] == ["tab", "create"])
-        .expect("the second turn opens a tab");
-    let closed = all
+        .position(|c| c.len() > 2 && c[0] == "hc" && c[1] == "rm" && c[2] == one.terminal)
+        .expect("the first turn removes its terminal");
+    let started = all
         .iter()
-        .position(|c| c[..2] == ["tab", "close"] && c[2] == one.tab)
-        .expect("the tab of the first turn closes");
-    assert!(opened < closed, "{all:?}");
+        .rposition(|c| c.len() > 1 && c[0] == "hc" && c[1] == "run")
+        .unwrap();
+    assert!(removed < started, "{all:?}");
+    assert_eq!(
+        app_do(&state, "space.rename").len(),
+        1,
+        "the space gets its name once"
+    );
 }

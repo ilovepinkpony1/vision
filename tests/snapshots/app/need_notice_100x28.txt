@@ -16,7 +16,7 @@
     │  A notice never stops a ticket. It stays until you mark it read. The turn was            │
     │  20261116T143000Z-DEMO-12-qa-1.                                                          │
     │                                                                                          │
-    │  enter mark it read    esc later                                                         │
+    │  enter mark it read    C discuss with Claude    esc later                                │
     │                                                                                          │
     ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 

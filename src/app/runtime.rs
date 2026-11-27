@@ -410,6 +410,26 @@ impl Runtime {
                 Effect::OpenSession(key) => self.opens.push(Handoff::Session(key)),
                 Effect::OpenReview(name) => self.opens.push(Handoff::Review(name)),
                 Effect::OpenLink(url) => open_link(&url),
+                Effect::Discuss(key) => {
+                    let worker = self.worker.clone();
+                    let failed = key.clone();
+                    self.spawn(
+                        move || {
+                            let args = ["discuss".to_string(), key.clone(), "--herdr".to_string()];
+                            Msg::Discussed {
+                                result: super::worker::run_child(&worker, &args),
+                                key,
+                            }
+                        },
+                        move |e| Msg::Discussed {
+                            key: failed.clone(),
+                            result: ChildResult {
+                                error: Some(e),
+                                ..ChildResult::default()
+                            },
+                        },
+                    );
+                }
                 Effect::LoadNeeds(load) => {
                     let paths = self.paths.clone();
                     let tx = self.tx.clone();

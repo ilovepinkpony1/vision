@@ -5,11 +5,11 @@
 
    In pro╭─ DEMO-12 · builder asks at the step build · Question 1 of 3 ─────────────────────────────╮
  ╭───────│                                                                                          │───────╮
- │ ▸   DE│   1 · open    2 · open   3 ◇ proposed   review                                           │   38m │
- │       │                                                                                          │       │
+ │ ▸ DEMO│   1 · open    2 · open   3 ◇ proposed   review                                           │   38m │
+ │      │                                                                                          │       │
  │       │  Must the export keep the order of the columns?                                          │       │
- │    DE│                                                                                          │2h 10m │
- │       │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │       │
+ │   DEMO│                                                                                          │2h 10m │
+ │     │  Why it asks   The ticket asks for a CSV file, and it does not say how the columns go.   │       │
  ╰───────│  Example       The table shows date, client, total. The file can keep that order or      │───────╯
          │                sort the columns by name.                                                 │
          │                                                                                          │
@@ -22,7 +22,7 @@
          │  The Judge     was not sure: No decision of the memory covers the order of the columns.  │
          │                                                                                          │
          │  a b answer    enter take the recommended    e your words    k needless    ←→ the pages  │
-         │  1-3 a question    r review    esc later                                                 │
+         │  1-3 a question    r review    C discuss with Claude    esc later                        │
          │                                                                                          │
          ╰──────────────────────────────────────────────────────────────────────────────────────────╯
   THIS WEEK   $23.84 spent    2 tickets finished    11 of 14 questions answered without you

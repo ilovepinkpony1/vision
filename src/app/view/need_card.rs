@@ -26,6 +26,9 @@ use crate::app::text::cut;
 pub const WIDTH: i32 = 92;
 /// The width of a text in the card, from its column 3.
 pub const TEXT: usize = 86;
+/// The hint of `C` on each card of a thing of a ticket: the own Claude Code session of the
+/// person about the ticket, in a new tab of Herdr.app.
+pub const DISCUSS: (&str, &str) = ("C", "discuss with Claude");
 /// The lines that one step of the wheel scrolls in the body of a card.
 const WHEEL_LINES: usize = 3;
 

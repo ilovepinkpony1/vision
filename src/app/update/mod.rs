@@ -86,6 +86,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
                 cards::on_session_ended(app, &key, &result);
             }
         }
+        Msg::Discussed { key, result } => needs::discussed(app, &key, &result),
         Msg::ReviewEnded { proposal, result } => {
             app.dirty = true;
             chain::on_review_ended(app, &proposal, &result, &mut fx);

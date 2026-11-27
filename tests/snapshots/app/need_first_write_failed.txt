@@ -5,11 +5,11 @@
          │  Vision wants to run tracker.describe for DEMO-12 at the commit 1a2b3c4d5e6f.            │
    In pro│  The verb tracker.describe is in the mode shadow, so nothing was sent.                   │
  ╭───────│                                                                                          │───────╮
- │ ▸   DE│  The write that waits                                                                    │   38m │
- │       │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
+ │ ▸ DEMO│  The write that waits                                                                    │   38m │
+ │      │  ╭────────────────────────────────────────────────────────────────────────────────────╮  │       │
  │       │  │ text  Export the report of the month as a CSV file.                                │  │       │
- │    DE│  │                                                                                    │  │2h 10m │
- │       │  │       The file keeps the order of the columns of the table.                        │  │       │
+ │   DEMO│  │                                                                                    │  │2h 10m │
+ │     │  │       The file keeps the order of the columns of the table.                        │  │       │
  ╰───────│  ╰────────────────────────────────────────────────────────────────────────────────────╯  │───────╯
          │  The gates: passed.                                                                      │
          │                                                                                          │
@@ -26,7 +26,7 @@
          │  the configuration is not valid TOML                                                     │
          │  Now  Nothing was sent, and DEMO-12 still waits at the step refine.                      │
   THIS WE│                                                                                          │
-         │  y a n choose    esc later                                                               │
+         │  y a n choose    C discuss with Claude    esc later                                      │
          │                                                                                          │
  ↑↓ move ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 
